@@ -1,0 +1,228 @@
+//! Host-terminal backend: raw mode + alternate screen lifecycle, capability
+//! probing, a blocking stdin reader feeding termwiz's input parser, and the
+//! frame writer. This is the only crate that touches the real tty.
+
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::time::{Duration, Instant};
+
+pub use termwiz::input::{
+    InputEvent, KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons,
+    MouseEvent,
+};
+use termwiz::input::InputParser;
+use tokio::sync::mpsc;
+
+#[derive(Debug, thiserror::Error)]
+pub enum HostError {
+    #[error("stdout is not a tty")]
+    NotATty,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Capabilities detected at startup.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HostCaps {
+    /// DECSET 2026 synchronized output.
+    pub synchronized_output: bool,
+}
+
+const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h\x1b[?2004h";
+const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?25h\x1b[?1049l\x1b[0m";
+
+/// Owns the tty state. Restores the terminal on `Drop` (including panics that
+/// unwind) and via the explicit `restore` on clean shutdown paths.
+pub struct HostTerminal {
+    caps: HostCaps,
+    restored: bool,
+}
+
+impl HostTerminal {
+    /// Enter raw mode + alternate screen and probe capabilities.
+    pub fn setup() -> Result<Self, HostError> {
+        if !is_tty(std::io::stdout().as_raw_fd()) {
+            return Err(HostError::NotATty);
+        }
+        crossterm::terminal::enable_raw_mode()?;
+        let mut out = std::io::stdout().lock();
+        out.write_all(ENTER)?;
+        out.flush()?;
+        drop(out);
+        let caps = probe_caps();
+        Ok(Self { caps, restored: false })
+    }
+
+    pub fn caps(&self) -> HostCaps {
+        self.caps
+    }
+
+    /// Current (cols, rows) of the controlling terminal.
+    pub fn size(&self) -> (u16, u16) {
+        term_size()
+    }
+
+    /// Write one frame's bytes and flush.
+    pub fn write_frame(&mut self, bytes: &[u8]) -> Result<(), HostError> {
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes)?;
+        out.flush()?;
+        Ok(())
+    }
+
+    pub fn restore(&mut self) {
+        if self.restored {
+            return;
+        }
+        self.restored = true;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(LEAVE);
+        let _ = out.flush();
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+impl Drop for HostTerminal {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+fn is_tty(fd: i32) -> bool {
+    unsafe { libc::isatty(fd) == 1 }
+}
+
+pub fn term_size() -> (u16, u16) {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    let fd = std::io::stdout().as_raw_fd();
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+        (ws.ws_col, ws.ws_row)
+    } else {
+        (80, 24)
+    }
+}
+
+/// Probe DECSET 2026 support: send DECRQM 2026 followed by DA1; whichever
+/// response mentions 2026 with value 1/2 means supported, and the DA1 reply
+/// is the fence that bounds the wait. Runs synchronously in raw mode before
+/// the async input pipeline starts, so it owns stdin briefly.
+fn probe_caps() -> HostCaps {
+    let mut caps = HostCaps::default();
+    let query = b"\x1b[?2026$p\x1b[c";
+    {
+        let mut out = std::io::stdout().lock();
+        if out.write_all(query).and_then(|_| out.flush()).is_err() {
+            return caps;
+        }
+    }
+
+    let mut stdin = std::io::stdin().lock();
+    set_stdin_nonblocking(true);
+    let deadline = Instant::now() + Duration::from_millis(250);
+    let mut acc: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 256];
+    while Instant::now() < deadline {
+        match stdin.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                acc.extend_from_slice(&buf[..n]);
+                if find_decrpm_2026(&acc) {
+                    caps.synchronized_output = true;
+                }
+                // DA1 response terminator: ESC [ ? ... c
+                if acc.windows(2).any(|w| w == b"[?") && acc.last() == Some(&b'c') {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
+        }
+    }
+    set_stdin_nonblocking(false);
+    caps
+}
+
+/// DECRPM reply: ESC [ ? 2026 ; Ps $ y with Ps in {1,2} meaning supported.
+fn find_decrpm_2026(acc: &[u8]) -> bool {
+    let needle = b"[?2026;";
+    acc.windows(needle.len())
+        .enumerate()
+        .any(|(i, w)| w == needle && matches!(acc.get(i + needle.len()), Some(b'1') | Some(b'2')))
+}
+
+fn set_stdin_nonblocking(nonblocking: bool) {
+    let fd = std::io::stdin().as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        let flags = if nonblocking { flags | libc::O_NONBLOCK } else { flags & !libc::O_NONBLOCK };
+        libc::fcntl(fd, libc::F_SETFL, flags);
+    }
+}
+
+/// Spawn the blocking stdin reader thread. Parsed events land on the returned
+/// channel; the thread exits when stdin closes or the receiver is dropped.
+pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
+    let (tx, rx) = mpsc::channel::<InputEvent>(64);
+    std::thread::Builder::new()
+        .name("dmux-input".into())
+        .spawn(move || {
+            let mut parser = InputParser::new();
+            let mut stdin = std::io::stdin().lock();
+            let mut buf = [0u8; 4096];
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let mut closed = false;
+                        parser.parse(
+                            &buf[..n],
+                            |event| {
+                                if tx.blocking_send(event).is_err() {
+                                    closed = true;
+                                }
+                            },
+                            n == buf.len(),
+                        );
+                        if closed {
+                            break;
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .expect("spawn input thread");
+    rx
+}
+
+/// Async stream of terminal resize signals (SIGWINCH), coalesced.
+pub fn spawn_resize_watcher() -> mpsc::Receiver<(u16, u16)> {
+    let (tx, rx) = mpsc::channel::<(u16, u16)>(4);
+    tokio::spawn(async move {
+        let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) else {
+            return;
+        };
+        while sig.recv().await.is_some() {
+            if tx.try_send(term_size()).is_err() && tx.is_closed() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decrpm_detection() {
+        assert!(find_decrpm_2026(b"\x1b[?2026;1$y\x1b[?1;2c"));
+        assert!(find_decrpm_2026(b"\x1b[?2026;2$y"));
+        assert!(!find_decrpm_2026(b"\x1b[?2026;0$y"));
+        assert!(!find_decrpm_2026(b"\x1b[?1;2c"));
+    }
+}

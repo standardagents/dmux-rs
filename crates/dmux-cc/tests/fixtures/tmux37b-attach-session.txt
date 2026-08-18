@@ -1,0 +1,21 @@
+%begin 1787079953 316 0
+%end 1787079953 316 0
+%session-changed $0 probe
+%window-renamed @0 sleep
+%begin 1787079953 322 1
+%0 @0 MacBookPro.home.local
+%end 1787079953 322 1
+%begin 1787079953 323 1
+%end 1787079953 323 1
+%layout-change @0 aafd,120x40,0,0,0 aafd,120x40,0,0,0 *
+%begin 1787079954 326 1
+parse error: unknown command: bogus-command-that-fails
+%error 1787079954 326 1
+%begin 1787079954 327 1
+%end 1787079954 327 1
+%output %0 hi\015
+%output %0 \012
+%begin 1787079954 328 1
+%end 1787079954 328 1
+%sessions-changed
+%exit

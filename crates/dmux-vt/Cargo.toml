@@ -1,0 +1,12 @@
+[package]
+name = "dmux-vt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal = { workspace = true }
+parking_lot = { workspace = true }
+bitflags = { workspace = true }
+tracing = { workspace = true }
+dmux-compositor = { workspace = true }

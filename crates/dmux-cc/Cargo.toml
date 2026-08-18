@@ -1,0 +1,17 @@
+[package]
+name = "dmux-cc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+default = ["tokio-adapter"]
+tokio-adapter = ["dep:tokio"]
+
+[dev-dependencies]
+tokio = { workspace = true }

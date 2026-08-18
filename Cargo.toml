@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dmux-cc",
+    "crates/dmux-vt",
+    "crates/dmux-compositor",
+    "crates/dmux-host",
+    "crates/dmux-core",
+    "crates/dmux",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/justin-schroeder/dmux"
+
+[workspace.dependencies]
+dmux-cc = { path = "crates/dmux-cc" }
+dmux-vt = { path = "crates/dmux-vt" }
+dmux-compositor = { path = "crates/dmux-compositor" }
+dmux-host = { path = "crates/dmux-host" }
+dmux-core = { path = "crates/dmux-core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "net", "fs"] }
+alacritty_terminal = "0.25"
+termwiz = "0.23"
+crossterm = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+bitflags = "2"
+compact_str = "0.9"
+hdrhistogram = "7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+clap = { version = "4", features = ["derive"] }
+md5 = "0.8"
+libc = "0.2"
+parking_lot = "0.12"
+unicode-width = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
