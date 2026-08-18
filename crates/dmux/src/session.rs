@@ -11,10 +11,20 @@ use dmux_vt::PaneTerm;
 pub const PANE_SCROLLBACK: usize = 10_000;
 pub const SEED_HISTORY_LINES: u32 = 2_000;
 
-/// Titles that mark dmux-owned infrastructure panes we never render.
-fn is_infra_title(title: &str) -> bool {
-    title == "dmux" || title == "Welcome" || title.starts_with("dmux-spacer") || title.starts_with("dmux-hidden")
+/// Names that mark dmux-owned infrastructure we never render: the TS-era
+/// control/welcome/spacer panes plus our own session-keepalive window.
+fn is_infra(title: &str, window_name: &str) -> bool {
+    title == "dmux"
+        || title == "Welcome"
+        || title.starts_with("dmux-spacer")
+        || title.starts_with("dmux-hidden")
+        || title == KEEPALIVE_NAME
+        || window_name == KEEPALIVE_NAME
 }
+
+/// Window kept alive so killing the last real pane never destroys the tmux
+/// session (which would take the renderer down with it).
+pub const KEEPALIVE_NAME: &str = "dmux-keepalive";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneStatus {
@@ -180,7 +190,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
 pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<LogicalPane> {
     let mut adopted = Vec::new();
     for info in infos {
-        if is_infra_title(&info.title) {
+        if is_infra(&info.title, &info.window_name) {
             continue;
         }
         let parsed = parse_pane_title(&info.title);

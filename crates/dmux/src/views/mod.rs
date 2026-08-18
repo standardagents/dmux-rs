@@ -36,6 +36,8 @@ pub enum AppCmd {
     ToggleHidden(usize),
     ClosePane(usize),
     NewTerminal,
+    /// Terminal in a specific directory (welcome-screen worktree cards).
+    NewTerminalAt { path: String, name: String },
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },
     SetSetting { key: String, value: serde_json::Value, scope: dmux_core::SettingsScope },
 }
@@ -63,6 +65,7 @@ pub enum ClickTarget {
     TitleRename(usize),
     TitleHide(usize),
     TitleClose(usize),
+    WelcomeCard(usize),
     Overlay(u64),
 }
 

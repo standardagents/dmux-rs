@@ -10,6 +10,7 @@ mod metrics;
 mod render;
 mod session;
 mod views;
+mod welcome;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -75,6 +76,8 @@ struct NewWindowCtx {
     /// (prompt, delay) for send-keys transport agents.
     injection: Option<(String, u64)>,
     worktree_path: Option<String>,
+    /// Working directory for the new window (default: project root).
+    cwd: Option<String>,
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -250,6 +253,12 @@ struct App {
     pending_injections: Vec<(PaneId, String, Instant)>,
     own_sizing: bool,
     sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
+    /// Welcome-screen state (shown when no panes are visible).
+    welcome_cards: Vec<welcome::WelcomeCard>,
+    welcome_sel: usize,
+    keepalive_present: bool,
+    /// Panes we killed on purpose: never re-adopt while tmux still lists them.
+    closing: std::collections::HashSet<PaneId>,
 }
 
 async fn run(
@@ -346,7 +355,12 @@ async fn run(
         pending_injections: Vec::new(),
         own_sizing: false,
         sized_windows: std::collections::HashSet::new(),
+        welcome_cards: Vec::new(),
+        welcome_sel: 0,
+        keepalive_present: false,
+        closing: std::collections::HashSet::new(),
     };
+    app.refresh_welcome_cards();
 
     loop {
         let now = Instant::now();
@@ -452,6 +466,62 @@ impl App {
             self.metrics.frame_total_us.value_at_quantile(0.95) as f64 / 1000.0
         );
         Ok(())
+    }
+
+    fn visible_pane_count(&self) -> usize {
+        self.panes.iter().filter(|p| p.rect.is_some()).count()
+    }
+
+    fn welcome_active(&self) -> bool {
+        self.visible_pane_count() == 0
+    }
+
+    fn refresh_welcome_cards(&mut self) {
+        // Worktrees on disk that no live pane is using — candidates to reopen.
+        let live_paths: std::collections::HashSet<String> = self
+            .config
+            .panes
+            .iter()
+            .filter(|r| self.panes.iter().any(|p| p.slug == r.slug))
+            .filter_map(|r| r.worktree_path.clone())
+            .collect();
+        let mut worktrees: Vec<(String, String)> = Vec::new();
+        let wt_dir = self.project_root.join(".dmux").join("worktrees");
+        if let Ok(entries) = std::fs::read_dir(&wt_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let p = path.to_string_lossy().into_owned();
+                    if !live_paths.contains(&p) {
+                        if let Some(name) = path.file_name() {
+                            worktrees.push((name.to_string_lossy().into_owned(), p));
+                        }
+                    }
+                }
+            }
+        }
+        worktrees.sort();
+        let project_name = self
+            .project_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".into());
+        self.welcome_cards = welcome::build_cards(&self.installed_agents, &project_name, &worktrees);
+        self.welcome_sel = self.welcome_sel.min(self.welcome_cards.len().saturating_sub(1));
+    }
+
+    /// Make sure the keepalive window exists so an empty session survives.
+    /// Commands are FIFO on the control stream, so calling this before a
+    /// kill-window guarantees the session never hits zero windows.
+    fn ensure_keepalive(&mut self) {
+        if self.keepalive_present || !self.own_sizing {
+            return;
+        }
+        self.keepalive_present = true;
+        let _ = self.client.send(format!(
+            "new-window -d -n {} 'sleep 2147483647'",
+            session::KEEPALIVE_NAME
+        ));
     }
 
     fn animating(&self) -> bool {
@@ -588,15 +658,27 @@ impl App {
                 }
             }
             Tag::Seed(pane_id) => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
-                    p.pending_seed = Some(reply);
+                // An error reply (e.g. the pane died mid-flight) must never
+                // be applied as grid content.
+                if reply.ok {
+                    if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
+                        p.pending_seed = Some(reply);
+                    }
                 }
             }
             Tag::Cursor(pane_id) => {
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
                     if let Some(seed) = p.pending_seed.take() {
-                        let cursor = session::parse_cursor_reply(&reply);
+                        let cursor = reply.ok.then(|| session::parse_cursor_reply(&reply)).flatten();
                         p.finish_reseed(&seed, cursor);
+                        self.dirty = true;
+                    } else {
+                        // Seed failed: stop buffering so live output flows again.
+                        if let Some(buffered) = p.reseed_buffer.take() {
+                            for chunk in buffered {
+                                let _ = p.term.advance(&chunk);
+                            }
+                        }
                         self.dirty = true;
                     }
                 }
@@ -608,6 +690,8 @@ impl App {
                 tracing::info!(?pid, own_sizing = self.own_sizing, "controller check");
                 if !self.own_sizing {
                     self.toast("observe mode: TS dmux owns this session");
+                } else {
+                    self.ensure_keepalive();
                 }
                 self.apply_window_sizes();
             }
@@ -628,6 +712,11 @@ impl App {
 
     fn apply_pane_list(&mut self, reply: &Reply) {
         let infos = session::parse_pane_list(reply);
+        self.keepalive_present = infos.iter().any(|i| i.window_name == session::KEEPALIVE_NAME);
+        // Forget closing-markers for panes tmux no longer lists.
+        let listed: std::collections::HashSet<PaneId> = infos.iter().map(|i| i.pane).collect();
+        self.closing.retain(|p| listed.contains(p));
+        let infos: Vec<_> = infos.into_iter().filter(|i| !self.closing.contains(&i.pane)).collect();
         let adopted = session::adopt_panes(Some(&self.config), &infos);
 
         for mut new_pane in adopted {
@@ -660,6 +749,11 @@ impl App {
             }
         }
         self.relayout();
+        self.refresh_welcome_cards();
+        // An empty session must not be one process-exit away from vanishing.
+        if self.panes.is_empty() {
+            self.ensure_keepalive();
+        }
     }
 
     fn comfort_band(&self) -> (u16, u16) {
@@ -743,6 +837,12 @@ impl App {
                     self.leader_armed = false;
                     self.dirty = true;
                 }
+                // Welcome screen owns navigation keys when no panes are visible.
+                if !leader_was_armed && self.welcome_active() {
+                    if let Some(handled) = self.handle_welcome_key(&key) {
+                        return handled;
+                    }
+                }
                 let routed = input::route_key(&key, self.focused_modes(), leader_was_armed);
                 self.execute_routed(routed)
             }
@@ -763,6 +863,39 @@ impl App {
             }
             _ => true,
         }
+    }
+
+    /// Welcome-screen navigation. Returns Some(keep_running) when consumed.
+    fn handle_welcome_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
+        use dmux_host::KeyCode;
+        if !key.modifiers.is_empty() {
+            return None;
+        }
+        let len = self.welcome_cards.len();
+        if len == 0 {
+            return None;
+        }
+        match key.key {
+            KeyCode::LeftArrow => {
+                self.welcome_sel = (self.welcome_sel + len - 1) % len;
+            }
+            KeyCode::RightArrow | KeyCode::Tab => {
+                self.welcome_sel = (self.welcome_sel + 1) % len;
+            }
+            KeyCode::UpArrow => {
+                self.welcome_sel = (self.welcome_sel + len - 2) % len;
+            }
+            KeyCode::DownArrow => {
+                self.welcome_sel = (self.welcome_sel + 2) % len;
+            }
+            KeyCode::Enter => {
+                let cmd = self.welcome_cards[self.welcome_sel].cmd.clone();
+                return Some(self.execute_cmd(cmd));
+            }
+            _ => return None,
+        }
+        self.dirty = true;
+        Some(true)
     }
 
     fn handle_mouse(&mut self, col: u16, row: u16, kind: MouseKind) -> bool {
@@ -836,6 +969,13 @@ impl App {
                 Some(ClickTarget::TitleRename(i)) => return self.execute_cmd(AppCmd::PromptRename(i)),
                 Some(ClickTarget::TitleHide(i)) => return self.execute_cmd(AppCmd::ToggleHidden(i)),
                 Some(ClickTarget::TitleClose(i)) => return self.execute_cmd(AppCmd::ConfirmClose(i)),
+                Some(ClickTarget::WelcomeCard(i)) => {
+                    self.welcome_sel = i;
+                    let cmd = self.welcome_cards.get(i).map(|c| c.cmd.clone());
+                    if let Some(cmd) = cmd {
+                        return self.execute_cmd(cmd);
+                    }
+                }
                 Some(ClickTarget::PaneBody(i)) => {
                     let already_focused = self.focused == i;
                     if !already_focused {
@@ -1019,6 +1159,19 @@ impl App {
             AppCmd::ToggleHidden(idx) => self.toggle_hidden(idx),
             AppCmd::ClosePane(idx) => self.close_pane(idx),
             AppCmd::NewTerminal => self.new_terminal(),
+            AppCmd::NewTerminalAt { path, name } => {
+                let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
+                self.create_window(NewWindowCtx {
+                    slug: format!("terminal-{n}"),
+                    display: name,
+                    kind: PaneKind::Shell,
+                    agent: None,
+                    launch_cmd: None,
+                    injection: None,
+                    worktree_path: Some(path.clone()),
+                    cwd: Some(path),
+                });
+            }
             AppCmd::LaunchAgents { prompt, allocations, mode } => self.launch_agents(prompt, allocations, mode),
             AppCmd::SetSetting { key, value, scope } => self.set_setting(&key, value, scope),
         }
@@ -1093,7 +1246,14 @@ impl App {
         if idx >= self.panes.len() {
             return;
         }
+        // Closing the last pane must not destroy the session: the keepalive
+        // window is created FIRST (FIFO command order guarantees it exists
+        // before the kill lands).
+        if self.panes.len() == 1 {
+            self.ensure_keepalive();
+        }
         let pane = self.panes.remove(idx);
+        self.closing.insert(pane.tmux_pane);
         let _ = self.client.send(format!("kill-window -t {}", pane.tmux_window));
         self.config.panes.retain(|r| r.slug != pane.slug);
         self.save_config();
@@ -1119,6 +1279,7 @@ impl App {
             launch_cmd: None,
             injection: None,
             worktree_path: None,
+            cwd: None,
         });
     }
 
@@ -1192,6 +1353,7 @@ impl App {
                     launch_cmd: Some(launch_cmd),
                     injection,
                     worktree_path,
+                    cwd: None,
                 });
             }
         }
@@ -1202,7 +1364,10 @@ impl App {
     }
 
     fn create_window(&mut self, ctx: NewWindowCtx) {
-        let cwd = self.project_root.to_string_lossy().into_owned();
+        let cwd = ctx
+            .cwd
+            .clone()
+            .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
         let _ = self.client.send_tagged(
             format!("new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}", dmux_cc::quote_arg(&cwd)),
             Tag::NewWindow(Box::new(ctx)),
@@ -1393,6 +1558,10 @@ impl App {
     fn render_frame(&mut self) {
         let start = Instant::now();
         self.click_map.clear();
+        // Clear the canvas: anything not repainted this frame (welcome
+        // remnants after a pane appears, closed dialogs, shrunk layouts)
+        // must not survive. The diff still only emits actual changes.
+        self.back.fill(self.back.area(), &dmux_compositor::Cell::default());
         let scene = render::Scene {
             panes: &self.panes,
             layout: &self.layout,
@@ -1406,6 +1575,18 @@ impl App {
             leader_armed: self.leader_armed,
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
+
+        if self.welcome_active() {
+            let content = render::content_area(&self.back, &self.layout);
+            let wscene = welcome::WelcomeScene {
+                cards: &self.welcome_cards,
+                selected: self.welcome_sel,
+                session_name: &self.session_name,
+                project_root: &self.project_root.to_string_lossy(),
+                installed: &self.installed_agents,
+            };
+            welcome::draw(&mut self.back, content, &self.theme, &wscene, &mut self.click_map);
+        }
 
         // Overlays above the scene, with a scrim under the stack.
         self.view_cursor = None;

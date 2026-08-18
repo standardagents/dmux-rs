@@ -35,12 +35,15 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
             draw_pane_badge(buf, scene.theme, pane, rect);
         }
     }
-    if scene.panes.iter().all(|p| p.rect.is_none()) {
-        draw_empty_state(buf, scene, clicks);
-    }
     if let Some(metrics) = scene.hud {
         draw_hud(buf, metrics);
     }
+}
+
+/// Content area to the right of the sidebar (the welcome screen's canvas).
+pub fn content_area(buf: &CellBuffer, layout: &Layout) -> Rect {
+    let x = layout.sidebar.right() + 1;
+    Rect::new(x, 0, buf.cols().saturating_sub(x), buf.rows())
 }
 
 fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
@@ -187,33 +190,6 @@ fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body
     };
     let x = body.right().saturating_sub(text.len() as u16 + 1);
     buf.draw_text(x, body.y, &text, Color::Indexed(0), theme.warn, AttrFlags::BOLD, body);
-}
-
-fn draw_empty_state(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
-    let t = scene.theme;
-    let area = buf.area();
-    let cx = scene.layout.sidebar.right() + (area.w.saturating_sub(scene.layout.sidebar.right())) / 2;
-    let cy = area.h / 2;
-    let lines = [
-        ("dmux", t.accent, AttrFlags::BOLD),
-        ("", t.text_dim, AttrFlags::empty()),
-        ("^b n  launch agents", t.text_dim, AttrFlags::empty()),
-        ("^b t  open a terminal", t.text_dim, AttrFlags::empty()),
-        ("^b ?  shortcuts", t.text_faint, AttrFlags::empty()),
-    ];
-    for (i, (text, fg, attrs)) in lines.iter().enumerate() {
-        let x = cx.saturating_sub(text.chars().count() as u16 / 2);
-        let y = cy.saturating_sub(2) + i as u16;
-        let end = buf.draw_text(x, y, text, *fg, Color::Default, *attrs, area);
-        if i >= 2 && !text.is_empty() {
-            let target = match i {
-                2 => ClickTarget::SidebarNewAgent,
-                3 => ClickTarget::SidebarNewTerminal,
-                _ => continue,
-            };
-            clicks.add(Rect::new(x, y, end - x, 1), target);
-        }
-    }
 }
 
 fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {
