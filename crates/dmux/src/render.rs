@@ -173,30 +173,25 @@ fn draw_pane_title(
     buf.draw_text(bar.x, bar.y, &label, fg, bg, if focused { AttrFlags::BOLD } else { AttrFlags::empty() }, bar);
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
-    // Right side: size + the affordances tmux could never give us — rename,
-    // hide, close as chip buttons with fat click targets.
+    // Right side: size + macOS-style traffic lights on the bar itself —
+    // green rename, yellow hide, red close. Vivid on the focused pane, dim
+    // dots elsewhere; each gets a 2-cell click target.
     let size = format!("{}×{}", pane.cols, pane.rows);
-    let buttons = [" ✎ ", " ─ ", " ✕ "];
-    let btn_targets = [
-        ClickTarget::TitleRename(idx),
-        ClickTarget::TitleHide(idx),
-        ClickTarget::TitleClose(idx),
+    let dots = [
+        (ClickTarget::TitleRename(idx), Color::Rgb(0x2e, 0xc2, 0x4e), Color::Indexed(65)),
+        (ClickTarget::TitleHide(idx), Color::Rgb(0xfe, 0xbc, 0x2e), Color::Indexed(136)),
+        (ClickTarget::TitleClose(idx), Color::Rgb(0xff, 0x5f, 0x57), Color::Indexed(131)),
     ];
-    let chips_w = buttons.len() as u16 * 4; // 3-wide chip + 1 gap
-    let total_w = size.chars().count() as u16 + 2 + chips_w;
+    let dots_w = dots.len() as u16 * 2 + 1;
+    let total_w = size.chars().count() as u16 + 2 + dots_w;
     let mut x = bar.right().saturating_sub(total_w);
     x = buf.draw_text(x, bar.y, &size, if focused { Color::Indexed(255) } else { t.text_faint }, bg, AttrFlags::empty(), bar);
     x += 2;
-    let chip_bg = if focused { t.bg_selected } else { t.bg };
-    for (b, target) in buttons.iter().zip(btn_targets) {
-        let btn_fg = match target {
-            ClickTarget::TitleClose(_) => t.danger,
-            _ if focused => Color::Indexed(255),
-            _ => t.text_dim,
-        };
+    for (target, vivid, dim) in dots {
+        let fg = if focused { vivid } else { dim };
         let bx = x;
-        x = buf.draw_text(x, bar.y, b, btn_fg, chip_bg, AttrFlags::BOLD, bar);
-        clicks.add(Rect::new(bx, bar.y, x - bx, 1), target);
+        x = buf.draw_text(x, bar.y, "●", fg, bg, AttrFlags::empty(), bar);
+        clicks.add(Rect::new(bx, bar.y, 2, 1), target);
         x += 1;
     }
 }
