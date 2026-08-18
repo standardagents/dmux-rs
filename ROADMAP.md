@@ -24,7 +24,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ |
 | Merge flows / PR creation / AI merge / conflict pane | ⏳ |
 | Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ (welcome-card agent resume via resumeCommandTemplate ✅; exact-session fd tracking still ⏳) |
-| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select/search ⏳) |
+| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select ✅ / search ⏳) |
 | Kitty keyboard passthrough INTO panes (pane-requested flags) | ⏳ |
 | Images (kitty graphics translation) | ⏳ |
 | break-pane migration for legacy multi-pane windows | ⏳ |
@@ -33,9 +33,9 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 
-- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ⏳, merge* ⏳, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ⏳, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
+- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge* ⏳, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ⏳, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
 - Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ⏳, PR ⏳, copyPath ✅, openInEditor ✅, toggleAutopilot ⏳, test/dev runners ⏳
-- Terminal auto-naming service ⏳ (grid-read based) · footer tips ⏳ · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
+- Terminal auto-naming ✅ (live from pane title reports — ESC k / OSC 2; LLM naming ⏳) · footer tips ⏳ · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys
 - Welcome/spacer panes ✂ — native empty-state view instead
 

@@ -70,6 +70,9 @@ pub struct LogicalPane {
     pub hidden: bool,
     /// Settled while unfocused — shown as `!` until the user looks.
     pub needs_attention: bool,
+    /// Title follows the pane's own title reports (shell panes without a
+    /// human-chosen name; cleared by rename).
+    pub auto_name: bool,
     /// Heuristic settle classifier (dmux-status).
     pub engine: dmux_status::PaneStatusEngine,
     pub worktree_path: Option<String>,
@@ -239,6 +242,9 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             resume_at: None,
             hidden: config_pane.map(|p| p.is_hidden()).unwrap_or(false),
             needs_attention: false,
+            auto_name: config_pane
+                .map(|p| p.kind() == PaneKind::Shell && p.display_name.is_none())
+                .unwrap_or(true),
             engine: dmux_status::PaneStatusEngine::new(),
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             agent: config_pane.and_then(|p| p.agent.clone()),

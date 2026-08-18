@@ -6,6 +6,7 @@
 mod agent_select;
 mod confirm;
 mod input_view;
+mod logs;
 mod menu;
 mod settings_view;
 mod shortcuts;
@@ -13,6 +14,7 @@ mod shortcuts;
 pub use agent_select::AgentSelectView;
 pub use confirm::ConfirmView;
 pub use input_view::{InputPurpose, InputView};
+pub use logs::LogsView;
 pub use menu::{MenuItem, MenuView};
 pub use settings_view::SettingsView;
 pub use shortcuts::ShortcutsView;
@@ -30,6 +32,7 @@ pub enum AppCmd {
     OpenSettings,
     OpenNewAgent,
     OpenShortcuts,
+    OpenLogs,
     PromptRename(usize),
     ConfirmClose(usize),
     RenamePane { idx: usize, name: String },

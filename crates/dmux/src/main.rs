@@ -277,6 +277,9 @@ struct App {
     mouse_down: bool,
     /// The current drag actually moved (a plain click must not copy).
     drag_moved: bool,
+    /// Last press (time, col, row) for double-click detection.
+    last_press: Option<(Instant, u16, u16)>,
+    log_path: PathBuf,
 }
 
 async fn run(
@@ -390,6 +393,8 @@ async fn run(
         mouse_forward: None,
         mouse_down: false,
         drag_moved: false,
+        last_press: None,
+        log_path: cli.log_file.clone().unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
     };
     app.refresh_welcome_cards();
 
@@ -995,6 +1000,13 @@ impl App {
             MouseKind::Release => self.mouse_down = false,
             _ => {}
         }
+        let is_double = is_press
+            && self
+                .last_press
+                .is_some_and(|(t, c, r)| t.elapsed() < Duration::from_millis(400) && c == col && r == row);
+        if is_press {
+            self.last_press = Some((Instant::now(), col, row));
+        }
 
         // An active selection drag captures the mouse until release.
         if let Some(i) = self.drag_select {
@@ -1126,7 +1138,13 @@ impl App {
                 Some(ClickTarget::SidebarNewProject) => return self.execute_cmd(AppCmd::PromptAddProject),
                 Some(ClickTarget::SidebarSettings) => return self.execute_cmd(AppCmd::OpenSettings),
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
-                Some(ClickTarget::PaneTitle(i)) => return self.execute_cmd(AppCmd::FocusPane(i)),
+                Some(ClickTarget::PaneTitle(i)) => {
+                    // Double-click the title = rename.
+                    if is_double {
+                        return self.execute_cmd(AppCmd::PromptRename(i));
+                    }
+                    return self.execute_cmd(AppCmd::FocusPane(i));
+                }
                 Some(ClickTarget::TitleRename(i)) => return self.execute_cmd(AppCmd::PromptRename(i)),
                 Some(ClickTarget::TitleHide(i)) => return self.execute_cmd(AppCmd::ToggleHidden(i)),
                 Some(ClickTarget::TitleClose(i)) => return self.execute_cmd(AppCmd::ConfirmClose(i)),
@@ -1158,11 +1176,12 @@ impl App {
                                 self.mouse_forward = Some(i);
                             } else {
                                 // dmux-side text selection (Shift forces it
-                                // even when the app wants the mouse).
+                                // even when the app wants the mouse); double
+                                // click selects the word under the cursor.
                                 p.term.selection_clear();
-                                p.term.selection_start(c, r, false);
+                                p.term.selection_start(c, r, is_double);
                                 self.drag_select = Some(i);
-                                self.drag_moved = false;
+                                self.drag_moved = is_double;
                                 p.dirty = true;
                                 self.dirty = true;
                             }
@@ -1195,6 +1214,7 @@ impl App {
             Routed::OpenSettings => return self.execute_cmd(AppCmd::OpenSettings),
             Routed::OpenNewAgent => return self.execute_cmd(AppCmd::OpenNewAgent),
             Routed::OpenShortcuts => return self.execute_cmd(AppCmd::OpenShortcuts),
+            Routed::OpenLogs => return self.execute_cmd(AppCmd::OpenLogs),
             Routed::NewTerminal => return self.execute_cmd(AppCmd::NewTerminal),
             Routed::AddProject => return self.execute_cmd(AppCmd::PromptAddProject),
             Routed::RenameFocused => return self.execute_cmd(AppCmd::PromptRename(self.focused)),
@@ -1277,6 +1297,7 @@ impl App {
                 items.push(MenuItem::new("New terminal", "^b t", AppCmd::NewTerminal));
                 items.push(MenuItem::new("Add project…", "^b p", AppCmd::PromptAddProject));
                 items.push(MenuItem::new("Settings…", "^b s", AppCmd::OpenSettings));
+                items.push(MenuItem::new("Logs…", "^b l", AppCmd::OpenLogs));
                 items.push(MenuItem::new("Shortcuts…", "^b ?", AppCmd::OpenShortcuts));
                 items.push(MenuItem::new("Detach", "^b d", AppCmd::Quit));
                 let title = self
@@ -1312,6 +1333,10 @@ impl App {
                     self.host.caps().kitty_keyboard,
                     self.keymap.describe(),
                 )));
+                self.dirty = true;
+            }
+            AppCmd::OpenLogs => {
+                self.views.push(Box::new(views::LogsView::new(self.log_path.clone())));
                 self.dirty = true;
             }
             AppCmd::PromptRename(idx) => {
@@ -1473,6 +1498,7 @@ impl App {
     fn rename_pane(&mut self, idx: usize, name: String) {
         let Some(p) = self.panes.get_mut(idx) else { return };
         p.title = name.clone();
+        p.auto_name = false;
         let encoded = encode_pane_title(&name, &p.slug);
         let _ = self
             .client
@@ -1681,7 +1707,9 @@ impl App {
                 pane_id.to_string(),
                 ctx.kind,
             );
-            record.display_name = Some(ctx.display.clone());
+            // A display equal to the slug is a default, not a chosen name —
+            // leave it unset so shell panes auto-name from their own titles.
+            record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
             record.agent = ctx.agent.clone();
             record.worktree_path = ctx.worktree_path.clone();
             self.config.panes.push(record);
@@ -1993,8 +2021,15 @@ fn handle_side_effect(
             None
         }
         TermSideEffect::Title(title) => {
-            if !title.is_empty() && pane.title.is_empty() {
-                pane.title = title;
+            // Auto-naming: shell panes without a human-chosen name follow the
+            // pane's own title reports (zsh's ESC k command/cwd names, OSC 2).
+            let title = title.trim();
+            if !title.is_empty() && (pane.title.is_empty() || pane.auto_name) {
+                let clipped: String = title.chars().take(24).collect();
+                if pane.title != clipped {
+                    pane.title = clipped;
+                    pane.dirty = true;
+                }
             }
             None
         }
