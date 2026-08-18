@@ -26,6 +26,12 @@ pub struct Scene<'a> {
 
 pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
     draw_sidebar(buf, scene, clicks);
+    // With panes open, tint the unused content area so free space reads as
+    // canvas; pane bodies repaint their own rects over it.
+    if scene.panes.iter().any(|p| p.rect.is_some()) {
+        let content = content_area(buf, scene.layout);
+        buf.fill(content, &Cell { bg: scene.theme.canvas, ..Cell::default() });
+    }
     for (i, pane) in scene.panes.iter().enumerate() {
         let Some(rect) = pane.rect else { continue };
         draw_pane_title(buf, scene, pane, i, rect, clicks);
@@ -40,7 +46,7 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
                 buf.set(
                     border_x,
                     row,
-                    Cell { ch: '│', fg: border_fg, bg: Color::Default, ..Cell::default() },
+                    Cell { ch: '│', fg: border_fg, bg: scene.theme.canvas, ..Cell::default() },
                 );
             }
         }

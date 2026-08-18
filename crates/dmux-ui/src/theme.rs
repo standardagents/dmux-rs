@@ -15,6 +15,9 @@ pub struct Theme {
     pub bg: Color,
     pub bg_raised: Color,
     pub bg_selected: Color,
+    /// Unused content-area background — a hair lighter than the terminal
+    /// default so free space reads as canvas, not as part of a pane.
+    pub canvas: Color,
     pub border: Color,
     pub danger: Color,
     pub ok: Color,
@@ -57,6 +60,7 @@ impl Default for Theme {
             bg: Color::Indexed(233),
             bg_raised: Color::Indexed(235),
             bg_selected: Color::Indexed(237),
+            canvas: Color::Indexed(234),
             border: Color::Indexed(240),
             danger: Color::Indexed(203),
             ok: Color::Indexed(114),
