@@ -53,6 +53,9 @@ pub enum AppCmd {
     MergeStart(usize),
     MergeExec { slug: String, message: Option<String> },
     MergeCleanup { slug: String },
+    /// Re-establish merge conflicts at the root and launch an agent to
+    /// resolve them.
+    ResolveConflicts { branch: String },
     /// Push the worktree branch and open `gh pr create` in a terminal pane.
     CreatePr(usize),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },

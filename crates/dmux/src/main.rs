@@ -104,6 +104,8 @@ enum AppMsg {
     AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
+    /// Conflicted merge state re-established; launch the resolution pane.
+    ConflictsReady { branch: String, files: Result<Vec<String>, String> },
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -837,14 +839,72 @@ impl App {
                 }
                 Err(err) => {
                     tracing::warn!(%err, %branch, "merge failed");
-                    let short: String = err.chars().take(80).collect();
-                    self.toast(format!("✗ {short}"));
+                    if err.contains("conflict") || err.contains("CONFLICT") {
+                        // Offer agent-assisted resolution at the project root.
+                        let agent_label = self.default_agent_for_conflicts().map(|d| d.name).unwrap_or("an agent");
+                        self.views.push(Box::new(ConfirmView::new(
+                            "Merge conflict",
+                            format!("'{branch}' conflicts with the base. Launch {agent_label} to resolve?"),
+                            "Resolve",
+                            false,
+                            AppCmd::ResolveConflicts { branch },
+                        )));
+                        self.dirty = true;
+                    } else {
+                        let short: String = err.chars().take(80).collect();
+                        self.toast(format!("✗ {short}"));
+                    }
                 }
             },
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
                 self.dirty = true;
             }
+            AppMsg::ConflictsReady { branch, files } => match files {
+                Ok(files) => {
+                    let Some(def) = self.default_agent_for_conflicts() else {
+                        self.toast("No agent installed for conflict resolution");
+                        return;
+                    };
+                    let list = if files.is_empty() {
+                        "the conflicted files".to_string()
+                    } else {
+                        files.join(", ")
+                    };
+                    let prompt = format!(
+                        "A git merge of branch '{branch}' has conflicts in: {list}. Resolve every conflict thoughtfully (keep both sides' intent), then stage the files and complete the merge with a commit."
+                    );
+                    let mode = {
+                        let s = self.settings.lock().unwrap();
+                        s.get_str("permissionMode").unwrap_or("").to_string()
+                    };
+                    let dir = self.project_root.join(".dmux").join("prompts");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let pf = dir.join(format!("conflicts-{}.txt", timestamp()));
+                    let _ = std::fs::write(&pf, &prompt);
+                    let agent_cmd = agents::compose_launch(def, Some(&pf.to_string_lossy()), &mode);
+                    let injection = match def.transport {
+                        agents::Transport::SendKeys { ready_delay_ms } => Some((prompt, ready_delay_ms)),
+                        _ => None,
+                    };
+                    let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("conflicts-")).count();
+                    self.create_window(NewWindowCtx {
+                        slug: format!("conflicts-{n}"),
+                        display: format!("conflicts: {branch}"),
+                        kind: PaneKind::Shell,
+                        agent: Some(def.id.to_string()),
+                        launch_cmd: Some(format!("clear; {agent_cmd}")),
+                        injection,
+                        worktree_path: None,
+                        cwd: Some(self.project_root.to_string_lossy().into_owned()),
+                    });
+                    self.toast(format!("Resolving conflicts with {}", def.name));
+                }
+                Err(err) => {
+                    let short: String = err.chars().take(80).collect();
+                    self.toast(format!("✗ {short}"));
+                }
+            },
             AppMsg::TrackingDone(observations) => {
                 self.tracking_inflight = false;
                 let mut changed = false;
@@ -910,6 +970,22 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Best agent to hand conflict resolution to: the configured default if
+    /// installed, else the first installed default-enabled agent.
+    fn default_agent_for_conflicts(&self) -> Option<&'static agents::AgentDef> {
+        let preferred = {
+            let s = self.settings.lock().unwrap();
+            s.get_str("defaultAgent").unwrap_or("").to_string()
+        };
+        agents::agent(&preferred)
+            .filter(|d| self.installed_agents.contains(d.id))
+            .or_else(|| {
+                agents::AGENTS
+                    .iter()
+                    .find(|d| d.default_enabled && self.installed_agents.contains(d.id))
+            })
     }
 
     fn request_reconcile(&mut self) {
@@ -1573,6 +1649,16 @@ impl App {
                 tokio::task::spawn_blocking(move || {
                     let result = git::commit_and_merge(&root, &wt_path, &branch, message.as_deref());
                     let _ = tx.send(AppMsg::MergeDone { slug, branch, result });
+                });
+            }
+            AppCmd::ResolveConflicts { branch } => {
+                let root = self.project_root.clone();
+                let tx = self.app_tx.clone();
+                let b = branch.clone();
+                self.toast("Re-establishing conflict state…");
+                tokio::task::spawn_blocking(move || {
+                    let files = git::merge_leaving_conflicts(&root, &b);
+                    let _ = tx.send(AppMsg::ConflictsReady { branch: b, files });
                 });
             }
             AppCmd::MergeCleanup { slug } => {

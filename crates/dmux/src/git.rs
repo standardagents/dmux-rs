@@ -53,6 +53,24 @@ pub fn commit_and_merge(
     }
 }
 
+/// Re-run a merge EXPECTING conflicts and leave the conflicted state in
+/// place for interactive/agent resolution. Returns the conflicted files.
+pub fn merge_leaving_conflicts(root: &Path, branch: &str) -> Result<Vec<String>, String> {
+    // A clean merge is fine too (someone fixed it meanwhile).
+    let merge = git(root, &["merge", "--no-edit", branch]);
+    let conflicted = git(root, &["diff", "--name-only", "--diff-filter=U"])
+        .map(|s| s.lines().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+    match (merge, conflicted.is_empty()) {
+        (Ok(_), _) => Ok(Vec::new()),
+        (Err(_), false) => Ok(conflicted),
+        (Err(err), true) => {
+            let _ = git(root, &["merge", "--abort"]);
+            Err(format!("merge failed without conflicts: {err}"))
+        }
+    }
+}
+
 /// Remove a merged worktree and its branch. Best-effort.
 pub fn cleanup_worktree(root: &Path, worktree: &Path, branch: &str) -> Result<(), String> {
     git(root, &["worktree", "remove", "--force", &worktree.to_string_lossy()])
