@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -333,6 +334,7 @@ impl PaneTerm {
         buf.fill(clip, &blank);
 
         let display_offset = self.term.grid().display_offset() as i32;
+        let selection = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
         let grid = self.term.grid();
         let max_rows = clip.h.min(self.rows);
         let max_cols = clip.w.min(self.cols);
@@ -344,10 +346,49 @@ impl PaneTerm {
                 if cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     continue;
                 }
-                let converted = convert_cell(cell);
+                let mut converted = convert_cell(cell);
+                if let Some(range) = &selection {
+                    if range.contains(Point::new(line, Column(vcol as usize))) {
+                        converted.attrs.toggle(AttrFlags::INVERSE);
+                    }
+                }
                 buf.set(clip.x + vcol, clip.y + vrow, converted);
             }
         }
+    }
+
+    fn viewport_point(&self, col: u16, row: u16) -> Point {
+        let offset = self.term.grid().display_offset() as i32;
+        Point::new(Line(row as i32 - offset), Column((col as usize).min(self.cols as usize - 1)))
+    }
+
+    /// Begin a text selection at viewport (col, row). Double-click semantics
+    /// (word select) use `SelectionType::Semantic`.
+    pub fn selection_start(&mut self, col: u16, row: u16, word: bool) {
+        let ty = if word { SelectionType::Semantic } else { SelectionType::Simple };
+        let point = self.viewport_point(col, row);
+        self.term.selection = Some(Selection::new(ty, point, Side::Left));
+    }
+
+    /// Extend the selection to viewport (col, row).
+    pub fn selection_update(&mut self, col: u16, row: u16) {
+        let point = self.viewport_point(col, row);
+        if let Some(sel) = &mut self.term.selection {
+            sel.update(point, Side::Right);
+        }
+    }
+
+    /// Selected text, if any (empty selections yield None).
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.trim().is_empty())
+    }
+
+    pub fn selection_clear(&mut self) -> bool {
+        self.term.selection.take().is_some()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.is_some()
     }
 
     /// Last `n` content lines of the viewport (trailing blank rows trimmed,

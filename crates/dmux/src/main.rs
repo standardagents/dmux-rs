@@ -268,6 +268,15 @@ struct App {
     closing: std::collections::HashSet<PaneId>,
     /// A pane we just created: focus it once adoption lands.
     pending_focus: Option<PaneId>,
+    /// Pane index with an active selection drag.
+    drag_select: Option<usize>,
+    /// Pane index receiving forwarded mouse-drag events (app mouse mode).
+    mouse_forward: Option<usize>,
+    /// Physical button state: SGR 1002 reports press and drag identically,
+    /// so clicks fire only on the press edge.
+    mouse_down: bool,
+    /// The current drag actually moved (a plain click must not copy).
+    drag_moved: bool,
 }
 
 async fn run(
@@ -377,6 +386,10 @@ async fn run(
         keepalive_present: false,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
+        drag_select: None,
+        mouse_forward: None,
+        mouse_down: false,
+        drag_moved: false,
     };
     app.refresh_welcome_cards();
 
@@ -504,7 +517,7 @@ impl App {
             .filter(|r| self.panes.iter().any(|p| p.slug == r.slug))
             .filter_map(|r| r.worktree_path.clone())
             .collect();
-        let mut worktrees: Vec<(String, String)> = Vec::new();
+        let mut worktrees: Vec<welcome::WorktreeCard> = Vec::new();
         let wt_dir = self.project_root.join(".dmux").join("worktrees");
         if let Ok(entries) = std::fs::read_dir(&wt_dir) {
             for entry in entries.flatten() {
@@ -513,13 +526,21 @@ impl App {
                     let p = path.to_string_lossy().into_owned();
                     if !live_paths.contains(&p) {
                         if let Some(name) = path.file_name() {
-                            worktrees.push((name.to_string_lossy().into_owned(), p));
+                            let slug = name.to_string_lossy().into_owned();
+                            // The record remembers which agent lived here.
+                            let agent = self
+                                .config
+                                .panes
+                                .iter()
+                                .find(|r| r.worktree_path.as_deref() == Some(p.as_str()) || r.slug == slug)
+                                .and_then(|r| r.agent.clone());
+                            worktrees.push(welcome::WorktreeCard { slug, path: p, agent });
                         }
                     }
                 }
             }
         }
-        worktrees.sort();
+        worktrees.sort_by(|a, b| a.slug.cmp(&b.slug));
         let project_name = self
             .project_root
             .file_name()
@@ -915,8 +936,8 @@ impl App {
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
-                let (col, row, kind) = input::classify_mouse(&m);
-                self.handle_mouse(col, row, kind)
+                let (col, row, kind, shift) = input::classify_mouse(&m);
+                self.handle_mouse(col, row, kind, shift)
             }
             InputEvent::Paste(text) => {
                 if self.views.is_empty() {
@@ -966,8 +987,77 @@ impl App {
         Some(true)
     }
 
-    fn handle_mouse(&mut self, col: u16, row: u16, kind: MouseKind) -> bool {
+    fn handle_mouse(&mut self, col: u16, row: u16, kind: MouseKind, shift: bool) -> bool {
         let target = self.click_map.hit(col, row).copied();
+        let is_press = kind == MouseKind::LeftHeld && !self.mouse_down;
+        match kind {
+            MouseKind::LeftHeld => self.mouse_down = true,
+            MouseKind::Release => self.mouse_down = false,
+            _ => {}
+        }
+
+        // An active selection drag captures the mouse until release.
+        if let Some(i) = self.drag_select {
+            match kind {
+                MouseKind::LeftHeld => {
+                    if let Some(p) = self.panes.get_mut(i) {
+                        if let Some(rect) = p.rect {
+                            let c = col.clamp(rect.x, rect.right().saturating_sub(1)) - rect.x;
+                            let r = row.clamp(rect.y, rect.bottom().saturating_sub(1)) - rect.y;
+                            p.term.selection_update(c, r);
+                            self.drag_moved = true;
+                            p.dirty = true;
+                            self.dirty = true;
+                        }
+                    }
+                    return true;
+                }
+                MouseKind::Release => {
+                    self.drag_select = None;
+                    if self.drag_moved {
+                        let text = self.panes.get(i).and_then(|p| p.term.selection_text());
+                        if let Some(text) = text {
+                            let chars = text.chars().count();
+                            self.forward_clipboard(&text);
+                            self.toast(format!("Copied {chars} chars"));
+                        }
+                    } else if let Some(p) = self.panes.get_mut(i) {
+                        // A plain click: no selection, no copy.
+                        p.term.selection_clear();
+                        p.dirty = true;
+                        self.dirty = true;
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        // An app-mouse drag forwards motion until release.
+        if let Some(i) = self.mouse_forward {
+            if let Some(p) = self.panes.get(i) {
+                if let Some(rect) = p.rect {
+                    let pane_id = p.tmux_pane;
+                    let c = col.clamp(rect.x, rect.right().saturating_sub(1)) - rect.x;
+                    let r = row.clamp(rect.y, rect.bottom().saturating_sub(1)) - rect.y;
+                    match kind {
+                        MouseKind::LeftHeld => {
+                            // Motion-while-held: SGR button 32.
+                            let m = input::encode_sgr_mouse(32, true, c, r);
+                            let _ = self.client.send(input::send_keys_hex(pane_id, &m));
+                            return true;
+                        }
+                        MouseKind::Release => {
+                            self.mouse_forward = None;
+                            let up = input::encode_sgr_mouse(0, false, c, r);
+                            let _ = self.client.send(input::send_keys_hex(pane_id, &up));
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         // Modal overlays: clicks on overlay regions go to the view; wheel goes
         // to the view; clicks outside dismiss.
         if !self.views.is_empty() {
@@ -980,7 +1070,7 @@ impl App {
                         return self.apply_view_result(r);
                     }
                 }
-                MouseKind::LeftDown => match target {
+                MouseKind::LeftHeld if is_press => match target {
                     Some(ClickTarget::Overlay(tag)) => {
                         if let Some(top) = self.views.last_mut() {
                             let r = top.on_click(tag);
@@ -993,7 +1083,7 @@ impl App {
                         self.dirty = true;
                     }
                 },
-                MouseKind::Other => {}
+                MouseKind::LeftHeld | MouseKind::Release => {}
             }
             return true;
         }
@@ -1023,7 +1113,7 @@ impl App {
                     }
                 }
             }
-            MouseKind::LeftDown => match target {
+            MouseKind::LeftHeld if is_press => match target {
                 Some(ClickTarget::SidebarRow(i)) => {
                     self.selected = i;
                     if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
@@ -1052,23 +1142,36 @@ impl App {
                     if !already_focused {
                         return self.execute_cmd(AppCmd::FocusPane(i));
                     }
-                    // Forward the click when the app wants mouse events.
-                    if let Some(p) = self.panes.get(i) {
+                    if let Some(p) = self.panes.get_mut(i) {
                         let modes = p.term.input_modes();
-                        if (modes.mouse_click || modes.mouse_drag || modes.mouse_motion) && modes.sgr_mouse {
-                            if let Some(rect) = p.rect {
-                                let down = input::encode_sgr_mouse(0, true, col - rect.x, row - rect.y);
-                                let up = input::encode_sgr_mouse(0, false, col - rect.x, row - rect.y);
+                        let app_mouse =
+                            (modes.mouse_click || modes.mouse_drag || modes.mouse_motion) && modes.sgr_mouse;
+                        if let Some(rect) = p.rect {
+                            let c = col - rect.x;
+                            let r = row - rect.y;
+                            if app_mouse && !shift {
+                                // Forward the press; drag/release follow via
+                                // the mouse_forward capture above.
+                                let down = input::encode_sgr_mouse(0, true, c, r);
                                 let pane = p.tmux_pane;
                                 let _ = self.client.send(input::send_keys_hex(pane, &down));
-                                let _ = self.client.send(input::send_keys_hex(pane, &up));
+                                self.mouse_forward = Some(i);
+                            } else {
+                                // dmux-side text selection (Shift forces it
+                                // even when the app wants the mouse).
+                                p.term.selection_clear();
+                                p.term.selection_start(c, r, false);
+                                self.drag_select = Some(i);
+                                self.drag_moved = false;
+                                p.dirty = true;
+                                self.dirty = true;
                             }
                         }
                     }
                 }
                 Some(ClickTarget::Overlay(_)) | None => {}
             },
-            MouseKind::Other => {}
+            MouseKind::LeftHeld | MouseKind::Release => {}
         }
         true
     }
@@ -1298,6 +1401,26 @@ impl App {
                         name,
                     });
                 }
+            }
+            AppCmd::ResumeWorktree { path, slug, agent } => {
+                let mode = {
+                    let s = self.settings.lock().unwrap();
+                    s.get_str("permissionMode").unwrap_or("").to_string()
+                };
+                let cmd = agents::agent(&agent)
+                    .and_then(|def| agents::compose_resume(def, &mode))
+                    .unwrap_or_else(|| agent.clone());
+                self.create_window(NewWindowCtx {
+                    display: slug.clone(),
+                    slug,
+                    kind: PaneKind::Worktree,
+                    agent: Some(agent),
+                    launch_cmd: Some(format!("clear; {cmd}")),
+                    injection: None,
+                    worktree_path: Some(path.clone()),
+                    cwd: Some(path),
+                });
+                self.toast("Resuming agent session…");
             }
             AppCmd::NewTerminalAt { path, name } => {
                 let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
@@ -1547,16 +1670,22 @@ impl App {
         }
 
         // Config record first so reconcile adoption pairs slug → agent.
-        let mut record = DmuxPane::new_record(
-            format!("pane-{}", timestamp()),
-            ctx.slug.clone(),
-            pane_id.to_string(),
-            ctx.kind,
-        );
-        record.display_name = Some(ctx.display.clone());
-        record.agent = ctx.agent.clone();
-        record.worktree_path = ctx.worktree_path.clone();
-        self.config.panes.push(record);
+        // Resumed worktrees reuse their existing record (fresh pane id).
+        if let Some(existing) = self.config.panes.iter_mut().find(|r| r.slug == ctx.slug) {
+            existing.pane_id = pane_id.to_string();
+            existing.agent = ctx.agent.clone().or_else(|| existing.agent.clone());
+        } else {
+            let mut record = DmuxPane::new_record(
+                format!("pane-{}", timestamp()),
+                ctx.slug.clone(),
+                pane_id.to_string(),
+                ctx.kind,
+            );
+            record.display_name = Some(ctx.display.clone());
+            record.agent = ctx.agent.clone();
+            record.worktree_path = ctx.worktree_path.clone();
+            self.config.panes.push(record);
+        }
         self.save_config();
 
         self.pending_focus = Some(pane_id);
@@ -1599,6 +1728,10 @@ impl App {
         let Some(p) = self.panes.get_mut(self.focused) else { return };
         if p.status == PaneStatus::Dead || p.hidden {
             return;
+        }
+        if p.term.selection_clear() {
+            p.dirty = true;
+            self.dirty = true;
         }
         if p.term.display_offset() > 0 {
             p.term.scroll_to_bottom();

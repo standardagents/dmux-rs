@@ -28,6 +28,8 @@ pub struct AgentDef {
     pub flags_accept: Option<&'static str>,
     pub flags_bypass: Option<&'static str>,
     pub default_enabled: bool,
+    /// Resume-most-recent-session command template ({permissions} substituted).
+    pub resume_template: Option<&'static str>,
 }
 
 pub const AGENTS: &[AgentDef] = &[
@@ -42,6 +44,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: Some("--permission-mode acceptEdits"),
         flags_bypass: Some("--dangerously-skip-permissions"),
         default_enabled: true,
+        resume_template: Some("claude --continue{permissions}"),
     },
     AgentDef {
         id: "opencode",
@@ -54,6 +57,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: true,
+        resume_template: None,
     },
     AgentDef {
         id: "codex",
@@ -66,6 +70,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: Some("--full-auto"),
         flags_bypass: Some("--dangerously-bypass-approvals-and-sandbox"),
         default_enabled: true,
+        resume_template: Some("codex resume --last{permissions}"),
     },
     AgentDef {
         id: "grok",
@@ -78,6 +83,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: Some("grok --continue{permissions}"),
     },
     AgentDef {
         id: "cline",
@@ -90,6 +96,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: None,
     },
     AgentDef {
         id: "gemini",
@@ -102,6 +109,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: Some("--yolo"),
         default_enabled: false,
+        resume_template: Some("gemini --resume latest{permissions}"),
     },
     AgentDef {
         id: "qwen",
@@ -114,6 +122,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: Some("--yolo"),
         default_enabled: false,
+        resume_template: Some("qwen --continue{permissions}"),
     },
     AgentDef {
         id: "amp",
@@ -126,6 +135,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: None,
     },
     AgentDef {
         id: "pi",
@@ -138,6 +148,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: Some("pi --continue{permissions}"),
     },
     AgentDef {
         id: "cursor",
@@ -150,6 +161,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: None,
     },
     AgentDef {
         id: "copilot",
@@ -162,6 +174,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: Some("copilot --continue{permissions}"),
     },
     AgentDef {
         id: "crush",
@@ -174,6 +187,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_accept: None,
         flags_bypass: None,
         default_enabled: false,
+        resume_template: None,
     },
 ];
 
@@ -207,6 +221,15 @@ pub fn permission_flags(def: &AgentDef, mode: &str) -> Option<&'static str> {
         "bypassPermissions" => def.flags_bypass,
         _ => None,
     }
+}
+
+/// Resume the most recent session for an agent (TS `resumeCommandTemplate`).
+/// None when the agent has no resume support — callers fall back to a bare
+/// launch.
+pub fn compose_resume(def: &AgentDef, mode: &str) -> Option<String> {
+    let template = def.resume_template?;
+    let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
+    Some(template.replace("{permissions}", &flags))
 }
 
 /// Compose the in-pane shell command that reads the prompt file, deletes it,

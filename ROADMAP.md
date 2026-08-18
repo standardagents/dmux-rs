@@ -23,8 +23,8 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate; LLM escalation still ⏳) |
 | LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ |
 | Merge flows / PR creation / AI merge / conflict pane | ⏳ |
-| Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ |
-| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ⏳ (pane→host OSC 52 forwarding + tmux mirror ✅) |
+| Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ (welcome-card agent resume via resumeCommandTemplate ✅; exact-session fd tracking still ⏳) |
+| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select/search ⏳) |
 | Kitty keyboard passthrough INTO panes (pane-requested flags) | ⏳ |
 | Images (kitty graphics translation) | ⏳ |
 | break-pane migration for legacy multi-pane windows | ⏳ |

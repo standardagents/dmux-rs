@@ -159,18 +159,21 @@ pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8
     format!("\x1b[<{};{};{}{}", button, col + 1, row + 1, if pressed { 'M' } else { 'm' }).into_bytes()
 }
 
-/// Classify a mouse event: (col, row, kind), 0-based.
+/// Classify a mouse event: (col, row, kind, shift), 0-based. SGR 1002 mode
+/// reports press and drag identically (LEFT held); the app distinguishes them
+/// by tracking drag state. An event with no buttons is the release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseKind {
-    LeftDown,
+    LeftHeld,
     WheelUp,
     WheelDown,
-    Other,
+    Release,
 }
 
-pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind) {
+pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind, bool) {
     let col = ev.x.saturating_sub(1);
     let row = ev.y.saturating_sub(1);
+    let shift = ev.modifiers.contains(Modifiers::SHIFT);
     let kind = if ev.mouse_buttons.contains(MouseButtons::VERT_WHEEL) {
         if ev.mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
             MouseKind::WheelUp
@@ -178,11 +181,11 @@ pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind) {
             MouseKind::WheelDown
         }
     } else if ev.mouse_buttons.contains(MouseButtons::LEFT) {
-        MouseKind::LeftDown
+        MouseKind::LeftHeld
     } else {
-        MouseKind::Other
+        MouseKind::Release
     };
-    (col, row, kind)
+    (col, row, kind, shift)
 }
 
 /// Convert routed pane bytes into a control-mode `send-keys -H` command.

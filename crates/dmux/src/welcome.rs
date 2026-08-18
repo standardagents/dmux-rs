@@ -201,10 +201,18 @@ fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool
     }
 }
 
+/// A reopenable worktree: slug, path, and the agent that lived there (drives
+/// resume-vs-terminal card behavior).
+pub struct WorktreeCard {
+    pub slug: String,
+    pub path: String,
+    pub agent: Option<String>,
+}
+
 pub fn build_cards(
     installed: &std::collections::HashSet<&'static str>,
     project_name: &str,
-    worktrees: &[(String, String)],
+    worktrees: &[WorktreeCard],
 ) -> Vec<WelcomeCard> {
     let mut cards = vec![
         WelcomeCard {
@@ -220,13 +228,28 @@ pub fn build_cards(
             cmd: AppCmd::NewTerminal,
         },
     ];
-    for (slug, path) in worktrees.iter().take(4) {
-        cards.push(WelcomeCard {
-            icon: "⎇",
-            title: slug.clone(),
-            subtitle: "reopen worktree in a terminal".into(),
-            cmd: AppCmd::NewTerminalAt { path: path.clone(), name: slug.clone() },
-        });
+    for wt in worktrees.iter().take(4) {
+        match &wt.agent {
+            Some(agent) if crate::agents::agent(agent).is_some_and(|d| d.resume_template.is_some() && installed.contains(d.id)) => {
+                let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
+                cards.push(WelcomeCard {
+                    icon: "⟲",
+                    title: wt.slug.clone(),
+                    subtitle: format!("resume {short} session in this worktree"),
+                    cmd: AppCmd::ResumeWorktree {
+                        path: wt.path.clone(),
+                        slug: wt.slug.clone(),
+                        agent: agent.clone(),
+                    },
+                });
+            }
+            _ => cards.push(WelcomeCard {
+                icon: "⎇",
+                title: wt.slug.clone(),
+                subtitle: "reopen worktree in a terminal".into(),
+                cmd: AppCmd::NewTerminalAt { path: wt.path.clone(), name: wt.slug.clone() },
+            }),
+        }
     }
     cards.push(WelcomeCard {
         icon: "⚙",
