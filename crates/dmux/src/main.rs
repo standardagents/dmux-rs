@@ -5,6 +5,7 @@
 
 mod agents;
 mod input;
+mod keys;
 mod layout;
 mod metrics;
 mod render;
@@ -231,6 +232,7 @@ struct App {
     session_name: String,
     settings: Arc<Mutex<SettingsStore>>,
     installed_agents: std::collections::HashSet<&'static str>,
+    keymap: keys::Keymap,
     theme: Theme,
     views: Vec<Box<dyn View>>,
     click_map: ClickMap<ClickTarget>,
@@ -310,9 +312,15 @@ async fn run(
     )?;
     client.send_tagged(session::list_panes_command(), Tag::ListPanes)?;
 
-    let theme = {
+    let (theme, keymap) = {
         let s = settings.lock().unwrap();
-        Theme::named(s.get_str("colorTheme").unwrap_or("violet"))
+        let theme = Theme::named(s.get_str("colorTheme").unwrap_or("violet"));
+        let overrides = s
+            .get("keybindings")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        (theme, keys::Keymap::from_overrides(&overrides))
     };
     let config_persisted = config.is_some();
     let config = config.unwrap_or_else(|| {
@@ -337,6 +345,7 @@ async fn run(
         session_name,
         settings,
         installed_agents,
+        keymap,
         theme,
         views: Vec::new(),
         click_map: ClickMap::new(),
@@ -880,7 +889,7 @@ impl App {
                         return handled;
                     }
                 }
-                let routed = input::route_key(&key, self.focused_modes(), leader_was_armed);
+                let routed = input::route_key(&key, self.focused_modes(), leader_was_armed, &self.keymap);
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
@@ -1171,7 +1180,10 @@ impl App {
                 self.dirty = true;
             }
             AppCmd::OpenShortcuts => {
-                self.views.push(Box::new(ShortcutsView::new(self.host.caps().kitty_keyboard)));
+                self.views.push(Box::new(ShortcutsView::new(
+                    self.host.caps().kitty_keyboard,
+                    self.keymap.describe(),
+                )));
                 self.dirty = true;
             }
             AppCmd::PromptRename(idx) => {

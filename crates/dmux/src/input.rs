@@ -40,51 +40,54 @@ pub enum Routed {
 
 pub const LEADER_HINT: &str = "^b: n agents · t term · p proj · s settings · m menu · r rename · h hide · x close · d detach · ?";
 
-/// Route one key event. `leader_armed` = the previous key was the leader.
-pub fn route_key(key: &KeyEvent, modes: InputModes, leader_armed: bool) -> Routed {
-    let ctrl = key.modifiers.contains(Modifiers::CTRL);
-    let alt = key.modifiers.contains(Modifiers::ALT);
-    let sup = key.modifiers.contains(Modifiers::SUPER);
+fn action_to_routed(action: crate::keys::Action) -> Routed {
+    use crate::keys::Action;
+    match action {
+        Action::OpenSettings => Routed::OpenSettings,
+        Action::OpenNewAgent => Routed::OpenNewAgent,
+        Action::NewTerminal => Routed::NewTerminal,
+        Action::AddProject => Routed::AddProject,
+        Action::OpenMenu => Routed::OpenMenu,
+        Action::OpenShortcuts => Routed::OpenShortcuts,
+        Action::RenameFocused => Routed::RenameFocused,
+        Action::HideFocused => Routed::HideFocused,
+        Action::CloseFocused => Routed::CloseFocused,
+        Action::ToggleHud => Routed::ToggleHud,
+        Action::Quit => Routed::Quit,
+        Action::FocusNext => Routed::FocusNext,
+        Action::FocusPrev => Routed::FocusPrev,
+        Action::ScrollUp => Routed::ScrollView(10),
+        Action::ScrollDown => Routed::ScrollView(-10),
+    }
+}
 
+/// Route one key event. `leader_armed` = the previous key was the leader.
+pub fn route_key(
+    key: &KeyEvent,
+    modes: InputModes,
+    leader_armed: bool,
+    keymap: &crate::keys::Keymap,
+) -> Routed {
     if leader_armed {
         return route_leader_command(key, modes);
     }
 
-    // Leader: Ctrl+b.
-    if ctrl && matches!(key.key, KeyCode::Char('b')) {
-        return Routed::LeaderArm;
-    }
-
-    // Super/Cmd chords — only arrive when the host speaks kitty keyboard
-    // protocol; they never reach pane apps, so they're collision-free.
-    if sup {
-        match key.key {
-            KeyCode::Char('n') => return Routed::OpenNewAgent,
-            KeyCode::Char('t') => return Routed::NewTerminal,
-            KeyCode::Char(',') => return Routed::OpenSettings,
-            KeyCode::Char('k') => return Routed::OpenMenu,
-            KeyCode::Char('r') => return Routed::RenameFocused,
-            KeyCode::Char('h') => return Routed::HideFocused,
-            KeyCode::Char('w') => return Routed::CloseFocused,
-            KeyCode::Char(']') => return Routed::FocusNext,
-            KeyCode::Char('[') => return Routed::FocusPrev,
-            KeyCode::Char(c @ '1'..='9') => return Routed::FocusIndex(c as usize - '1' as usize),
-            _ => {}
+    if let Some(chord) = crate::keys::event_chord(key) {
+        if keymap.is_leader(&chord) {
+            return Routed::LeaderArm;
+        }
+        if let Some(action) = keymap.lookup(&chord) {
+            return action_to_routed(action);
         }
     }
 
-    // Bare chords kept deliberately tiny + Alt alternates (also on the leader).
-    match (&key.key, ctrl, alt) {
-        (KeyCode::Char('q'), true, false) => return Routed::Quit,
-        (KeyCode::Char('y'), true, false) => return Routed::ToggleHud,
-        (KeyCode::RightArrow, false, true) => return Routed::FocusNext,
-        (KeyCode::LeftArrow, false, true) => return Routed::FocusPrev,
-        (KeyCode::Char(c @ '1'..='9'), false, true) => {
-            return Routed::FocusIndex(*c as usize - '1' as usize)
+    // Modifier+digit pane focus (not remappable; both Alt and Super forms).
+    let alt = key.modifiers.contains(Modifiers::ALT);
+    let sup = key.modifiers.contains(Modifiers::SUPER);
+    if (alt || sup) && !key.modifiers.contains(Modifiers::CTRL) {
+        if let KeyCode::Char(c @ '1'..='9') = key.key {
+            return Routed::FocusIndex(c as usize - '1' as usize);
         }
-        (KeyCode::PageUp, false, true) => return Routed::ScrollView(10),
-        (KeyCode::PageDown, false, true) => return Routed::ScrollView(-10),
-        _ => {}
     }
 
     match encode_key(key, modes) {
@@ -200,36 +203,56 @@ mod tests {
         KeyEvent { key: code, modifiers: mods }
     }
 
+    fn km() -> crate::keys::Keymap {
+        crate::keys::Keymap::from_overrides(&serde_json::Map::new())
+    }
+
     #[test]
     fn leader_flow() {
-        assert_eq!(route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), false), Routed::LeaderArm);
-        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::NONE), InputModes::default(), true), Routed::OpenNewAgent);
+        assert_eq!(route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), false, &km()), Routed::LeaderArm);
+        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::NONE), InputModes::default(), true, &km()), Routed::OpenNewAgent);
         // Double leader = literal Ctrl+b to the pane.
         assert_eq!(
-            route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), true),
+            route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), true, &km()),
             Routed::PaneBytes(vec![0x02])
         );
         // Unknown leader command swallowed, not leaked.
-        assert_eq!(route_key(&key(KeyCode::Char('z'), Modifiers::NONE), InputModes::default(), true), Routed::Ignore);
+        assert_eq!(route_key(&key(KeyCode::Char('z'), Modifiers::NONE), InputModes::default(), true, &km()), Routed::Ignore);
     }
 
     #[test]
     fn plain_chars_become_pane_bytes() {
-        match route_key(&key(KeyCode::Char('a'), Modifiers::NONE), InputModes::default(), false) {
+        match route_key(&key(KeyCode::Char('a'), Modifiers::NONE), InputModes::default(), false, &km()) {
             Routed::PaneBytes(b) => assert_eq!(b, b"a"),
             other => panic!("{other:?}"),
         }
         // 'b' without ctrl is NOT the leader.
-        match route_key(&key(KeyCode::Char('b'), Modifiers::NONE), InputModes::default(), false) {
+        match route_key(&key(KeyCode::Char('b'), Modifiers::NONE), InputModes::default(), false, &km()) {
             Routed::PaneBytes(b) => assert_eq!(b, b"b"),
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn super_chords() {
-        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::SUPER), InputModes::default(), false), Routed::OpenNewAgent);
-        assert_eq!(route_key(&key(KeyCode::Char('3'), Modifiers::SUPER), InputModes::default(), false), Routed::FocusIndex(2));
+    fn keymap_chords() {
+        // Direct settings chord (kitty hosts).
+        assert_eq!(
+            route_key(&key(KeyCode::Char(','), Modifiers::CTRL), InputModes::default(), false, &km()),
+            Routed::OpenSettings
+        );
+        // TS-era letters on Alt.
+        assert_eq!(route_key(&key(KeyCode::Char('s'), Modifiers::ALT), InputModes::default(), false, &km()), Routed::OpenSettings);
+        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::SUPER), InputModes::default(), false, &km()), Routed::OpenNewAgent);
+        assert_eq!(route_key(&key(KeyCode::Char('3'), Modifiers::SUPER), InputModes::default(), false, &km()), Routed::FocusIndex(2));
+        // A rebound keymap changes routing.
+        let mut o = serde_json::Map::new();
+        o.insert("settings".into(), serde_json::Value::String("f2".into()));
+        let custom = crate::keys::Keymap::from_overrides(&o);
+        assert_eq!(route_key(&key(KeyCode::Function(2), Modifiers::NONE), InputModes::default(), false, &custom), Routed::OpenSettings);
+        assert!(matches!(
+            route_key(&key(KeyCode::Char(','), Modifiers::CTRL), InputModes::default(), false, &custom),
+            Routed::PaneBytes(_) | Routed::Ignore
+        ));
     }
 
     #[test]

@@ -4,18 +4,20 @@ use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, PanelStyle};
 
 use super::{vkeys, ClickTarget, View, ViewCtx, ViewResult};
 
-/// Static cheat sheet; also doubles as the leader-key reference.
+/// Cheat sheet: the leader table (fixed) plus the live direct-chord keymap
+/// (user-configurable via the `keybindings` object in settings.json).
 pub struct ShortcutsView {
     kitty: bool,
+    direct: Vec<(String, &'static str)>,
 }
 
 impl ShortcutsView {
-    pub fn new(kitty: bool) -> Self {
-        Self { kitty }
+    pub fn new(kitty: bool, direct: Vec<(String, &'static str)>) -> Self {
+        Self { kitty, direct }
     }
 }
 
-const ROWS: &[(&str, &str)] = &[
+const LEADER_ROWS: &[(&str, &str)] = &[
     ("^b n", "new agents (allocate panes)"),
     ("^b t", "new terminal"),
     ("^b p", "add project (open a path)"),
@@ -29,16 +31,6 @@ const ROWS: &[(&str, &str)] = &[
     ("^b ?", "this help"),
     ("^b d", "detach (quit dmux, keep session)"),
     ("^b ^b", "send a literal Ctrl+b to the pane"),
-    ("^y", "perf HUD"),
-    ("⌥← ⌥→ / ⌥1..9", "focus (no leader)"),
-    ("⌥PgUp ⌥PgDn", "scrollback"),
-    ("wheel", "scroll pane · click title buttons ✎ – ✕"),
-];
-
-const KITTY_ROWS: &[(&str, &str)] = &[
-    ("⌘n ⌘t ⌘,", "new agents / terminal / settings"),
-    ("⌘1..9 ⌘[ ⌘]", "focus panes"),
-    ("⌘r ⌘h ⌘w", "rename / hide / close"),
 ];
 
 impl View for ShortcutsView {
@@ -49,31 +41,45 @@ impl View for ShortcutsView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let extra = if self.kitty { KITTY_ROWS.len() + 1 } else { 0 };
-        let h = (ROWS.len() + extra + 4) as u16;
-        let rect = centered(area, area.w.min(58), h.min(area.h));
+        // Two columns: leader table left, direct chords right.
+        let rows = LEADER_ROWS.len().max(self.direct.len() + 2) as u16 + 4;
+        let rect = centered(area, area.w.min(96), rows.min(area.h));
         let inner = draw_panel(buf, rect, "Keyboard Shortcuts", ctx.theme, PanelStyle::Modal);
         let bg = ctx.theme.bg_raised;
-        let mut y = inner.y;
-        for (key, desc) in ROWS {
+        let col2 = inner.x + inner.w / 2 + 2;
+
+        buf.draw_text(inner.x + 1, inner.y, "Leader", ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
+        let mut y = inner.y + 1;
+        for (key, desc) in LEADER_ROWS {
             if y >= inner.bottom().saturating_sub(1) {
                 break;
             }
             buf.draw_text(inner.x + 1, y, key, ctx.theme.accent, bg, AttrFlags::BOLD, inner);
-            buf.draw_text(inner.x + 16, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+            buf.draw_text(inner.x + 12, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
             y += 1;
         }
-        if self.kitty {
-            y += 1;
-            for (key, desc) in KITTY_ROWS {
-                if y >= inner.bottom().saturating_sub(1) {
-                    break;
-                }
-                buf.draw_text(inner.x + 1, y, key, ctx.theme.ok, bg, AttrFlags::BOLD, inner);
-                buf.draw_text(inner.x + 16, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
-                y += 1;
+
+        let title = if self.kitty { "Direct (kitty host: ⌘ works)" } else { "Direct" };
+        buf.draw_text(col2, inner.y, title, ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
+        let mut y = inner.y + 1;
+        for (key, desc) in &self.direct {
+            if y >= inner.bottom().saturating_sub(2) {
+                break;
             }
+            buf.draw_text(col2, y, key, ctx.theme.ok, bg, AttrFlags::BOLD, inner);
+            buf.draw_text(col2 + 10, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+            y += 1;
         }
+        buf.draw_text(
+            col2,
+            inner.bottom().saturating_sub(2),
+            "remap: \"keybindings\" in settings.json",
+            ctx.theme.text_faint,
+            bg,
+            AttrFlags::ITALIC,
+            inner,
+        );
+
         draw_hint_bar(
             buf,
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),

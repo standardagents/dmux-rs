@@ -161,27 +161,29 @@ fn draw_pane_title(
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
     // Right side: size + the affordances tmux could never give us — rename,
-    // hide, close buttons on every pane header.
+    // hide, close as chip buttons with fat click targets.
     let size = format!("{}×{}", pane.cols, pane.rows);
-    let buttons = ["✎", "–", "✕"];
+    let buttons = [" ✎ ", " ─ ", " ✕ "];
     let btn_targets = [
         ClickTarget::TitleRename(idx),
         ClickTarget::TitleHide(idx),
         ClickTarget::TitleClose(idx),
     ];
-    let total_w = size.chars().count() as u16 + 2 + buttons.len() as u16 * 2 + 1;
+    let chips_w = buttons.len() as u16 * 4; // 3-wide chip + 1 gap
+    let total_w = size.chars().count() as u16 + 2 + chips_w;
     let mut x = bar.right().saturating_sub(total_w);
-    x = buf.draw_text(x, bar.y, &size, t.text_faint, bg, AttrFlags::empty(), bar);
+    x = buf.draw_text(x, bar.y, &size, if focused { Color::Indexed(255) } else { t.text_faint }, bg, AttrFlags::empty(), bar);
     x += 2;
+    let chip_bg = if focused { t.bg_selected } else { t.bg };
     for (b, target) in buttons.iter().zip(btn_targets) {
-        let bx = x;
         let btn_fg = match target {
-            ClickTarget::TitleClose(_) if focused => t.danger,
+            ClickTarget::TitleClose(_) => t.danger,
             _ if focused => Color::Indexed(255),
-            _ => t.text_faint,
+            _ => t.text_dim,
         };
-        x = buf.draw_text(x, bar.y, b, btn_fg, bg, AttrFlags::empty(), bar);
-        clicks.add(Rect::new(bx, bar.y, x - bx + 1, 1), target);
+        let bx = x;
+        x = buf.draw_text(x, bar.y, b, btn_fg, chip_bg, AttrFlags::BOLD, bar);
+        clicks.add(Rect::new(bx, bar.y, x - bx, 1), target);
         x += 1;
     }
 }

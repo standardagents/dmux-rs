@@ -192,6 +192,22 @@ fn set_stdin_nonblocking(nonblocking: bool) {
     }
 }
 
+/// Kitty CSI-u encodes control keys as their codepoints; termwiz surfaces
+/// those as Char('\x1b') etc. Normalize so consumers always see the named
+/// KeyCode regardless of host protocol.
+fn normalize_key(mut ev: InputEvent) -> InputEvent {
+    if let InputEvent::Key(k) = &mut ev {
+        k.key = match k.key {
+            KeyCode::Char('\u{1b}') => KeyCode::Escape,
+            KeyCode::Char('\r') | KeyCode::Char('\n') => KeyCode::Enter,
+            KeyCode::Char('\t') => KeyCode::Tab,
+            KeyCode::Char('\u{7f}') => KeyCode::Backspace,
+            other => other,
+        };
+    }
+    ev
+}
+
 /// Spawn the blocking stdin reader thread. Parsed events land on the returned
 /// channel; the thread exits when stdin closes or the receiver is dropped.
 pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
@@ -210,7 +226,7 @@ pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
                         parser.parse(
                             &buf[..n],
                             |event| {
-                                if tx.blocking_send(event).is_err() {
+                                if tx.blocking_send(normalize_key(event)).is_err() {
                                     closed = true;
                                 }
                             },

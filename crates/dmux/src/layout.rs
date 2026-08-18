@@ -64,19 +64,22 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
     let grid_cols = best.0;
     let grid_rows = n16.div_ceil(grid_cols);
 
-    let pane_w = content_w / grid_cols;
+    // Cap column width at the configured max; center the capped grid in the
+    // content area instead of stretching panes to fill it.
+    let cell_w = (content_w / grid_cols).min(max_w + GUTTER);
+    let grid_total = cell_w * grid_cols;
+    let x0 = content_x + (content_w.saturating_sub(grid_total)) / 2;
     let pane_h = rows / grid_rows;
     for i in 0..n16 {
         let gc = i % grid_cols;
         let gr = i / grid_cols;
-        let x = content_x + gc * pane_w;
+        let x = x0 + gc * cell_w;
         let y = gr * pane_h;
-        // Last column/row absorb the remainder.
-        let w = if gc == grid_cols - 1 { content_w - gc * pane_w } else { pane_w };
+        // Last row absorbs the vertical remainder.
         let h = if gr == grid_rows - 1 { rows - gr * pane_h } else { pane_h };
         // Reserve the title bar; body starts below it. One column of spacing
         // between horizontally adjacent panes.
-        let body = Rect::new(x, y + TITLE_ROWS, w.saturating_sub(GUTTER), h.saturating_sub(TITLE_ROWS));
+        let body = Rect::new(x, y + TITLE_ROWS, cell_w.saturating_sub(GUTTER), h.saturating_sub(TITLE_ROWS));
         layout.panes.push(body);
     }
     layout
@@ -111,12 +114,21 @@ mod tests {
     }
 
     #[test]
-    fn single_pane_gets_everything() {
-        let l = compute(160, 50, 1);
+    fn single_pane_capped_and_centered() {
+        let l = compute(300, 50, 1);
         assert_eq!(l.panes.len(), 1);
         let r = l.panes[0];
-        assert!(r.w > 100);
+        // Width capped at the comfort max, not stretched to 300.
+        assert_eq!(r.w, DEFAULT_MAX_WIDTH);
+        // Centered within the content area.
+        assert!(r.x > SIDEBAR_WIDTH + 20, "should be centered, got x={}", r.x);
         assert_eq!(r.y, TITLE_ROWS);
+    }
+
+    #[test]
+    fn wide_band_setting_respected() {
+        let l = compute_with_band(400, 50, 1, 60, 200);
+        assert_eq!(l.panes[0].w, 200);
     }
 
     #[test]
