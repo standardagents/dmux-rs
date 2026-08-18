@@ -25,6 +25,7 @@ pub enum Routed {
     OpenNewAgent,
     OpenShortcuts,
     NewTerminal,
+    AddProject,
     RenameFocused,
     HideFocused,
     CloseFocused,
@@ -37,7 +38,7 @@ pub enum Routed {
     Ignore,
 }
 
-pub const LEADER_HINT: &str = "^b: n agents · t terminal · s settings · m menu · r rename · h hide · x close · d detach · ? help";
+pub const LEADER_HINT: &str = "^b: n agents · t term · p proj · s settings · m menu · r rename · h hide · x close · d detach · ?";
 
 /// Route one key event. `leader_armed` = the previous key was the leader.
 pub fn route_key(key: &KeyEvent, modes: InputModes, leader_armed: bool) -> Routed {
@@ -99,6 +100,7 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
         (KeyCode::Char('b'), true) => Routed::PaneBytes(vec![0x02]),
         (KeyCode::Char('n'), _) => Routed::OpenNewAgent,
         (KeyCode::Char('t'), _) => Routed::NewTerminal,
+        (KeyCode::Char('p'), _) => Routed::AddProject,
         (KeyCode::Char('s'), _) => Routed::OpenSettings,
         (KeyCode::Char('m'), _) | (KeyCode::Enter, _) => Routed::OpenMenu,
         (KeyCode::Char('r'), _) => Routed::RenameFocused,

@@ -18,6 +18,7 @@ impl ShortcutsView {
 const ROWS: &[(&str, &str)] = &[
     ("^b n", "new agents (allocate panes)"),
     ("^b t", "new terminal"),
+    ("^b p", "add project (open a path)"),
     ("^b s", "settings"),
     ("^b m / ⏎", "pane menu"),
     ("^b r", "rename pane"),

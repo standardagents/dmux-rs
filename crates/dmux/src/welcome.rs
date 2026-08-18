@@ -153,16 +153,15 @@ const WORDMARK_BITMAP: &[&str] = &[
     "████████  ███  ███  ████  ████████  ███  ███ ",
 ];
 
-/// Brand orange gradient, light at the cap → #ea6400 at the baseline.
-const BRAND_RAMP: &[(u8, u8, u8)] = &[
-    (255, 166, 92),
-    (253, 152, 72),
-    (250, 138, 52),
-    (246, 124, 32),
-    (242, 112, 14),
-    (238, 105, 4),
-    (234, 100, 0),
-];
+/// Gradient ramp derived from the active theme's accent: lightened toward
+/// white at the cap, the pure accent at the baseline.
+fn theme_ramp(base: (u8, u8, u8), row: usize, rows: usize) -> Color {
+    let t = if rows <= 1 { 0.0 } else { row as f32 / (rows - 1) as f32 };
+    // Lighten factor: 0.55 at the top row fading to 0 at the baseline.
+    let f = 0.55 * (1.0 - t);
+    let mix = |c: u8| -> u8 { (c as f32 + (255.0 - c as f32) * f).round().min(255.0) as u8 };
+    Color::Rgb(mix(base.0), mix(base.1), mix(base.2))
+}
 
 pub(crate) fn wordmark_size(doubled: bool) -> (u16, u16) {
     let w = WORDMARK_BITMAP.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
@@ -175,12 +174,12 @@ pub(crate) fn wordmark_size(doubled: bool) -> (u16, u16) {
 }
 
 /// Draw the wordmark at (x, y), 2×2 pixel-scaled when `doubled`, colored by
-/// the brand ramp per letterform row.
-fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool) {
+/// a gradient of the active theme's accent per letterform row.
+fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool, theme: &Theme) {
     let scale: u16 = if doubled { 2 } else { 1 };
+    let rows = WORDMARK_BITMAP.len();
     for (bi, line) in WORDMARK_BITMAP.iter().enumerate() {
-        let (r, g, b) = BRAND_RAMP[bi.min(BRAND_RAMP.len() - 1)];
-        let color = Color::Rgb(r, g, b);
+        let color = theme_ramp(theme.accent_rgb, bi, rows);
         for sub in 0..scale {
             let row = y + bi as u16 * scale + sub;
             let mut cx = x;
@@ -286,7 +285,7 @@ pub fn draw(
     )
     .intersect(&content);
     buf.fill(clearance, &Cell::default());
-    draw_wordmark(buf, wm_x, top, content, doubled);
+    draw_wordmark(buf, wm_x, top, content, doubled, theme);
 
     let tagline = "The Agent Multiplexer";
     let tag_x = content.x + (content.w.saturating_sub(tagline.chars().count() as u16)) / 2;

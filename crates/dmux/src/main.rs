@@ -1043,6 +1043,7 @@ impl App {
             Routed::OpenNewAgent => return self.execute_cmd(AppCmd::OpenNewAgent),
             Routed::OpenShortcuts => return self.execute_cmd(AppCmd::OpenShortcuts),
             Routed::NewTerminal => return self.execute_cmd(AppCmd::NewTerminal),
+            Routed::AddProject => return self.execute_cmd(AppCmd::PromptAddProject),
             Routed::RenameFocused => return self.execute_cmd(AppCmd::PromptRename(self.focused)),
             Routed::HideFocused => return self.execute_cmd(AppCmd::ToggleHidden(self.focused)),
             Routed::CloseFocused => return self.execute_cmd(AppCmd::ConfirmClose(self.focused)),
@@ -1118,7 +1119,7 @@ impl App {
                 }
                 items.push(MenuItem::new("New agents…", "^b n", AppCmd::OpenNewAgent));
                 items.push(MenuItem::new("New terminal", "^b t", AppCmd::NewTerminal));
-                items.push(MenuItem::new("Add project…", "", AppCmd::PromptAddProject));
+                items.push(MenuItem::new("Add project…", "^b p", AppCmd::PromptAddProject));
                 items.push(MenuItem::new("Settings…", "^b s", AppCmd::OpenSettings));
                 items.push(MenuItem::new("Shortcuts…", "^b ?", AppCmd::OpenShortcuts));
                 items.push(MenuItem::new("Detach", "^b d", AppCmd::Quit));
