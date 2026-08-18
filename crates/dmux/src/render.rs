@@ -17,6 +17,7 @@ pub struct Scene<'a> {
     pub focused: usize,
     pub selected: usize,
     pub session_name: &'a str,
+    pub project_name: &'a str,
     pub hud: Option<&'a Metrics>,
     pub status_line: &'a str,
     pub theme: &'a Theme,
@@ -82,12 +83,51 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     }
     buf.draw_text(end, 0, &fill, t.accent, t.bg, AttrFlags::BOLD, area);
 
-    // Pane rows.
+    // Pane rows, grouped by project when more than one project is present.
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, p) in scene.panes.iter().enumerate() {
+        let label = p
+            .project_root
+            .as_deref()
+            .map(|r| {
+                std::path::Path::new(r)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| r.to_string())
+            })
+            .unwrap_or_else(|| scene.project_name.to_string());
+        match groups.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, list)) => list.push(i),
+            None => groups.push((label, vec![i])),
+        }
+    }
+    let multi = groups.len() > 1;
     let mut row = 2u16;
-    for (i, pane) in scene.panes.iter().enumerate() {
+    let mut render_indices: Vec<(Option<String>, usize)> = Vec::new();
+    for (label, indices) in groups {
+        if multi {
+            render_indices.push((Some(label), usize::MAX));
+        }
+        for i in indices {
+            render_indices.push((None, i));
+        }
+    }
+    for (header, i) in render_indices {
         if row >= area.bottom().saturating_sub(5) {
             break;
         }
+        if let Some(label) = header {
+            let text = format!("⣿ {} ", truncate(&label, area.w.saturating_sub(8) as usize));
+            let end = buf.draw_text(area.x, row, &text, t.accent_soft, t.bg, AttrFlags::BOLD, area);
+            let mut fill = String::new();
+            for _ in end..area.right() {
+                fill.push('⣿');
+            }
+            buf.draw_text(end, row, &fill, t.accent_soft, t.bg, AttrFlags::empty(), area);
+            row += 1;
+            continue;
+        }
+        let pane = &scene.panes[i];
         let selected = i == scene.selected;
         let focused = i == scene.focused;
         let caret = if selected { "▸" } else { " " };

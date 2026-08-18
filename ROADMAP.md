@@ -28,7 +28,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Kitty keyboard passthrough INTO panes (pane-requested flags) | ⏳ |
 | Images (kitty graphics translation) | ⏳ |
 | break-pane migration for legacy multi-pane windows | ⏳ |
-| Multi-project sidebar, themes (8), i18n (en/ja) | ⏳ (theme accent ✅ minimal) |
+| Multi-project sidebar, themes (8), i18n (en/ja) | multi-project grouping ✅ (headers, per-project pane records, project-scoped creation); themes accent ✅; i18n ⏳ |
 | Distribution (npm platform packages), auto-update | ⏳ |
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)

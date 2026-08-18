@@ -91,6 +91,8 @@ struct NewWindowCtx {
     worktree_path: Option<String>,
     /// Working directory for the new window (default: project root).
     cwd: Option<String>,
+    /// Owning project root when not the main project.
+    project_root: Option<String>,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -897,6 +899,7 @@ impl App {
                         injection,
                         worktree_path: None,
                         cwd: Some(self.project_root.to_string_lossy().into_owned()),
+                        project_root: None,
                     });
                     self.toast(format!("Resolving conflicts with {}", def.name));
                 }
@@ -970,6 +973,12 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Project root that new panes should target: the selected pane's
+    /// project, else the main project.
+    fn active_project_root(&self) -> Option<String> {
+        self.panes.get(self.selected).and_then(|p| p.project_root.clone())
     }
 
     /// Best agent to hand conflict resolution to: the configured default if
@@ -1610,6 +1619,7 @@ impl App {
                         injection: None,
                         worktree_path: Some(path.clone()),
                         cwd: Some(path),
+                        project_root: None,
                     });
                 }
             }
@@ -1705,6 +1715,7 @@ impl App {
                     injection: None,
                     worktree_path: Some(wt.clone()),
                     cwd: Some(wt),
+                    project_root: None,
                 });
             }
             AppCmd::RenamePane { idx, name } => self.rename_pane(idx, name),
@@ -1735,12 +1746,26 @@ impl App {
                         .file_name()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| raw.clone());
-                    // Full multi-project grouping is a later phase; for now a
-                    // project opens as a titled terminal rooted at its path.
-                    return self.execute_cmd(AppCmd::NewTerminalAt {
-                        path: expanded.to_string_lossy().into_owned(),
-                        name,
-                    });
+                    let root = expanded.to_string_lossy().into_owned();
+                    // Register in sidebarProjects (TS-compatible shape).
+                    let entry = serde_json::json!({"projectRoot": root, "projectName": name});
+                    let list = self
+                        .config
+                        .extra
+                        .entry("sidebarProjects".to_string())
+                        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                    let mut added = false;
+                    if let Some(arr) = list.as_array_mut() {
+                        if !arr.iter().any(|p| p["projectRoot"].as_str() == Some(root.as_str())) {
+                            arr.push(entry);
+                            added = true;
+                        }
+                    }
+                    if added {
+                        self.save_config();
+                        self.toast(format!("Added project '{name}'"));
+                    }
+                    return self.execute_cmd(AppCmd::NewTerminalAt { path: root, name });
                 }
             }
             AppCmd::ResumeWorktree { path, slug, agent } => {
@@ -1769,6 +1794,7 @@ impl App {
                     injection: None,
                     worktree_path: Some(path.clone()),
                     cwd: Some(path),
+                    project_root: None,
                 });
                 self.toast("Resuming agent session…");
             }
@@ -1782,7 +1808,8 @@ impl App {
                     launch_cmd: None,
                     injection: None,
                     worktree_path: Some(path.clone()),
-                    cwd: Some(path),
+                    cwd: Some(path.clone()),
+                    project_root: (PathBuf::from(&path) != self.project_root).then_some(path),
                 });
             }
             AppCmd::LaunchAgents { prompt, allocations, mode } => self.launch_agents(prompt, allocations, mode),
@@ -1894,6 +1921,7 @@ impl App {
             injection: None,
             worktree_path: None,
             cwd: None,
+            project_root: self.active_project_root(),
         });
     }
 
@@ -1968,6 +1996,7 @@ impl App {
                     injection,
                     worktree_path,
                     cwd: None,
+                    project_root: self.active_project_root(),
                 });
             }
         }
@@ -1981,6 +2010,7 @@ impl App {
         let cwd = ctx
             .cwd
             .clone()
+            .or_else(|| ctx.project_root.clone())
             .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
         let _ = self.client.send_tagged(
             format!("new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}", dmux_cc::quote_arg(&cwd)),
@@ -2037,6 +2067,13 @@ impl App {
             record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
             record.agent = ctx.agent.clone();
             record.worktree_path = ctx.worktree_path.clone();
+            record.project_root = ctx.project_root.clone();
+            record.project_name = ctx.project_root.as_deref().map(|r| {
+                std::path::Path::new(r)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| r.to_string())
+            });
             self.config.panes.push(record);
         }
         self.save_config();
@@ -2279,12 +2316,18 @@ impl App {
         // remnants after a pane appears, closed dialogs, shrunk layouts)
         // must not survive. The diff still only emits actual changes.
         self.back.fill(self.back.area(), &dmux_compositor::Cell::default());
+        let project_name = self
+            .project_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".into());
         let scene = render::Scene {
             panes: &self.panes,
             layout: &self.layout,
             focused: self.focused,
             selected: self.selected,
             session_name: &self.session_name,
+            project_name: &project_name,
             hud: self.hud.then_some(&self.metrics),
             status_line: &self.status_msg,
             theme: &self.theme,

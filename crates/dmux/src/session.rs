@@ -79,6 +79,8 @@ pub struct LogicalPane {
     pub analysis_inflight: bool,
     pub worktree_path: Option<String>,
     pub pane_pid: u32,
+    /// Owning project root (None = the main project).
+    pub project_root: Option<String>,
     pub agent: Option<String>,
     /// Feeds Phase 1 agent detection.
     #[allow(dead_code)]
@@ -255,6 +257,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             analysis_inflight: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             pane_pid: info.pane_pid,
+            project_root: config_pane.and_then(|p| p.project_root.clone()),
             agent: config_pane.and_then(|p| p.agent.clone()),
             current_command: info.current_command.clone(),
         });
