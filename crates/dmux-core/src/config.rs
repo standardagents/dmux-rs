@@ -36,6 +36,8 @@ pub struct DmuxPane {
     pub agent_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs_attention: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autopilot: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -100,6 +102,7 @@ impl DmuxPane {
             agent: None,
             agent_status: None,
             needs_attention: None,
+            autopilot: None,
             extra: Map::new(),
         }
     }

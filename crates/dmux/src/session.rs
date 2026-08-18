@@ -77,6 +77,8 @@ pub struct LogicalPane {
     pub engine: dmux_status::PaneStatusEngine,
     /// An LLM classification is in flight for this pane.
     pub analysis_inflight: bool,
+    /// Auto-accept option dialogs when the LLM classifies one (TS autopilot).
+    pub autopilot: bool,
     pub worktree_path: Option<String>,
     /// The tmux pane was on the alternate screen at adoption time.
     pub alt_screen: bool,
@@ -261,6 +263,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
                 .unwrap_or(true),
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
+            autopilot: config_pane.and_then(|p| p.autopilot).unwrap_or(false),
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,
             pane_pid: info.pane_pid,

@@ -6,6 +6,7 @@
 mod agent_select;
 mod agents_enabled;
 mod confirm;
+mod diff_view;
 mod hooks_view;
 mod infer_view;
 mod input_view;
@@ -18,6 +19,7 @@ mod sounds_view;
 pub use agent_select::AgentSelectView;
 pub use agents_enabled::EnabledAgentsView;
 pub use confirm::ConfirmView;
+pub use diff_view::DiffView;
 pub use hooks_view::HooksView;
 pub use infer_view::InferProvidersView;
 pub use input_view::{InputPurpose, InputView};
@@ -68,6 +70,13 @@ pub enum AppCmd {
     AiMerge { branch: String },
     Noop,
     SearchScrollback(String),
+    /// Diff peek for a worktree pane.
+    ShowDiff(usize),
+    /// New worktree pane with the same agent + prompt as this one.
+    DuplicatePane(usize),
+    ToggleAutopilot(usize),
+    /// Run a project hook (`run_test` / `run_dev`) in a new terminal pane.
+    RunHook { idx: usize, name: String },
     /// Push the worktree branch and open `gh pr create` in a terminal pane.
     CreatePr(usize),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },

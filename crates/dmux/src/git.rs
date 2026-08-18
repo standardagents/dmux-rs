@@ -64,7 +64,15 @@ pub fn commit_and_merge(
     }
     let target = current_branch(root).unwrap_or_else(|| "HEAD".into());
     match git(root, &["merge", "--no-edit", branch]) {
-        Ok(_) => Ok(target),
+        Ok(_) => {
+            crate::hooks::run_detached(
+                root,
+                "post_merge",
+                root,
+                &[("DMUX_BRANCH", branch.to_string()), ("DMUX_TARGET_BRANCH", target.clone())],
+            );
+            Ok(target)
+        }
         Err(err) => {
             // Leave no half-merged state behind.
             let _ = git(root, &["merge", "--abort"]);

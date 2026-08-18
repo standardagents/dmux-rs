@@ -5,6 +5,7 @@
 
 mod agents;
 mod git;
+mod hooks;
 
 mod input;
 mod keys;
@@ -86,6 +87,8 @@ struct Cli {
 struct NewWindowCtx {
     slug: String,
     display: String,
+    /// Prompt recorded on the pane (drives resume/duplicate).
+    prompt: String,
     kind: PaneKind,
     agent: Option<String>,
     launch_cmd: Option<String>,
@@ -418,7 +421,7 @@ async fn run(
         last_frame: Instant::now() - FRAME_INTERVAL,
         reconcile_in_flight: true,
         reconcile_again: false,
-        status_msg: "^b for commands · ^b ? help".into(),
+        status_msg: String::new(),
         status_clear_at: None,
         leader_armed: false,
         anim: 0,
@@ -982,6 +985,7 @@ impl App {
                     };
                     let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("conflicts-")).count();
                     self.create_window(NewWindowCtx {
+                    prompt: String::new(),
                         slug: format!("conflicts-{n}"),
                         display: format!("conflicts: {branch}"),
                         kind: PaneKind::Shell,
@@ -1025,10 +1029,18 @@ impl App {
             AppMsg::AnalysisDone { pane, verdict } => {
                 let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
                 let mut attention: Option<String> = None;
+                let mut autopilot_fired = false;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     p.analysis_inflight = false;
                     let is_focused = focused_pane == Some(pane);
                     match verdict {
+                        Ok(dmux_infer::PaneVerdict::OptionDialog) if p.autopilot => {
+                            // Autopilot: accept the highlighted option so the
+                            // agent keeps moving; no attention needed.
+                            p.status = PaneStatus::Working;
+                            p.last_output = Some(Instant::now());
+                            autopilot_fired = true;
+                        }
                         Ok(dmux_infer::PaneVerdict::OptionDialog) => {
                             p.status = PaneStatus::Waiting;
                             if !is_focused && !p.needs_attention {
@@ -1058,6 +1070,10 @@ impl App {
                         }
                     }
                     self.dirty = true;
+                }
+                if autopilot_fired {
+                    let _ = self.client.send(input::send_keys_hex(pane, b"\r"));
+                    self.toast("Autopilot accepted an option dialog");
                 }
                 if let Some(msg) = attention {
                     self.attention_toast(msg);
@@ -1620,6 +1636,24 @@ impl App {
                     if p.worktree_path.is_some() {
                         items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
                         items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
+                        items.push(MenuItem::new(t("menu.diff"), "", AppCmd::ShowDiff(idx)));
+                        if p.agent.is_some() {
+                            items.push(MenuItem::new(t("menu.duplicate"), "", AppCmd::DuplicatePane(idx)));
+                        }
+                    }
+                    if p.agent.is_some() {
+                        let ap = if p.autopilot { t("menu.autopilot_off") } else { t("menu.autopilot_on") };
+                        items.push(MenuItem::new(ap, "", AppCmd::ToggleAutopilot(idx)));
+                    }
+                    let hook_root = p
+                        .project_root
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| self.project_root.clone());
+                    for (hook, label) in [("run_test", t("menu.run_test")), ("run_dev", t("menu.run_dev"))] {
+                        if hooks::hook_path(&hook_root, hook).is_some() {
+                            items.push(MenuItem::new(label, "", AppCmd::RunHook { idx, name: hook.into() }));
+                        }
                     }
                     items.push(MenuItem::new(t("menu.copy_path"), "", AppCmd::CopyPath(idx)));
                     items.push(MenuItem::new(t("menu.editor"), "", AppCmd::OpenInEditor(idx)));
@@ -1725,6 +1759,7 @@ impl App {
                         .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
                     let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("editor-")).count();
                     self.create_window(NewWindowCtx {
+                    prompt: String::new(),
                         slug: format!("editor-{n}"),
                         display: format!("edit: {}", p.display_title()),
                         kind: PaneKind::Shell,
@@ -1776,6 +1811,67 @@ impl App {
                 });
             }
             AppCmd::Noop => {}
+            AppCmd::ShowDiff(idx) => {
+                let Some(p) = self.panes.get(idx) else { return true };
+                let Some(wt) = p.worktree_path.clone() else { return true };
+                let title = format!("Diff — {}", p.display_title());
+                self.views.push(Box::new(views::DiffView::new(title, PathBuf::from(wt))));
+                self.dirty = true;
+            }
+            AppCmd::DuplicatePane(idx) => {
+                let Some(p) = self.panes.get(idx) else { return true };
+                let (Some(agent), slug) = (p.agent.clone(), p.slug.clone()) else {
+                    self.toast("Only agent panes can be duplicated");
+                    return true;
+                };
+                let prompt = self
+                    .config
+                    .panes
+                    .iter()
+                    .find(|r| r.slug == slug)
+                    .map(|r| r.prompt.clone())
+                    .unwrap_or_default();
+                let mode = self.settings.lock().unwrap().get_str("permissionMode").unwrap_or("").to_string();
+                self.launch_agents(prompt, vec![(agent, 1)], mode);
+            }
+            AppCmd::ToggleAutopilot(idx) => {
+                let Some(p) = self.panes.get_mut(idx) else { return true };
+                p.autopilot = !p.autopilot;
+                let on = p.autopilot;
+                let slug = p.slug.clone();
+                let title = p.display_title().to_string();
+                if let Some(rec) = self.config.panes.iter_mut().find(|r| r.slug == slug) {
+                    rec.autopilot = on.then_some(true);
+                    self.save_config();
+                }
+                self.toast(format!("Autopilot {} for '{title}'", if on { "on" } else { "off" }));
+            }
+            AppCmd::RunHook { idx, name } => {
+                let Some(p) = self.panes.get(idx) else { return true };
+                let root = p
+                    .project_root
+                    .clone()
+                    .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+                let cwd = p.worktree_path.clone().unwrap_or_else(|| root.clone());
+                let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("hook-")).count();
+                let label = if name == "run_test" { "tests" } else { "dev" };
+                self.create_window(NewWindowCtx {
+                    prompt: String::new(),
+                    slug: format!("hook-{n}"),
+                    display: format!("{label}: {}", p.display_title()),
+                    kind: PaneKind::Shell,
+                    agent: None,
+                    launch_cmd: Some(format!(
+                        "clear; DMUX_ROOT={r} DMUX_WORKTREE_PATH={w} {r}/.dmux-hooks/{name}; echo; echo '[hook exited — close this pane when finished]'",
+                        r = shq(&root),
+                        w = shq(&cwd),
+                    )),
+                    injection: None,
+                    worktree_path: None,
+                    cwd: Some(cwd),
+                    project_root: Some(root),
+                });
+            }
             AppCmd::SearchScrollback(query) => {
                 self.last_search = Some(query.clone());
                 if let Some(p) = self.panes.get_mut(self.focused) {
@@ -1827,7 +1923,13 @@ impl App {
                         let wt_path = PathBuf::from(wt);
                         let tx = self.app_tx.clone();
                         tokio::task::spawn_blocking(move || {
+                            let env = [
+                                ("DMUX_WORKTREE_PATH", wt_path.to_string_lossy().into_owned()),
+                                ("DMUX_BRANCH", branch.clone()),
+                            ];
+                            hooks::run_detached(&root, "before_worktree_remove", &root, &env);
                             let _ = git::cleanup_worktree(&root, &wt_path, &branch);
+                            hooks::run_detached(&root, "worktree_removed", &root, &env);
                             let _ = tx.send(AppMsg::RefreshDerived);
                         });
                     }
@@ -1846,6 +1948,7 @@ impl App {
                 // Interactive in a pane so gh auth/questions stay visible.
                 let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("pr-")).count();
                 self.create_window(NewWindowCtx {
+                    prompt: String::new(),
                     slug: format!("pr-{n}"),
                     display: format!("PR: {branch}"),
                     kind: PaneKind::Shell,
@@ -1928,6 +2031,7 @@ impl App {
                     .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
                     .unwrap_or_else(|| agent.clone());
                 self.create_window(NewWindowCtx {
+                    prompt: String::new(),
                     display: slug.clone(),
                     slug,
                     kind: PaneKind::Worktree,
@@ -1943,6 +2047,7 @@ impl App {
             AppCmd::NewTerminalAt { path, name } => {
                 let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
                 self.create_window(NewWindowCtx {
+                    prompt: String::new(),
                     slug: format!("terminal-{n}"),
                     display: name,
                     kind: PaneKind::Shell,
@@ -2044,8 +2149,17 @@ impl App {
             self.ensure_keepalive();
         }
         let pane = self.panes.remove(idx);
+        let hook_root = pane
+            .project_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
+        let hook_cwd = pane.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
+        let hook_env = [("DMUX_SLUG", pane.slug.clone()), ("DMUX_PANE_ID", pane.tmux_pane.to_string())];
+        hooks::run_detached(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
         self.closing.insert(pane.tmux_pane);
         let _ = self.client.send(format!("kill-window -t {}", pane.tmux_window));
+        hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
         self.config.panes.retain(|r| r.slug != pane.slug);
         self.save_config();
         if self.focused >= self.panes.len() {
@@ -2063,6 +2177,7 @@ impl App {
             .count();
         let slug = format!("terminal-{n}");
         self.create_window(NewWindowCtx {
+                    prompt: String::new(),
             display: slug.clone(),
             slug,
             kind: PaneKind::Shell,
@@ -2139,6 +2254,7 @@ impl App {
                 };
 
                 self.create_window(NewWindowCtx {
+                    prompt: prompt.clone(),
                     display: if total == 1 { base_slug.clone() } else { format!("{base_slug} ({}{i})", def.short) },
                     slug,
                     kind: PaneKind::Worktree,
@@ -2163,6 +2279,17 @@ impl App {
             .clone()
             .or_else(|| ctx.project_root.clone())
             .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+        let hook_root = ctx
+            .project_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
+        hooks::run_detached(
+            &hook_root,
+            "before_pane_create",
+            &hook_root,
+            &[("DMUX_SLUG", ctx.slug.clone())],
+        );
         let _ = self.client.send_tagged(
             format!("new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}", dmux_cc::quote_arg(&cwd)),
             Tag::NewWindow(Box::new(ctx)),
@@ -2201,6 +2328,18 @@ impl App {
             ));
         }
 
+        let hook_root = ctx
+            .project_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
+        let hook_cwd = ctx.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
+        let mut hook_env = vec![("DMUX_SLUG", ctx.slug.clone()), ("DMUX_PANE_ID", pane_id.to_string())];
+        if let Some(wt) = &ctx.worktree_path {
+            hook_env.push(("DMUX_WORKTREE_PATH", wt.clone()));
+        }
+        hooks::run_detached(&hook_root, "pane_created", &hook_cwd, &hook_env);
+
         // Config record first so reconcile adoption pairs slug → agent.
         // Resumed worktrees reuse their existing record (fresh pane id).
         if let Some(existing) = self.config.panes.iter_mut().find(|r| r.slug == ctx.slug) {
@@ -2216,7 +2355,12 @@ impl App {
             // A display equal to the slug is a default, not a chosen name —
             // leave it unset so shell panes auto-name from their own titles.
             record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
+            record.prompt = ctx.prompt.clone();
             record.agent = ctx.agent.clone();
+            if ctx.agent.is_some() {
+                let on = self.settings.lock().unwrap().get_bool("enableAutopilotByDefault", false);
+                record.autopilot = on.then_some(true);
+            }
             record.worktree_path = ctx.worktree_path.clone();
             record.project_root = ctx.project_root.clone();
             record.project_name = ctx.project_root.as_deref().map(|r| {
@@ -2433,9 +2577,11 @@ impl App {
         if let Some(at) = self.status_clear_at {
             if now >= at {
                 self.status_clear_at = None;
+                // Empty = idle; render_frame fills it (update notice > tips >
+                // static leader hint).
                 self.status_msg = match &self.update_available {
                     Some(v) => format!("⬆ dmux-rs {v} available · npm i -g dmux-rs"),
-                    None => "^b for commands · ^b ? help".into(),
+                    None => String::new(),
                 };
                 self.dirty = true;
             }
@@ -2475,6 +2621,24 @@ impl App {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "project".into());
+        // Footer tips fill the idle footer (rotating every ~15s); any real
+        // status message wins.
+        let footer_text = if !self.status_msg.is_empty() {
+            self.status_msg.clone()
+        } else if self.settings.lock().unwrap().get_bool("showFooterTips", true) {
+            const TIPS: &[&str] = &[
+                "tip: ^b ? shows every shortcut",
+                "tip: double-click a sidebar row to open its menu",
+                "tip: ^b / searches the focused pane's scrollback",
+                "tip: shift+drag selects text; double-click selects a word",
+                "tip: ^b 1..9 jumps straight to a pane",
+                "tip: ^b h hides a pane without killing it",
+                "tip: autopilot (pane menu) auto-accepts option dialogs",
+            ];
+            TIPS[(timestamp() / 15) as usize % TIPS.len()].to_string()
+        } else {
+            "^b for commands · ^b ? help".to_string()
+        };
         let scene = render::Scene {
             panes: &self.panes,
             layout: &self.layout,
@@ -2483,7 +2647,7 @@ impl App {
             session_name: &self.session_name,
             project_name: &project_name,
             hud: self.hud.then_some(&self.metrics),
-            status_line: &self.status_msg,
+            status_line: &footer_text,
             theme: &self.theme,
             anim: self.anim,
             leader_armed: self.leader_armed,
