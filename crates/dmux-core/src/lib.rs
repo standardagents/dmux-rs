@@ -5,8 +5,10 @@
 
 mod config;
 mod session;
+mod settings;
 mod title;
 
 pub use config::{DmuxConfig, DmuxPane, PaneKind};
 pub use session::session_name_for_root;
-pub use title::{parse_pane_title, PaneTitle, PANE_TITLE_DELIMITER};
+pub use settings::{SettingsScope, SettingsStore};
+pub use title::{encode_pane_title, parse_pane_title, PaneTitle, PANE_TITLE_DELIMITER};

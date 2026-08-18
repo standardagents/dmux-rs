@@ -6,6 +6,7 @@ members = [
     "crates/dmux-compositor",
     "crates/dmux-host",
     "crates/dmux-core",
+    "crates/dmux-ui",
     "crates/dmux",
 ]
 
@@ -21,6 +22,7 @@ dmux-vt = { path = "crates/dmux-vt" }
 dmux-compositor = { path = "crates/dmux-compositor" }
 dmux-host = { path = "crates/dmux-host" }
 dmux-core = { path = "crates/dmux-core" }
+dmux-ui = { path = "crates/dmux-ui" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "net", "fs"] }
 alacritty_terminal = "0.25"

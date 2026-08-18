@@ -32,6 +32,22 @@ pub fn parse_pane_title(title: &str) -> PaneTitle {
     PaneTitle { display, stable, slug, project_tag }
 }
 
+/// Encode a pane title per the shared contract: bare stable title when the
+/// display name equals it, `<display>__dmux__<stable>` otherwise. The display
+/// half is sanitized so it can never smuggle a delimiter.
+pub fn encode_pane_title(display: &str, stable: &str) -> String {
+    let mut display = display.replace(PANE_TITLE_DELIMITER, " ");
+    for delim in LEGACY_DELIMITERS {
+        display = display.replace(delim, " ");
+    }
+    let display = display.split_whitespace().collect::<Vec<_>>().join(" ");
+    if display.is_empty() || display == stable {
+        stable.to_string()
+    } else {
+        format!("{display}{PANE_TITLE_DELIMITER}{stable}")
+    }
+}
+
 fn split_once_any(title: &str) -> Option<(&str, &str)> {
     if let Some(idx) = title.find(PANE_TITLE_DELIMITER) {
         return Some((&title[..idx], &title[idx + PANE_TITLE_DELIMITER.len()..]));

@@ -1,18 +1,15 @@
-//! Frame composition: sidebar, pane title bars, pane bodies, and the debug
-//! HUD, painted into the back `CellBuffer`. Pure — no I/O — so it is testable
-//! headlessly; the app loop diffs and writes the result.
+//! Frame composition: sidebar, pane title bars (with click buttons), pane
+//! bodies, overlays, and the debug HUD, painted into the back `CellBuffer`.
+//! Every interactive region is registered in the frame's `ClickMap` as it is
+//! drawn — whatever you see is what you can click.
 
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
+use dmux_ui::{spinner_frame, ClickMap, Theme};
 
 use crate::layout::{Layout, TITLE_ROWS};
 use crate::metrics::Metrics;
 use crate::session::{LogicalPane, PaneStatus};
-
-const ACCENT: Color = Color::Indexed(135); // violet, matches dmux's default theme family
-const DIM_TEXT: Color = Color::Indexed(244);
-const SIDEBAR_BG: Color = Color::Indexed(233);
-const TITLE_BG: Color = Color::Indexed(236);
-const TITLE_BG_FOCUSED: Color = Color::Indexed(97);
+use crate::views::ClickTarget;
 
 pub struct Scene<'a> {
     pub panes: &'a [LogicalPane],
@@ -22,103 +19,163 @@ pub struct Scene<'a> {
     pub session_name: &'a str,
     pub hud: Option<&'a Metrics>,
     pub status_line: &'a str,
+    pub theme: &'a Theme,
+    pub anim: u64,
+    pub leader_armed: bool,
 }
 
-pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>) {
-    draw_sidebar(buf, scene);
+pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
+    draw_sidebar(buf, scene, clicks);
     for (i, pane) in scene.panes.iter().enumerate() {
         let Some(rect) = pane.rect else { continue };
-        draw_pane_title(buf, pane, rect, i == scene.focused);
+        draw_pane_title(buf, scene, pane, i, rect, clicks);
         pane.term.render_into(buf, rect);
+        clicks.add(rect, ClickTarget::PaneBody(i));
         if pane.paused || pane.throttled || pane.status == PaneStatus::Dead || pane.term.display_offset() > 0 {
-            draw_pane_badge(buf, pane, rect);
+            draw_pane_badge(buf, scene.theme, pane, rect);
         }
+    }
+    if scene.panes.iter().all(|p| p.rect.is_none()) {
+        draw_empty_state(buf, scene, clicks);
     }
     if let Some(metrics) = scene.hud {
         draw_hud(buf, metrics);
     }
 }
 
-fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>) {
+fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
+    let t = scene.theme;
     let area = scene.layout.sidebar;
     if area.is_empty() {
         return;
     }
-    buf.fill(area, &Cell { bg: SIDEBAR_BG, ..Cell::default() });
+    buf.fill(area, &Cell { bg: t.bg, ..Cell::default() });
 
-    // Header: session name between braille fills, dmux-style.
+    // Header: session name between braille fills.
     let header = format!("⣿⣿ {} ", truncate(scene.session_name, area.w.saturating_sub(6) as usize));
-    let end = buf.draw_text(area.x, 0, &header, ACCENT, SIDEBAR_BG, AttrFlags::BOLD, area);
+    let end = buf.draw_text(area.x, 0, &header, t.accent, t.bg, AttrFlags::BOLD, area);
     let mut fill = String::new();
     for _ in end..area.right() {
         fill.push('⣿');
     }
-    buf.draw_text(end, 0, &fill, ACCENT, SIDEBAR_BG, AttrFlags::BOLD, area);
+    buf.draw_text(end, 0, &fill, t.accent, t.bg, AttrFlags::BOLD, area);
 
     // Pane rows.
     let mut row = 2u16;
     for (i, pane) in scene.panes.iter().enumerate() {
-        if row >= area.bottom().saturating_sub(2) {
+        if row >= area.bottom().saturating_sub(4) {
             break;
         }
         let selected = i == scene.selected;
         let focused = i == scene.focused;
         let caret = if selected { "▸" } else { " " };
-        let glyph = pane.status_glyph();
-        let name = truncate(&pane.title, area.w.saturating_sub(10) as usize);
-        let line = format!("{caret} {glyph} {name}");
-        let (fg, attrs) = if focused {
-            (ACCENT, AttrFlags::BOLD)
+        let glyph = status_glyph(pane, scene.anim);
+        let hidden_tag = if pane.hidden { " (hidden)" } else { "" };
+        let name = truncate(pane.display_title(), area.w.saturating_sub(12 + hidden_tag.len() as u16) as usize);
+        let line = format!("{caret} {glyph} {name}{hidden_tag}");
+        let (fg, attrs) = if pane.hidden {
+            (t.text_faint, AttrFlags::empty())
+        } else if focused {
+            (t.accent, AttrFlags::BOLD)
         } else if selected {
-            (Color::Indexed(255), AttrFlags::empty())
+            (t.text, AttrFlags::empty())
         } else {
-            (Color::Indexed(250), AttrFlags::empty())
+            (t.text_dim, AttrFlags::empty())
         };
-        let bg = if selected { Color::Indexed(235) } else { SIDEBAR_BG };
+        let bg = if selected { t.bg_selected } else { t.bg };
+        let row_rect = Rect::new(area.x, row, area.w, 1);
         if selected {
-            buf.fill(Rect::new(area.x, row, area.w, 1), &Cell { bg, ..Cell::default() });
+            buf.fill(row_rect, &Cell { bg, ..Cell::default() });
         }
         let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
-        // Right-aligned agent tag.
         if let Some(agent) = &pane.agent {
-            let tag = format!("[{}]", &agent[..agent.len().min(2)]);
+            let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
+            let tag = format!("[{short}]");
             let tag_x = area.right().saturating_sub(tag.len() as u16 + 1);
             if tag_x > end {
-                buf.draw_text(tag_x, row, &tag, DIM_TEXT, bg, AttrFlags::empty(), area);
+                buf.draw_text(tag_x, row, &tag, t.text_faint, bg, AttrFlags::empty(), area);
             }
         }
+        clicks.add(row_rect, ClickTarget::SidebarRow(i));
         row += 1;
     }
 
-    // Footer.
+    // Action row: always-visible click targets for the two most common verbs.
+    let actions_row = area.bottom().saturating_sub(3);
+    let x = buf.draw_text(area.x + 1, actions_row, "＋ agent", t.accent, t.bg, AttrFlags::BOLD, area);
+    clicks.add(Rect::new(area.x + 1, actions_row, x - area.x - 1, 1), ClickTarget::SidebarNewAgent);
+    let x2 = buf.draw_text(x + 2, actions_row, "＋ terminal", t.text_dim, t.bg, AttrFlags::empty(), area);
+    clicks.add(Rect::new(x + 2, actions_row, x2 - x - 2, 1), ClickTarget::SidebarNewTerminal);
+
+    // Footer: leader hint or status.
     let footer_row = area.bottom().saturating_sub(1);
-    buf.draw_text(
-        area.x,
-        footer_row,
-        &truncate(scene.status_line, area.w as usize),
-        DIM_TEXT,
-        SIDEBAR_BG,
-        AttrFlags::empty(),
-        area,
-    );
+    let footer = if scene.leader_armed {
+        crate::input::LEADER_HINT
+    } else {
+        scene.status_line
+    };
+    let footer_fg = if scene.leader_armed { t.warn } else { t.text_faint };
+    buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, t.bg, AttrFlags::empty(), area);
 }
 
-fn draw_pane_title(buf: &mut CellBuffer, pane: &LogicalPane, body: Rect, focused: bool) {
+fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
+    match pane.status {
+        PaneStatus::Working => spinner_frame(anim).to_string(),
+        PaneStatus::Idle => "◌".to_string(),
+        PaneStatus::Dead => "✗".to_string(),
+    }
+}
+
+fn draw_pane_title(
+    buf: &mut CellBuffer,
+    scene: &Scene<'_>,
+    pane: &LogicalPane,
+    idx: usize,
+    body: Rect,
+    clicks: &mut ClickMap<ClickTarget>,
+) {
+    let t = scene.theme;
     if body.y < TITLE_ROWS {
         return;
     }
+    let focused = idx == scene.focused;
     let bar = Rect::new(body.x, body.y - TITLE_ROWS, body.w, TITLE_ROWS);
-    let bg = if focused { TITLE_BG_FOCUSED } else { TITLE_BG };
-    let fg = if focused { Color::Indexed(255) } else { Color::Indexed(250) };
+    let bg = if focused { t.accent_soft } else { t.bg_raised };
+    let fg = if focused { Color::Indexed(255) } else { t.text_dim };
     buf.fill(bar, &Cell { bg, ..Cell::default() });
-    let label = format!(" {} {} ", pane.status_glyph(), truncate(&pane.title, bar.w.saturating_sub(6) as usize));
+
+    let glyph = status_glyph(pane, scene.anim);
+    let label = format!(" {glyph} {} ", truncate(pane.display_title(), bar.w.saturating_sub(16) as usize));
     buf.draw_text(bar.x, bar.y, &label, fg, bg, if focused { AttrFlags::BOLD } else { AttrFlags::empty() }, bar);
-    let size = format!("{}×{} ", pane.cols, pane.rows);
-    let size_x = bar.right().saturating_sub(size.len() as u16);
-    buf.draw_text(size_x, bar.y, &size, DIM_TEXT, bg, AttrFlags::empty(), bar);
+    clicks.add(bar, ClickTarget::PaneTitle(idx));
+
+    // Right side: size + the affordances tmux could never give us — rename,
+    // hide, close buttons on every pane header.
+    let size = format!("{}×{}", pane.cols, pane.rows);
+    let buttons = ["✎", "–", "✕"];
+    let btn_targets = [
+        ClickTarget::TitleRename(idx),
+        ClickTarget::TitleHide(idx),
+        ClickTarget::TitleClose(idx),
+    ];
+    let total_w = size.chars().count() as u16 + 2 + buttons.len() as u16 * 2 + 1;
+    let mut x = bar.right().saturating_sub(total_w);
+    x = buf.draw_text(x, bar.y, &size, t.text_faint, bg, AttrFlags::empty(), bar);
+    x += 2;
+    for (b, target) in buttons.iter().zip(btn_targets) {
+        let bx = x;
+        let btn_fg = match target {
+            ClickTarget::TitleClose(_) if focused => t.danger,
+            _ if focused => Color::Indexed(255),
+            _ => t.text_faint,
+        };
+        x = buf.draw_text(x, bar.y, b, btn_fg, bg, AttrFlags::empty(), bar);
+        clicks.add(Rect::new(bx, bar.y, x - bx + 1, 1), target);
+        x += 1;
+    }
 }
 
-fn draw_pane_badge(buf: &mut CellBuffer, pane: &LogicalPane, body: Rect) {
+fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body: Rect) {
     let text = if pane.status == PaneStatus::Dead {
         " exited ".to_string()
     } else if pane.throttled {
@@ -129,7 +186,34 @@ fn draw_pane_badge(buf: &mut CellBuffer, pane: &LogicalPane, body: Rect) {
         format!(" scroll +{} ", pane.term.display_offset())
     };
     let x = body.right().saturating_sub(text.len() as u16 + 1);
-    buf.draw_text(x, body.y, &text, Color::Indexed(0), Color::Indexed(214), AttrFlags::BOLD, body);
+    buf.draw_text(x, body.y, &text, Color::Indexed(0), theme.warn, AttrFlags::BOLD, body);
+}
+
+fn draw_empty_state(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
+    let t = scene.theme;
+    let area = buf.area();
+    let cx = scene.layout.sidebar.right() + (area.w.saturating_sub(scene.layout.sidebar.right())) / 2;
+    let cy = area.h / 2;
+    let lines = [
+        ("dmux", t.accent, AttrFlags::BOLD),
+        ("", t.text_dim, AttrFlags::empty()),
+        ("^b n  launch agents", t.text_dim, AttrFlags::empty()),
+        ("^b t  open a terminal", t.text_dim, AttrFlags::empty()),
+        ("^b ?  shortcuts", t.text_faint, AttrFlags::empty()),
+    ];
+    for (i, (text, fg, attrs)) in lines.iter().enumerate() {
+        let x = cx.saturating_sub(text.chars().count() as u16 / 2);
+        let y = cy.saturating_sub(2) + i as u16;
+        let end = buf.draw_text(x, y, text, *fg, Color::Default, *attrs, area);
+        if i >= 2 && !text.is_empty() {
+            let target = match i {
+                2 => ClickTarget::SidebarNewAgent,
+                3 => ClickTarget::SidebarNewTerminal,
+                _ => continue,
+            };
+            clicks.add(Rect::new(x, y, end - x, 1), target);
+        }
+    }
 }
 
 fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {

@@ -11,8 +11,8 @@ pub const GUTTER: u16 = 1;
 /// Rows of chrome above each pane (title bar).
 pub const TITLE_ROWS: u16 = 1;
 
-const MIN_COMFORTABLE_WIDTH: u16 = 60;
-const MAX_COMFORTABLE_WIDTH: u16 = 100;
+pub const DEFAULT_MIN_WIDTH: u16 = 60;
+pub const DEFAULT_MAX_WIDTH: u16 = 100;
 const MIN_COMFORTABLE_HEIGHT: u16 = 15;
 
 #[derive(Debug, Clone, Default)]
@@ -23,8 +23,9 @@ pub struct Layout {
     pub panes: Vec<Rect>,
 }
 
-/// Compute the layout for `n` visible panes on a `cols`×`rows` host.
-pub fn compute(cols: u16, rows: u16, n: usize) -> Layout {
+/// Compute the layout for `n` visible panes on a `cols`×`rows` host, with a
+/// user-tunable comfort band (settings `minPaneWidth`/`maxPaneWidth`).
+pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16) -> Layout {
     let sidebar = Rect::new(0, 0, SIDEBAR_WIDTH.min(cols), rows);
     let content_x = sidebar.w + GUTTER;
     let content_w = cols.saturating_sub(content_x);
@@ -46,8 +47,8 @@ pub fn compute(cols: u16, rows: u16, n: usize) -> Layout {
         }
         let mut score: i32 = 0;
         score -= match pane_w {
-            w if w < MIN_COMFORTABLE_WIDTH => (MIN_COMFORTABLE_WIDTH - w) as i32 * 3,
-            w if w > MAX_COMFORTABLE_WIDTH => (w - MAX_COMFORTABLE_WIDTH) as i32,
+            w if w < min_w => (min_w - w) as i32 * 3,
+            w if w > max_w => (w - max_w) as i32,
             _ => 0,
         };
         if pane_h < MIN_COMFORTABLE_HEIGHT + TITLE_ROWS {
@@ -79,6 +80,12 @@ pub fn compute(cols: u16, rows: u16, n: usize) -> Layout {
         layout.panes.push(body);
     }
     layout
+}
+
+/// Default-band layout (tests and callers without settings).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn compute(cols: u16, rows: u16, n: usize) -> Layout {
+    compute_with_band(cols, rows, n, DEFAULT_MIN_WIDTH, DEFAULT_MAX_WIDTH)
 }
 
 #[cfg(test)]

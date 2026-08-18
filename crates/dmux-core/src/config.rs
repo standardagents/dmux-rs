@@ -10,6 +10,9 @@ use serde_json::{Map, Value};
 pub struct DmuxPane {
     pub id: String,
     pub slug: String,
+    /// Required by the TS type; empty for terminals.
+    #[serde(default)]
+    pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     /// The tmux pane id (`%N`) this logical pane was last bound to. Stale
@@ -78,7 +81,58 @@ pub struct DmuxConfig {
     pub extra: Map<String, Value>,
 }
 
+impl DmuxPane {
+    /// Minimal record for a pane dmux-rs created; all optional TS fields ride
+    /// in `extra` when other tooling adds them.
+    pub fn new_record(id: String, slug: String, pane_id: String, kind: PaneKind) -> Self {
+        Self {
+            id,
+            slug,
+            prompt: String::new(),
+            display_name: None,
+            pane_id,
+            hidden: None,
+            project_root: None,
+            project_name: None,
+            kind: Some(kind),
+            worktree_path: None,
+            shell_cwd: None,
+            agent: None,
+            agent_status: None,
+            needs_attention: None,
+            extra: Map::new(),
+        }
+    }
+}
+
 impl DmuxConfig {
+    /// Fresh config for a project dmux-rs is seeing for the first time.
+    pub fn new(project_name: String, project_root: String) -> Self {
+        let mut extra = Map::new();
+        extra.insert("settings".into(), Value::Object(Map::new()));
+        extra.insert("lastUpdated".into(), Value::String(String::new()));
+        Self {
+            project_name,
+            project_root,
+            panes: Vec::new(),
+            control_pane_id: None,
+            welcome_pane_id: None,
+            extra,
+        }
+    }
+
+    /// Atomic save (tmp + rename), preserving unknown fields.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        let mut json = serde_json::to_string_pretty(self)?;
+        json.push('\n');
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
+    }
+
     pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
         let bytes = std::fs::read(path).map_err(|e| ConfigError::Io(path.display().to_string(), e))?;
         serde_json::from_slice(&bytes).map_err(|e| ConfigError::Parse(path.display().to_string(), e))

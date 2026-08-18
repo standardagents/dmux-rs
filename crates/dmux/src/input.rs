@@ -1,5 +1,10 @@
-//! Input routing: termwiz events → dmux global actions, sidebar interaction,
+//! Input routing: termwiz events → dmux global actions, leader-key commands,
 //! or focused-pane bytes injected via control-mode `send-keys -H`.
+//!
+//! Key policy (see ROADMAP.md): pane apps own the keyboard. dmux commands
+//! live behind a `Ctrl+b` leader (double-press sends a literal Ctrl+b), plus
+//! collision-free `Super`/Cmd chords when the host terminal speaks the kitty
+//! keyboard protocol, plus a small set of Alt alternates.
 
 use dmux_host::{
     KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons, MouseEvent,
@@ -10,25 +15,64 @@ use dmux_vt::InputModes;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Routed {
     Quit,
+    Detach,
     ToggleHud,
     FocusNext,
     FocusPrev,
     FocusIndex(usize),
+    OpenMenu,
+    OpenSettings,
+    OpenNewAgent,
+    OpenShortcuts,
+    NewTerminal,
+    RenameFocused,
+    HideFocused,
+    CloseFocused,
+    /// Leader was pressed: arm and wait for the command key.
+    LeaderArm,
     /// Raw bytes for the focused pane's pty.
     PaneBytes(Vec<u8>),
     /// Scroll the focused pane's local view (positive = into history).
     ScrollView(i32),
-    SidebarClick { row: u16, col: u16 },
-    SidebarWheel(i32),
-    PaneClick { col: u16, row: u16 },
     Ignore,
 }
 
-pub fn route_key(key: &KeyEvent, modes: InputModes) -> Routed {
+pub const LEADER_HINT: &str = "^b: n agents · t terminal · s settings · m menu · r rename · h hide · x close · d detach · ? help";
+
+/// Route one key event. `leader_armed` = the previous key was the leader.
+pub fn route_key(key: &KeyEvent, modes: InputModes, leader_armed: bool) -> Routed {
     let ctrl = key.modifiers.contains(Modifiers::CTRL);
     let alt = key.modifiers.contains(Modifiers::ALT);
+    let sup = key.modifiers.contains(Modifiers::SUPER);
 
-    // dmux-global hotkeys come first; everything else goes to the pane.
+    if leader_armed {
+        return route_leader_command(key, modes);
+    }
+
+    // Leader: Ctrl+b.
+    if ctrl && matches!(key.key, KeyCode::Char('b')) {
+        return Routed::LeaderArm;
+    }
+
+    // Super/Cmd chords — only arrive when the host speaks kitty keyboard
+    // protocol; they never reach pane apps, so they're collision-free.
+    if sup {
+        match key.key {
+            KeyCode::Char('n') => return Routed::OpenNewAgent,
+            KeyCode::Char('t') => return Routed::NewTerminal,
+            KeyCode::Char(',') => return Routed::OpenSettings,
+            KeyCode::Char('k') => return Routed::OpenMenu,
+            KeyCode::Char('r') => return Routed::RenameFocused,
+            KeyCode::Char('h') => return Routed::HideFocused,
+            KeyCode::Char('w') => return Routed::CloseFocused,
+            KeyCode::Char(']') => return Routed::FocusNext,
+            KeyCode::Char('[') => return Routed::FocusPrev,
+            KeyCode::Char(c @ '1'..='9') => return Routed::FocusIndex(c as usize - '1' as usize),
+            _ => {}
+        }
+    }
+
+    // Bare chords kept deliberately tiny + Alt alternates (also on the leader).
     match (&key.key, ctrl, alt) {
         (KeyCode::Char('q'), true, false) => return Routed::Quit,
         (KeyCode::Char('y'), true, false) => return Routed::ToggleHud,
@@ -48,11 +92,41 @@ pub fn route_key(key: &KeyEvent, modes: InputModes) -> Routed {
     }
 }
 
+fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
+    let ctrl = key.modifiers.contains(Modifiers::CTRL);
+    match (&key.key, ctrl) {
+        // Leader twice = send the literal Ctrl+b to the pane (tmux convention).
+        (KeyCode::Char('b'), true) => Routed::PaneBytes(vec![0x02]),
+        (KeyCode::Char('n'), _) => Routed::OpenNewAgent,
+        (KeyCode::Char('t'), _) => Routed::NewTerminal,
+        (KeyCode::Char('s'), _) => Routed::OpenSettings,
+        (KeyCode::Char('m'), _) | (KeyCode::Enter, _) => Routed::OpenMenu,
+        (KeyCode::Char('r'), _) => Routed::RenameFocused,
+        (KeyCode::Char('h'), _) => Routed::HideFocused,
+        (KeyCode::Char('x'), _) => Routed::CloseFocused,
+        (KeyCode::Char('d'), _) => Routed::Detach,
+        (KeyCode::Char('?'), _) => Routed::OpenShortcuts,
+        (KeyCode::Char('y'), _) => Routed::ToggleHud,
+        (KeyCode::Char(c @ '1'..='9'), _) => Routed::FocusIndex(*c as usize - '1' as usize),
+        (KeyCode::RightArrow, _) | (KeyCode::DownArrow, _) => Routed::FocusNext,
+        (KeyCode::LeftArrow, _) | (KeyCode::UpArrow, _) => Routed::FocusPrev,
+        (KeyCode::PageUp, _) => Routed::ScrollView(10),
+        (KeyCode::PageDown, _) => Routed::ScrollView(-10),
+        (KeyCode::Escape, _) => Routed::Ignore,
+        // Unknown leader key: swallow it (don't leak half a chord to the pane)
+        // but do nothing. `modes` unused here on purpose.
+        _ => {
+            let _ = modes;
+            Routed::Ignore
+        }
+    }
+}
+
 pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
     let encode_modes = KeyCodeEncodeModes {
-        // Phase 0 always encodes legacy xterm; kitty-protocol passthrough of
-        // the pane's advertised flags is a follow-up (needs host-side kitty
-        // support probing too).
+        // Phase 0 always encodes legacy xterm toward panes; pane-side kitty
+        // passthrough is a follow-up (host-side kitty is already used for our
+        // own Super chords).
         encoding: KeyboardEncoding::Xterm,
         application_cursor_keys: modes.app_cursor,
         newline_mode: false,
@@ -80,41 +154,33 @@ pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8
     format!("\x1b[<{};{};{}{}", button, col + 1, row + 1, if pressed { 'M' } else { 'm' }).into_bytes()
 }
 
-/// Classify a termwiz mouse event into dmux terms. `sidebar_width` splits the
-/// x axis. termwiz reports 1-based coordinates.
-pub fn route_mouse(ev: &MouseEvent, sidebar_width: u16) -> Routed {
+/// Classify a mouse event: (col, row, kind), 0-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKind {
+    LeftDown,
+    WheelUp,
+    WheelDown,
+    Other,
+}
+
+pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind) {
     let col = ev.x.saturating_sub(1);
     let row = ev.y.saturating_sub(1);
-    let wheel_up = ev.mouse_buttons.contains(MouseButtons::VERT_WHEEL) && ev.mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE);
-    let wheel_down = ev.mouse_buttons.contains(MouseButtons::VERT_WHEEL) && !ev.mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE);
-
-    if col < sidebar_width {
-        if wheel_up {
-            return Routed::SidebarWheel(-1);
+    let kind = if ev.mouse_buttons.contains(MouseButtons::VERT_WHEEL) {
+        if ev.mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
+            MouseKind::WheelUp
+        } else {
+            MouseKind::WheelDown
         }
-        if wheel_down {
-            return Routed::SidebarWheel(1);
-        }
-        if ev.mouse_buttons.contains(MouseButtons::LEFT) {
-            return Routed::SidebarClick { row, col };
-        }
-        return Routed::Ignore;
-    }
-
-    if wheel_up {
-        return Routed::ScrollView(3);
-    }
-    if wheel_down {
-        return Routed::ScrollView(-3);
-    }
-    if ev.mouse_buttons.contains(MouseButtons::LEFT) {
-        return Routed::PaneClick { col, row };
-    }
-    Routed::Ignore
+    } else if ev.mouse_buttons.contains(MouseButtons::LEFT) {
+        MouseKind::LeftDown
+    } else {
+        MouseKind::Other
+    };
+    (col, row, kind)
 }
 
 /// Convert routed pane bytes into a control-mode `send-keys -H` command.
-/// Chunked by the caller if needed (tmux command lines should stay short).
 pub fn send_keys_hex(pane: dmux_cc::PaneId, bytes: &[u8]) -> String {
     let mut cmd = String::with_capacity(20 + bytes.len() * 3);
     cmd.push_str(&format!("send-keys -t {} -H", pane));
@@ -133,20 +199,35 @@ mod tests {
     }
 
     #[test]
-    fn global_hotkeys() {
-        assert_eq!(route_key(&key(KeyCode::Char('q'), Modifiers::CTRL), InputModes::default()), Routed::Quit);
+    fn leader_flow() {
+        assert_eq!(route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), false), Routed::LeaderArm);
+        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::NONE), InputModes::default(), true), Routed::OpenNewAgent);
+        // Double leader = literal Ctrl+b to the pane.
         assert_eq!(
-            route_key(&key(KeyCode::Char('3'), Modifiers::ALT), InputModes::default()),
-            Routed::FocusIndex(2)
+            route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), true),
+            Routed::PaneBytes(vec![0x02])
         );
+        // Unknown leader command swallowed, not leaked.
+        assert_eq!(route_key(&key(KeyCode::Char('z'), Modifiers::NONE), InputModes::default(), true), Routed::Ignore);
     }
 
     #[test]
     fn plain_chars_become_pane_bytes() {
-        match route_key(&key(KeyCode::Char('a'), Modifiers::NONE), InputModes::default()) {
+        match route_key(&key(KeyCode::Char('a'), Modifiers::NONE), InputModes::default(), false) {
             Routed::PaneBytes(b) => assert_eq!(b, b"a"),
             other => panic!("{other:?}"),
         }
+        // 'b' without ctrl is NOT the leader.
+        match route_key(&key(KeyCode::Char('b'), Modifiers::NONE), InputModes::default(), false) {
+            Routed::PaneBytes(b) => assert_eq!(b, b"b"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn super_chords() {
+        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::SUPER), InputModes::default(), false), Routed::OpenNewAgent);
+        assert_eq!(route_key(&key(KeyCode::Char('3'), Modifiers::SUPER), InputModes::default(), false), Routed::FocusIndex(2));
     }
 
     #[test]

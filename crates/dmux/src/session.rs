@@ -54,6 +54,8 @@ pub struct LogicalPane {
     /// refreshes by periodic reseed until the flood subsides.
     pub throttled: bool,
     pub resume_at: Option<std::time::Instant>,
+    /// Excluded from the layout and output-muted; still alive in tmux.
+    pub hidden: bool,
     pub agent: Option<String>,
     /// Feeds Phase 1 agent detection.
     #[allow(dead_code)]
@@ -61,11 +63,11 @@ pub struct LogicalPane {
 }
 
 impl LogicalPane {
-    pub fn status_glyph(&self) -> &'static str {
-        match self.status {
-            PaneStatus::Working => "✻",
-            PaneStatus::Idle => "◌",
-            PaneStatus::Dead => "✗",
+    pub fn display_title(&self) -> &str {
+        if self.title.trim().is_empty() {
+            &self.slug
+        } else {
+            &self.title
         }
     }
 
@@ -218,6 +220,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             window_start: std::time::Instant::now(),
             throttled: false,
             resume_at: None,
+            hidden: config_pane.map(|p| p.is_hidden()).unwrap_or(false),
             agent: config_pane.and_then(|p| p.agent.clone()),
             current_command: info.current_command.clone(),
         });

@@ -432,6 +432,7 @@ dependencies = [
  "dmux-compositor",
  "dmux-core",
  "dmux-host",
+ "dmux-ui",
  "dmux-vt",
  "hdrhistogram",
  "libc",
@@ -483,6 +484,14 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dmux-ui"
+version = "0.1.0"
+dependencies = [
+ "dmux-compositor",
+ "unicode-width",
 ]
 
 [[package]]

@@ -1,0 +1,9 @@
+[package]
+name = "dmux-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dmux-compositor = { workspace = true }
+unicode-width = { workspace = true }

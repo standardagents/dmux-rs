@@ -26,6 +26,8 @@ pub enum HostError {
 pub struct HostCaps {
     /// DECSET 2026 synchronized output.
     pub synchronized_output: bool,
+    /// Kitty keyboard protocol — enables collision-free Super/Cmd chords.
+    pub kitty_keyboard: bool,
 }
 
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h\x1b[?2004h";
@@ -50,6 +52,14 @@ impl HostTerminal {
         out.flush()?;
         drop(out);
         let caps = probe_caps();
+        if caps.kitty_keyboard {
+            // Push minimal kitty flags (disambiguate) so modifier chords —
+            // including Super where the terminal forwards it — arrive as
+            // unambiguous CSI u sequences.
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(b"\x1b[>1u");
+            let _ = out.flush();
+        }
         Ok(Self { caps, restored: false })
     }
 
@@ -76,6 +86,9 @@ impl HostTerminal {
         }
         self.restored = true;
         let mut out = std::io::stdout().lock();
+        if self.caps.kitty_keyboard {
+            let _ = out.write_all(b"\x1b[<u");
+        }
         let _ = out.write_all(LEAVE);
         let _ = out.flush();
         let _ = crossterm::terminal::disable_raw_mode();
@@ -108,7 +121,8 @@ pub fn term_size() -> (u16, u16) {
 /// the async input pipeline starts, so it owns stdin briefly.
 fn probe_caps() -> HostCaps {
     let mut caps = HostCaps::default();
-    let query = b"\x1b[?2026$p\x1b[c";
+    // DECRQM 2026, kitty keyboard query, then DA1 as the reply fence.
+    let query = b"\x1b[?2026$p\x1b[?u\x1b[c";
     {
         let mut out = std::io::stdout().lock();
         if out.write_all(query).and_then(|_| out.flush()).is_err() {
@@ -128,6 +142,9 @@ fn probe_caps() -> HostCaps {
                 acc.extend_from_slice(&buf[..n]);
                 if find_decrpm_2026(&acc) {
                     caps.synchronized_output = true;
+                }
+                if find_kitty_reply(&acc) {
+                    caps.kitty_keyboard = true;
                 }
                 // DA1 response terminator: ESC [ ? ... c
                 if acc.windows(2).any(|w| w == b"[?") && acc.last() == Some(&b'c') {
@@ -150,6 +167,20 @@ fn find_decrpm_2026(acc: &[u8]) -> bool {
     acc.windows(needle.len())
         .enumerate()
         .any(|(i, w)| w == needle && matches!(acc.get(i + needle.len()), Some(b'1') | Some(b'2')))
+}
+
+/// Kitty keyboard query reply: `ESC [ ? <flags> u`.
+fn find_kitty_reply(acc: &[u8]) -> bool {
+    let mut i = 0;
+    while let Some(pos) = acc[i..].windows(2).position(|w| w == b"[?") {
+        let start = i + pos + 2;
+        let digits: usize = acc[start..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits > 0 && acc.get(start + digits) == Some(&b'u') {
+            return true;
+        }
+        i = start;
+    }
+    false
 }
 
 fn set_stdin_nonblocking(nonblocking: bool) {
