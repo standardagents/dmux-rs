@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use clap::Parser as ClapParser;
 use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter, Rect};
+use dmux_core::i18n::{t, tf};
 use dmux_core::{
     encode_pane_title, session_name_for_root, DmuxConfig, DmuxPane, PaneKind, SettingsScope,
     SettingsStore,
@@ -438,6 +439,7 @@ async fn run(
         let s = app.settings.lock().unwrap();
         app.inference_primary = s.get("inferencePrimary").and_then(dmux_infer::Target::from_value);
         app.inference_backup = s.get("inferenceBackup").and_then(dmux_infer::Target::from_value);
+        dmux_core::i18n::set_locale(s.get_str("language").unwrap_or("en"));
     }
     if app.inference_primary.is_some() {
         tracing::info!(
@@ -1513,24 +1515,24 @@ impl App {
                 let idx = self.selected.min(self.panes.len().saturating_sub(1));
                 let mut items = Vec::new();
                 if let Some(p) = self.panes.get(idx) {
-                    let hide_label = if p.hidden { "Show pane" } else { "Hide pane" };
-                    items.push(MenuItem::new("Rename pane", "^b r", AppCmd::PromptRename(idx)));
+                    let hide_label = if p.hidden { t("menu.show") } else { t("menu.hide") };
+                    items.push(MenuItem::new(t("menu.rename"), "^b r", AppCmd::PromptRename(idx)));
                     items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
                     if p.worktree_path.is_some() {
-                        items.push(MenuItem::new("Merge worktree…", "", AppCmd::MergeStart(idx)));
-                        items.push(MenuItem::new("Create PR…", "", AppCmd::CreatePr(idx)));
+                        items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
+                        items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
                     }
-                    items.push(MenuItem::new("Copy path", "", AppCmd::CopyPath(idx)));
-                    items.push(MenuItem::new("Open in editor", "", AppCmd::OpenInEditor(idx)));
-                    items.push(MenuItem::new("Close pane", "^b x", AppCmd::ConfirmClose(idx)).danger());
+                    items.push(MenuItem::new(t("menu.copy_path"), "", AppCmd::CopyPath(idx)));
+                    items.push(MenuItem::new(t("menu.editor"), "", AppCmd::OpenInEditor(idx)));
+                    items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
                 }
-                items.push(MenuItem::new("New agents…", "^b n", AppCmd::OpenNewAgent));
-                items.push(MenuItem::new("New terminal", "^b t", AppCmd::NewTerminal));
-                items.push(MenuItem::new("Add project…", "^b p", AppCmd::PromptAddProject));
-                items.push(MenuItem::new("Settings…", "^b s", AppCmd::OpenSettings));
-                items.push(MenuItem::new("Logs…", "^b l", AppCmd::OpenLogs));
-                items.push(MenuItem::new("Shortcuts…", "^b ?", AppCmd::OpenShortcuts));
-                items.push(MenuItem::new("Detach", "^b d", AppCmd::Quit));
+                items.push(MenuItem::new(t("menu.new_agents"), "^b n", AppCmd::OpenNewAgent));
+                items.push(MenuItem::new(t("menu.new_terminal"), "^b t", AppCmd::NewTerminal));
+                items.push(MenuItem::new(t("menu.add_project"), "^b p", AppCmd::PromptAddProject));
+                items.push(MenuItem::new(t("menu.settings"), "^b s", AppCmd::OpenSettings));
+                items.push(MenuItem::new(t("menu.logs"), "^b l", AppCmd::OpenLogs));
+                items.push(MenuItem::new(t("menu.shortcuts"), "^b ?", AppCmd::OpenShortcuts));
+                items.push(MenuItem::new(t("menu.detach"), "^b d", AppCmd::Quit));
                 let title = self
                     .panes
                     .get(idx)
@@ -1573,7 +1575,7 @@ impl App {
             AppCmd::PromptRename(idx) => {
                 if let Some(p) = self.panes.get(idx) {
                     self.views.push(Box::new(InputView::new(
-                        "Rename pane",
+                        t("dialog.rename_title"),
                         p.display_title(),
                         "pane name",
                         InputPurpose::RenamePane(idx),
@@ -1584,9 +1586,9 @@ impl App {
             AppCmd::ConfirmClose(idx) => {
                 if let Some(p) = self.panes.get(idx) {
                     self.views.push(Box::new(ConfirmView::new(
-                        "Close pane",
-                        format!("Close '{}'? The process will be killed.", p.display_title()),
-                        "Close",
+                        t("dialog.close_title"),
+                        tf("dialog.close_body", p.display_title()),
+                        t("dialog.close_confirm"),
                         true,
                         AppCmd::ClosePane(idx),
                     )));
@@ -1842,6 +1844,14 @@ impl App {
                 self.force_full = true;
             }
             "minPaneWidth" | "maxPaneWidth" => self.relayout(),
+            "language" => {
+                let lang = {
+                    let s = self.settings.lock().unwrap();
+                    s.get_str("language").unwrap_or("en").to_string()
+                };
+                dmux_core::i18n::set_locale(&lang);
+                self.force_full = true;
+            }
             _ => {}
         }
         self.dirty = true;
@@ -1880,7 +1890,7 @@ impl App {
             rec.hidden = hidden.then_some(true);
         });
         self.relayout();
-        self.toast(if hidden { "Pane hidden (still running)" } else { "Pane shown" });
+        self.toast(if hidden { t("toast.pane_hidden") } else { t("toast.pane_shown") });
     }
 
     fn close_pane(&mut self, idx: usize) {

@@ -1,0 +1,15 @@
+{
+  "name": "@dmux/PLATFORM_NAME",
+  "version": "0.1.0",
+  "description": "dmux-rs native binary for PLATFORM_NAME",
+  "os": [
+    "OS_VALUE"
+  ],
+  "cpu": [
+    "CPU_VALUE"
+  ],
+  "files": [
+    "bin"
+  ],
+  "license": "MIT"
+}

@@ -4,6 +4,7 @@
 //! never strips data the TS implementation needs.
 
 mod config;
+pub mod i18n;
 mod session;
 mod settings;
 mod title;
