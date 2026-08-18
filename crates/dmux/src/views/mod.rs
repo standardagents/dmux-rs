@@ -53,6 +53,8 @@ pub enum AppCmd {
     MergeStart(usize),
     MergeExec { slug: String, message: Option<String> },
     MergeCleanup { slug: String },
+    /// Push the worktree branch and open `gh pr create` in a terminal pane.
+    CreatePr(usize),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },
     SetSetting { key: String, value: serde_json::Value, scope: dmux_core::SettingsScope },
 }

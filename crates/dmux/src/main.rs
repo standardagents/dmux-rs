@@ -1333,6 +1333,7 @@ impl App {
                     items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
                     if p.worktree_path.is_some() {
                         items.push(MenuItem::new("Merge worktree…", "", AppCmd::MergeStart(idx)));
+                        items.push(MenuItem::new("Create PR…", "", AppCmd::CreatePr(idx)));
                     }
                     items.push(MenuItem::new("Copy path", "", AppCmd::CopyPath(idx)));
                     items.push(MenuItem::new("Open in editor", "", AppCmd::OpenInEditor(idx)));
@@ -1494,6 +1495,31 @@ impl App {
                     }
                     self.toast("Worktree merged and cleaned up");
                 }
+            }
+            AppCmd::CreatePr(idx) => {
+                let Some(p) = self.panes.get(idx) else { return true };
+                let Some(wt) = p.worktree_path.clone() else { return true };
+                let wt_path = PathBuf::from(&wt);
+                let branch = git::current_branch(&wt_path).unwrap_or_else(|| p.slug.clone());
+                if git::worktree_dirty(&wt_path) {
+                    self.toast("Uncommitted changes — merge flow can commit them first");
+                    return true;
+                }
+                // Interactive in a pane so gh auth/questions stay visible.
+                let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("pr-")).count();
+                self.create_window(NewWindowCtx {
+                    slug: format!("pr-{n}"),
+                    display: format!("PR: {branch}"),
+                    kind: PaneKind::Shell,
+                    agent: None,
+                    launch_cmd: Some(format!(
+                        "clear; git push -u origin {b} && gh pr create --head {b} --fill; echo; echo '[done — close this pane when finished]'",
+                        b = shq(&branch)
+                    )),
+                    injection: None,
+                    worktree_path: Some(wt.clone()),
+                    cwd: Some(wt),
+                });
             }
             AppCmd::RenamePane { idx, name } => self.rename_pane(idx, name),
             AppCmd::ToggleHidden(idx) => self.toggle_hidden(idx),
