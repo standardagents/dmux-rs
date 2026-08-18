@@ -264,6 +264,8 @@ struct App {
     keepalive_present: bool,
     /// Panes we killed on purpose: never re-adopt while tmux still lists them.
     closing: std::collections::HashSet<PaneId>,
+    /// A pane we just created: focus it once adoption lands.
+    pending_focus: Option<PaneId>,
 }
 
 async fn run(
@@ -365,6 +367,7 @@ async fn run(
         welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
         keepalive_present: false,
         closing: std::collections::HashSet::new(),
+        pending_focus: None,
     };
     app.refresh_welcome_cards();
 
@@ -760,18 +763,34 @@ impl App {
                 }
             }
         }
+        // Panes whose process exited are gone — tmux semantics, no dead husks.
         let live: std::collections::HashSet<_> = infos.iter().map(|i| i.pane).collect();
-        for p in &mut self.panes {
-            if !live.contains(&p.tmux_pane) {
-                p.status = PaneStatus::Dead;
+        let before = self.panes.len();
+        self.panes.retain(|p| live.contains(&p.tmux_pane));
+        if self.panes.len() != before {
+            // Terminal records die with their pane; worktree records stay so
+            // the welcome screen offers to reopen them.
+            let live_slugs: std::collections::HashSet<String> =
+                self.panes.iter().map(|p| p.slug.clone()).collect();
+            let rec_before = self.config.panes.len();
+            self.config
+                .panes
+                .retain(|r| r.kind() != PaneKind::Shell || live_slugs.contains(&r.slug));
+            if self.config.panes.len() != rec_before {
+                self.save_config();
             }
         }
         self.relayout();
-        self.refresh_welcome_cards();
-        // An empty session must not be one process-exit away from vanishing.
-        if self.panes.is_empty() {
-            self.ensure_keepalive();
+        // Newly created panes take focus once adopted.
+        if let Some(pending) = self.pending_focus {
+            if let Some(idx) = self.panes.iter().position(|p| p.tmux_pane == pending) {
+                self.pending_focus = None;
+                let _ = self.execute_cmd(AppCmd::FocusPane(idx));
+            }
         }
+        self.refresh_welcome_cards();
+        // The session must never be one process-exit away from vanishing.
+        self.ensure_keepalive();
     }
 
     fn comfort_band(&self) -> (u16, u16) {
@@ -1474,6 +1493,7 @@ impl App {
         self.config.panes.push(record);
         self.save_config();
 
+        self.pending_focus = Some(pane_id);
         self.request_reconcile();
     }
 
