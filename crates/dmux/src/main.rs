@@ -36,6 +36,8 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
 const HUD_REFRESH: Duration = Duration::from_millis(500);
 const ANIM_INTERVAL: Duration = Duration::from_millis(120);
+/// The rain runs at a showier frame rate — cheap, and it's a perf demo.
+const RAIN_INTERVAL: Duration = Duration::from_millis(33);
 const STATUS_LINGER: Duration = Duration::from_secs(4);
 /// Flood throttling: see ROADMAP notes; keeps typing latency flat under `yes`.
 const FLOOD_WINDOW: Duration = Duration::from_millis(250);
@@ -386,9 +388,10 @@ async fn run(
             .filter_map(|p| p.resume_at)
             .min()
             .map(tokio::time::Instant::from_std);
-        let anim_deadline = app
-            .animating()
-            .then(|| tokio::time::Instant::from_std(now + ANIM_INTERVAL));
+        let anim_deadline = app.animating().then(|| {
+            let interval = if app.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
+            tokio::time::Instant::from_std(now + interval)
+        });
         let injection_deadline = app
             .pending_injections
             .iter()

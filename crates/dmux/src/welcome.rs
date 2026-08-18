@@ -67,8 +67,9 @@ impl MatrixRain {
 
     fn spawn(&mut self, scatter: bool) -> Drop {
         let col = (xorshift(&mut self.rng) % self.cols as u32) as u16;
-        // 0.25 .. 1.0 rows per tick, in 16ths.
-        let speed_fp = 4 + (xorshift(&mut self.rng) % 13) as i32;
+        // 0.3 .. 1.4 rows per tick, in 16ths — at ~30fps that's a lively
+        // 9–40 rows/second spread.
+        let speed_fp = 5 + (xorshift(&mut self.rng) % 18) as i32;
         let len = 4 + (xorshift(&mut self.rng) % 11) as u16;
         // Start above the top so drops enter gradually; on first fill,
         // scatter through the whole area so it doesn't start empty.
@@ -138,56 +139,64 @@ pub struct WelcomeCard {
     pub cmd: AppCmd,
 }
 
-/// The dmux letterforms (same bitmap as the TS welcome pane / brand SVG).
-/// Rendered double-height with horizontal scanline banding in brand orange —
-/// the terminal translation of the slatted wordmark in dmux.svg.
+/// The dmux letterforms — verbatim from the TS welcome pane art
+/// (`src/utils/asciiArt.ts`), which is the terminal rendition of the brand
+/// mark. Scaled 2×2 when the host is large enough: chunky pixels ARE the
+/// brand; no cleverness.
 const WORDMARK_BITMAP: &[&str] = &[
-    "    ███                                     ",
-    "    ███                                     ",
-    "███████  █████████████   ███  ███  ███  ███",
-    "██   ██  ███  ███  ███   ███  ███   ██████ ",
-    "██   ██  ███  ███  ███   ███  ███    ████  ",
-    "██   ██  ███  ███  ███   ███  ███   ██████ ",
-    "███████  ███  ███  ███   ████████  ███  ███",
+    "     ███                                     ",
+    "     ███                                     ",
+    " ███████  █████████████   ███  ███  ███  ███ ",
+    "███  ███  ███  ███  ████  ███  ███  ███  ███ ",
+    "███  ███  ███  ███  ████  ███  ███    █████  ",
+    "███  ███  ███  ███  ████  ███  ███  ███  ███ ",
+    "████████  ███  ███  ████  ████████  ███  ███ ",
 ];
 
-/// Brand orange gradient, light at the top → #ea6400 at the base.
+/// Brand orange gradient, light at the cap → #ea6400 at the baseline.
 const BRAND_RAMP: &[(u8, u8, u8)] = &[
-    (255, 158, 80),
-    (252, 143, 60),
-    (248, 128, 40),
-    (244, 114, 20),
-    (240, 104, 8),
-    (236, 100, 2),
+    (255, 166, 92),
+    (253, 152, 72),
+    (250, 138, 52),
+    (246, 124, 32),
+    (242, 112, 14),
+    (238, 105, 4),
     (234, 100, 0),
 ];
 
-/// Draw the wordmark at (x, y). Each bitmap row becomes two screen rows; the
-/// second row of upper pairs is a half-block, cutting horizontal slits that
-/// tighten toward the baseline — the brand's scanline slats.
+pub(crate) fn wordmark_size(doubled: bool) -> (u16, u16) {
+    let w = WORDMARK_BITMAP.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let h = WORDMARK_BITMAP.len() as u16;
+    if doubled {
+        (w * 2, h * 2)
+    } else {
+        (w, h)
+    }
+}
+
+/// Draw the wordmark at (x, y), 2×2 pixel-scaled when `doubled`, colored by
+/// the brand ramp per letterform row.
 fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool) {
-    let subs: u16 = if doubled { 2 } else { 1 };
+    let scale: u16 = if doubled { 2 } else { 1 };
     for (bi, line) in WORDMARK_BITMAP.iter().enumerate() {
         let (r, g, b) = BRAND_RAMP[bi.min(BRAND_RAMP.len() - 1)];
         let color = Color::Rgb(r, g, b);
-        for sub in 0..subs {
-            let row = y + bi as u16 * subs + sub;
-            // Slit rows: the second half of each pair in the upper 2/3 of the
-            // mark renders as upper-half blocks, leaving a horizontal gap.
-            let slit = doubled && sub == 1 && bi < WORDMARK_BITMAP.len() * 2 / 3;
+        for sub in 0..scale {
+            let row = y + bi as u16 * scale + sub;
             let mut cx = x;
             for ch in line.chars() {
-                if ch != ' ' {
-                    let glyph = if slit { '▀' } else { '█' };
-                    buf.set(
-                        cx,
-                        row,
-                        Cell { ch: glyph, fg: color, bg: Color::Default, ..Cell::default() },
-                    );
-                } else if clip.contains(cx, row) {
-                    buf.set(cx, row, Cell::default());
+                for _ in 0..scale {
+                    if ch != ' ' {
+                        buf.set(
+                            cx,
+                            row,
+                            Cell { ch: '█', fg: color, bg: Color::Default, ..Cell::default() },
+                        );
+                    } else if clip.contains(cx, row) {
+                        buf.set(cx, row, Cell::default());
+                    }
+                    cx += 1;
                 }
-                cx += 1;
             }
         }
     }
@@ -255,17 +264,19 @@ pub fn draw(
     }
 
     // Vertical layout: wordmark + tagline, card grid, agent strip, footer.
-    let cards_rows = scene.cards.len().div_ceil(2) as u16 * 4;
+    let cards_rows = scene.cards.len().div_ceil(2) as u16 * 5;
     let wm_bitmap_rows = WORDMARK_BITMAP.len() as u16;
-    // Double-height brand mark when there's room; single height on short hosts.
-    let doubled = content.h >= wm_bitmap_rows * 2 + 3 + cards_rows + 6;
+    // 2×2 brand mark when there's room; single scale on short/narrow hosts.
+    let (wm_w2, _) = wordmark_size(true);
+    let doubled =
+        content.h >= wm_bitmap_rows * 2 + 3 + cards_rows + 6 && content.w >= wm_w2 + 8;
     let wm_rows = if doubled { wm_bitmap_rows * 2 } else { wm_bitmap_rows };
     let total_h = wm_rows + 3 + cards_rows + 4;
     let top = content.y + (content.h.saturating_sub(total_h)) / 2;
 
     // Wordmark centered, with a clearance zone so the rain never crowds the
     // wordmark or tagline.
-    let wm_w = WORDMARK_BITMAP.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let (wm_w, _) = wordmark_size(doubled);
     let wm_x = content.x + (content.w.saturating_sub(wm_w)) / 2;
     let clearance = Rect::new(
         wm_x.saturating_sub(4),
@@ -281,15 +292,15 @@ pub fn draw(
     let tag_x = content.x + (content.w.saturating_sub(tagline.chars().count() as u16)) / 2;
     buf.draw_text(tag_x, top + wm_rows + 1, tagline, theme.text_dim, Color::Default, AttrFlags::ITALIC, content);
 
-    // Card grid, two columns.
+    // Card grid, two columns of bordered cards.
     let grid_top = top + wm_rows + 3;
-    let grid_w = content.w.min(96).saturating_sub(4);
+    let grid_w = content.w.min(100).saturating_sub(4);
     let grid_x = content.x + (content.w.saturating_sub(grid_w)) / 2;
     let card_w = grid_w / 2 - 1;
     for (i, card) in scene.cards.iter().enumerate() {
         let col = (i % 2) as u16;
         let row = (i / 2) as u16;
-        let rect = Rect::new(grid_x + col * (card_w + 2), grid_top + row * 4, card_w, 3);
+        let rect = Rect::new(grid_x + col * (card_w + 2), grid_top + row * 5, card_w, 4);
         draw_card(buf, rect, theme, card, i == scene.selected, content);
         clicks.add(rect, ClickTarget::WelcomeCard(i));
     }
@@ -330,6 +341,7 @@ pub fn draw(
     buf.draw_text(rx, footer_y, right, theme.text_faint, Color::Default, AttrFlags::empty(), content);
 }
 
+/// A Codex-style card: rounded border, icon block, bold title, dim subtitle.
 fn draw_card(
     buf: &mut CellBuffer,
     rect: Rect,
@@ -339,23 +351,43 @@ fn draw_card(
     clip: Rect,
 ) {
     let rect = rect.intersect(&clip);
-    if rect.is_empty() {
+    if rect.w < 10 || rect.h < 4 {
         return;
     }
     let bg = if selected { theme.bg_selected } else { theme.bg_raised };
+    let border = if selected { theme.accent } else { theme.border };
     buf.fill(rect, &Cell { bg, ..Cell::default() });
-    // Accent bar on the left edge, brighter when selected.
-    let bar_color = if selected { theme.accent } else { theme.border };
-    for dy in 0..rect.h {
-        buf.set(rect.x, rect.y + dy, Cell { ch: '▎', fg: bar_color, bg, ..Cell::default() });
+
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right() - 1, rect.bottom() - 1);
+    let horiz = Cell { ch: '─', fg: border, bg, ..Cell::default() };
+    for col in x0 + 1..x1 {
+        buf.set(col, y0, horiz.clone());
+        buf.set(col, y1, horiz.clone());
     }
+    let vert = Cell { ch: '│', fg: border, bg, ..Cell::default() };
+    for row in y0 + 1..y1 {
+        buf.set(x0, row, vert.clone());
+        buf.set(x1, row, vert.clone());
+    }
+    buf.set(x0, y0, Cell { ch: '╭', fg: border, bg, ..Cell::default() });
+    buf.set(x1, y0, Cell { ch: '╮', fg: border, bg, ..Cell::default() });
+    buf.set(x0, y1, Cell { ch: '╰', fg: border, bg, ..Cell::default() });
+    buf.set(x1, y1, Cell { ch: '╯', fg: border, bg, ..Cell::default() });
+
     let icon_fg = if selected { theme.accent } else { theme.text_dim };
-    buf.draw_text(rect.x + 2, rect.y, card.icon, icon_fg, bg, AttrFlags::BOLD, rect);
+    buf.draw_text(rect.x + 2, rect.y + 1, card.icon, icon_fg, bg, AttrFlags::BOLD, rect);
     let title_fg = if selected { theme.text } else { theme.text_dim };
-    buf.draw_text(rect.x + 4, rect.y, &card.title, title_fg, bg, AttrFlags::BOLD, rect);
+    buf.draw_text(rect.x + 5, rect.y + 1, &card.title, title_fg, bg, AttrFlags::BOLD, rect);
     if selected {
-        let hint = "⏎";
-        buf.draw_text(rect.right().saturating_sub(2), rect.y, hint, theme.accent, bg, AttrFlags::BOLD, rect);
+        buf.draw_text(rect.right().saturating_sub(3), rect.y + 1, "⏎", theme.accent, bg, AttrFlags::BOLD, rect);
     }
-    buf.draw_text(rect.x + 4, rect.y + 1, &card.subtitle, theme.text_faint, bg, AttrFlags::empty(), rect);
+    let max_sub = rect.w.saturating_sub(7) as usize;
+    let subtitle: String = if card.subtitle.chars().count() > max_sub {
+        let mut s: String = card.subtitle.chars().take(max_sub.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        card.subtitle.clone()
+    };
+    buf.draw_text(rect.x + 5, rect.y + 2, &subtitle, theme.text_faint, bg, AttrFlags::empty(), rect);
 }

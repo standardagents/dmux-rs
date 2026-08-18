@@ -105,11 +105,11 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
 
     // Action rows: always-visible click targets so nothing needs a manual.
     let actions_row = area.bottom().saturating_sub(4);
-    let x = buf.draw_text(area.x + 1, actions_row, "＋ agent", t.accent, t.bg, AttrFlags::BOLD, area);
+    let x = buf.draw_text(area.x + 1, actions_row, "+ agent", t.accent, t.bg, AttrFlags::BOLD, area);
     clicks.add(Rect::new(area.x + 1, actions_row, x - area.x - 1, 1), ClickTarget::SidebarNewAgent);
-    let x2 = buf.draw_text(x + 2, actions_row, "＋ terminal", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let x2 = buf.draw_text(x + 2, actions_row, "+ terminal", t.text_dim, t.bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(x + 2, actions_row, x2 - x - 2, 1), ClickTarget::SidebarNewTerminal);
-    let x3 = buf.draw_text(x2 + 2, actions_row, "＋ proj", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let x3 = buf.draw_text(x2 + 2, actions_row, "+ proj", t.text_dim, t.bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(x2 + 2, actions_row, x3 - x2 - 2, 1), ClickTarget::SidebarNewProject);
 
     let tools_row = area.bottom().saturating_sub(3);

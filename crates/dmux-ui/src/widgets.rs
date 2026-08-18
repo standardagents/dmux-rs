@@ -105,12 +105,12 @@ pub fn draw_counter(
 ) -> (Rect, Rect) {
     let bg = if selected { theme.bg_selected } else { theme.bg_raised };
     let minus_fg = if value > 0 { theme.text } else { theme.text_faint };
-    let mut cx = buf.draw_text(x, y, "－", minus_fg, bg, AttrFlags::empty(), clip);
+    let mut cx = buf.draw_text(x, y, "[-]", minus_fg, bg, AttrFlags::empty(), clip);
     let minus = Rect::new(x, y, cx - x, 1);
     let val_fg = if value > 0 { theme.accent } else { theme.text_dim };
     cx = buf.draw_text(cx, y, &format!(" {value} "), val_fg, bg, AttrFlags::BOLD, clip);
     let plus_x = cx;
-    cx = buf.draw_text(cx, y, "＋", theme.text, bg, AttrFlags::empty(), clip);
+    cx = buf.draw_text(cx, y, "[+]", theme.text, bg, AttrFlags::empty(), clip);
     (minus, Rect::new(plus_x, y, cx - plus_x, 1))
 }
 
