@@ -66,7 +66,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     // Pane rows.
     let mut row = 2u16;
     for (i, pane) in scene.panes.iter().enumerate() {
-        if row >= area.bottom().saturating_sub(4) {
+        if row >= area.bottom().saturating_sub(5) {
             break;
         }
         let selected = i == scene.selected;
@@ -103,12 +103,20 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         row += 1;
     }
 
-    // Action row: always-visible click targets for the two most common verbs.
-    let actions_row = area.bottom().saturating_sub(3);
+    // Action rows: always-visible click targets so nothing needs a manual.
+    let actions_row = area.bottom().saturating_sub(4);
     let x = buf.draw_text(area.x + 1, actions_row, "＋ agent", t.accent, t.bg, AttrFlags::BOLD, area);
     clicks.add(Rect::new(area.x + 1, actions_row, x - area.x - 1, 1), ClickTarget::SidebarNewAgent);
     let x2 = buf.draw_text(x + 2, actions_row, "＋ terminal", t.text_dim, t.bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(x + 2, actions_row, x2 - x - 2, 1), ClickTarget::SidebarNewTerminal);
+    let x3 = buf.draw_text(x2 + 2, actions_row, "＋ proj", t.text_dim, t.bg, AttrFlags::empty(), area);
+    clicks.add(Rect::new(x2 + 2, actions_row, x3 - x2 - 2, 1), ClickTarget::SidebarNewProject);
+
+    let tools_row = area.bottom().saturating_sub(3);
+    let sx = buf.draw_text(area.x + 1, tools_row, "⚙ settings", t.text_dim, t.bg, AttrFlags::empty(), area);
+    clicks.add(Rect::new(area.x + 1, tools_row, sx - area.x - 1, 1), ClickTarget::SidebarSettings);
+    let hx = buf.draw_text(sx + 2, tools_row, "? shortcuts", t.text_dim, t.bg, AttrFlags::empty(), area);
+    clicks.add(Rect::new(sx + 2, tools_row, hx - sx - 2, 1), ClickTarget::SidebarHelp);
 
     // Footer: leader hint or status.
     let footer_row = area.bottom().saturating_sub(1);

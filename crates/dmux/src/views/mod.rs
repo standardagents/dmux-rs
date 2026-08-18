@@ -38,6 +38,9 @@ pub enum AppCmd {
     NewTerminal,
     /// Terminal in a specific directory (welcome-screen worktree cards).
     NewTerminalAt { path: String, name: String },
+    /// Ask for a project path, then open it.
+    PromptAddProject,
+    OpenProjectAt(String),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },
     SetSetting { key: String, value: serde_json::Value, scope: dmux_core::SettingsScope },
 }
@@ -60,6 +63,9 @@ pub enum ClickTarget {
     SidebarRow(usize),
     SidebarNewAgent,
     SidebarNewTerminal,
+    SidebarNewProject,
+    SidebarSettings,
+    SidebarHelp,
     PaneBody(usize),
     PaneTitle(usize),
     TitleRename(usize),

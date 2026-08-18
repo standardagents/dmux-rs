@@ -7,6 +7,130 @@ use dmux_ui::{ClickMap, Theme};
 
 use crate::views::{AppCmd, ClickTarget};
 
+/// Digital-rain background: sparse columns of falling glyphs, drawn beneath
+/// the welcome content. Deliberately subtle — dim greys with an accent head,
+/// low density, gentle speeds.
+pub struct MatrixRain {
+    drops: Vec<Drop>,
+    cols: u16,
+    rows: u16,
+    rng: u32,
+}
+
+struct Drop {
+    col: u16,
+    /// Head row in 1/16ths (fixed point) so speeds below one row/tick work.
+    head_fp: i32,
+    speed_fp: i32,
+    len: u16,
+    seed: u32,
+}
+
+/// Half-width katakana + digits + sparse punctuation, all display width 1.
+const RAIN_GLYPHS: &[char] = &[
+    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ',
+    'ﾃ', 'ﾄ', 'ﾅ', 'ﾆ', 'ﾇ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ', 'ﾏ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ', 'ﾔ',
+    '0', '1', '2', '3', '4', '5', '7', '8', '9', '+', '*', '=', '<', '>', ':', '·', '¦', 'ﾘ', 'ﾚ',
+];
+
+fn xorshift(state: &mut u32) -> u32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x.max(1);
+    x
+}
+
+impl MatrixRain {
+    pub fn new(cols: u16, rows: u16) -> Self {
+        let mut rain = Self {
+            drops: Vec::new(),
+            cols: cols.max(1),
+            rows: rows.max(1),
+            rng: 0x9e37_79b9 ^ (cols as u32) << 8 ^ rows as u32,
+        };
+        // Density: roughly one drop per 5 columns keeps it airy.
+        let count = (cols / 5).max(4) as usize;
+        for _ in 0..count {
+            let drop = rain.spawn(true);
+            rain.drops.push(drop);
+        }
+        rain
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        if (self.cols, self.rows) != (cols.max(1), rows.max(1)) {
+            *self = Self::new(cols, rows);
+        }
+    }
+
+    fn spawn(&mut self, scatter: bool) -> Drop {
+        let col = (xorshift(&mut self.rng) % self.cols as u32) as u16;
+        // 0.25 .. 1.0 rows per tick, in 16ths.
+        let speed_fp = 4 + (xorshift(&mut self.rng) % 13) as i32;
+        let len = 4 + (xorshift(&mut self.rng) % 11) as u16;
+        // Start above the top so drops enter gradually; on first fill,
+        // scatter through the whole area so it doesn't start empty.
+        let head_fp = if scatter {
+            (xorshift(&mut self.rng) % (self.rows as u32 * 16)) as i32
+        } else {
+            -((xorshift(&mut self.rng) % (self.rows as u32 * 8)) as i32)
+        };
+        Drop { col, head_fp, speed_fp, len, seed: xorshift(&mut self.rng) }
+    }
+
+    pub fn step(&mut self) {
+        let rows = self.rows;
+        for i in 0..self.drops.len() {
+            self.drops[i].head_fp += self.drops[i].speed_fp;
+            let tail_row = self.drops[i].head_fp / 16 - self.drops[i].len as i32;
+            if tail_row > rows as i32 {
+                self.drops[i] = self.spawn(false);
+            }
+        }
+    }
+
+    /// Paint into `area`. Draw FIRST; content paints over it.
+    pub fn draw(&self, buf: &mut CellBuffer, area: Rect, theme: &Theme, tick: u64) {
+        for drop in &self.drops {
+            let head_row = drop.head_fp / 16;
+            for i in 0..drop.len {
+                let row = head_row - i as i32;
+                if row < 0 || row >= area.h as i32 {
+                    continue;
+                }
+                let col = area.x + drop.col;
+                if col >= area.right() {
+                    continue;
+                }
+                // Glyph flickers occasionally, keyed by cell + slow tick.
+                let mut h = drop
+                    .seed
+                    .wrapping_add(row as u32)
+                    .wrapping_mul(0x8000_71fd)
+                    .wrapping_add((tick as u32 / 6).wrapping_mul(if i == 0 { 3 } else { 1 }));
+                let glyph = RAIN_GLYPHS[(xorshift(&mut h) % RAIN_GLYPHS.len() as u32) as usize];
+                // Head glows accent; the trail fades through dim greys.
+                let fg = if i == 0 {
+                    theme.accent_soft
+                } else if i <= 2 {
+                    Color::Indexed(242)
+                } else if i * 3 >= drop.len * 2 {
+                    Color::Indexed(235)
+                } else {
+                    Color::Indexed(238)
+                };
+                buf.set(
+                    col,
+                    area.y + row as u16,
+                    Cell { ch: glyph, fg, bg: Color::Default, ..Cell::default() },
+                );
+            }
+        }
+    }
+}
+
 pub struct WelcomeCard {
     pub icon: &'static str,
     pub title: String,
@@ -90,9 +214,18 @@ pub fn draw(
     let total_h = WORDMARK.len() as u16 + 3 + cards_rows + 4;
     let top = content.y + (content.h.saturating_sub(total_h)) / 2;
 
-    // Wordmark centered.
+    // Wordmark centered, with a clearance zone so the rain never crowds the
+    // wordmark or tagline.
     let wm_w = WORDMARK.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
     let wm_x = content.x + (content.w.saturating_sub(wm_w)) / 2;
+    let clearance = Rect::new(
+        wm_x.saturating_sub(4),
+        top.saturating_sub(1),
+        wm_w + 8,
+        WORDMARK.len() as u16 + 4,
+    )
+    .intersect(&content);
+    buf.fill(clearance, &Cell::default());
     for (i, line) in WORDMARK.iter().enumerate() {
         let color = gradient[i.min(gradient.len() - 1)];
         buf.draw_text(wm_x, top + i as u16, line, color, Color::Default, AttrFlags::BOLD, content);

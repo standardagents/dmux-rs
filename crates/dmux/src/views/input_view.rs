@@ -9,6 +9,7 @@ use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 pub enum InputPurpose {
     RenamePane(usize),
     SetTextSetting { key: String, scope: dmux_core::SettingsScope },
+    AddProjectPath,
 }
 
 pub struct InputView {
@@ -40,6 +41,12 @@ impl InputView {
                 value: serde_json::Value::String(value),
                 scope: *scope,
             },
+            InputPurpose::AddProjectPath => {
+                if value.is_empty() {
+                    return ViewResult::Close;
+                }
+                AppCmd::OpenProjectAt(value)
+            }
         };
         ViewResult::CloseAnd(cmd)
     }

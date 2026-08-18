@@ -256,6 +256,7 @@ struct App {
     /// Welcome-screen state (shown when no panes are visible).
     welcome_cards: Vec<welcome::WelcomeCard>,
     welcome_sel: usize,
+    welcome_rain: welcome::MatrixRain,
     keepalive_present: bool,
     /// Panes we killed on purpose: never re-adopt while tmux still lists them.
     closing: std::collections::HashSet<PaneId>,
@@ -357,6 +358,7 @@ async fn run(
         sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
         welcome_sel: 0,
+        welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
         keepalive_present: false,
         closing: std::collections::HashSet::new(),
     };
@@ -525,9 +527,11 @@ impl App {
     }
 
     fn animating(&self) -> bool {
-        self.panes
-            .iter()
-            .any(|p| p.status == PaneStatus::Working && !p.hidden)
+        self.welcome_active()
+            || self
+                .panes
+                .iter()
+                .any(|p| p.status == PaneStatus::Working && !p.hidden)
             || self.views.iter().any(|v| v.animating())
     }
 
@@ -965,6 +969,9 @@ impl App {
                 }
                 Some(ClickTarget::SidebarNewAgent) => return self.execute_cmd(AppCmd::OpenNewAgent),
                 Some(ClickTarget::SidebarNewTerminal) => return self.execute_cmd(AppCmd::NewTerminal),
+                Some(ClickTarget::SidebarNewProject) => return self.execute_cmd(AppCmd::PromptAddProject),
+                Some(ClickTarget::SidebarSettings) => return self.execute_cmd(AppCmd::OpenSettings),
+                Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
                 Some(ClickTarget::PaneTitle(i)) => return self.execute_cmd(AppCmd::FocusPane(i)),
                 Some(ClickTarget::TitleRename(i)) => return self.execute_cmd(AppCmd::PromptRename(i)),
                 Some(ClickTarget::TitleHide(i)) => return self.execute_cmd(AppCmd::ToggleHidden(i)),
@@ -1097,6 +1104,7 @@ impl App {
                 }
                 items.push(MenuItem::new("New agents…", "^b n", AppCmd::OpenNewAgent));
                 items.push(MenuItem::new("New terminal", "^b t", AppCmd::NewTerminal));
+                items.push(MenuItem::new("Add project…", "", AppCmd::PromptAddProject));
                 items.push(MenuItem::new("Settings…", "^b s", AppCmd::OpenSettings));
                 items.push(MenuItem::new("Shortcuts…", "^b ?", AppCmd::OpenShortcuts));
                 items.push(MenuItem::new("Detach", "^b d", AppCmd::Quit));
@@ -1159,6 +1167,38 @@ impl App {
             AppCmd::ToggleHidden(idx) => self.toggle_hidden(idx),
             AppCmd::ClosePane(idx) => self.close_pane(idx),
             AppCmd::NewTerminal => self.new_terminal(),
+            AppCmd::PromptAddProject => {
+                self.views.push(Box::new(InputView::new(
+                    "Add project",
+                    "",
+                    "path to a project directory (~ ok)",
+                    InputPurpose::AddProjectPath,
+                )));
+                self.dirty = true;
+            }
+            AppCmd::OpenProjectAt(raw) => {
+                let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+                    dirs_home().join(rest)
+                } else if raw == "~" {
+                    dirs_home()
+                } else {
+                    PathBuf::from(&raw)
+                };
+                if !expanded.is_dir() {
+                    self.toast(format!("Not a directory: {}", expanded.display()));
+                } else {
+                    let name = expanded
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| raw.clone());
+                    // Full multi-project grouping is a later phase; for now a
+                    // project opens as a titled terminal rooted at its path.
+                    return self.execute_cmd(AppCmd::NewTerminalAt {
+                        path: expanded.to_string_lossy().into_owned(),
+                        name,
+                    });
+                }
+            }
             AppCmd::NewTerminalAt { path, name } => {
                 let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
                 self.create_window(NewWindowCtx {
@@ -1537,6 +1577,9 @@ impl App {
         }
         if self.animating() {
             self.anim = self.anim.wrapping_add(1);
+            if self.welcome_active() {
+                self.welcome_rain.step();
+            }
             self.dirty = true;
         }
         if self.hud {
@@ -1578,6 +1621,8 @@ impl App {
 
         if self.welcome_active() {
             let content = render::content_area(&self.back, &self.layout);
+            self.welcome_rain.resize(content.w, content.h);
+            self.welcome_rain.draw(&mut self.back, content, &self.theme, self.anim);
             let wscene = welcome::WelcomeScene {
                 cards: &self.welcome_cards,
                 selected: self.welcome_sel,
