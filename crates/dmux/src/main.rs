@@ -91,6 +91,8 @@ enum AppMsg {
     MergeDone { slug: String, branch: String, result: Result<String, String> },
     /// Async filesystem work finished; recompute anything derived from disk.
     RefreshDerived,
+    /// LLM pane classification finished.
+    AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -291,6 +293,8 @@ struct App {
     last_press: Option<(Instant, u16, u16)>,
     log_path: PathBuf,
     app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
+    inference_primary: Option<dmux_infer::Target>,
+    inference_backup: Option<dmux_infer::Target>,
 }
 
 async fn run(
@@ -408,7 +412,20 @@ async fn run(
         last_press: None,
         log_path: cli.log_file.clone().unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
         app_tx,
+        inference_primary: None,
+        inference_backup: None,
     };
+    {
+        let s = app.settings.lock().unwrap();
+        app.inference_primary = s.get("inferencePrimary").and_then(dmux_infer::Target::from_value);
+        app.inference_backup = s.get("inferenceBackup").and_then(dmux_infer::Target::from_value);
+    }
+    if app.inference_primary.is_some() {
+        tracing::info!(
+            provider = %app.inference_primary.as_ref().unwrap().provider_id,
+            "inference configured; LLM status escalation active"
+        );
+    }
     app.refresh_welcome_cards();
 
     loop {
@@ -808,6 +825,47 @@ impl App {
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
                 self.dirty = true;
+            }
+            AppMsg::AnalysisDone { pane, verdict } => {
+                let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
+                let mut attention: Option<String> = None;
+                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
+                    p.analysis_inflight = false;
+                    let is_focused = focused_pane == Some(pane);
+                    match verdict {
+                        Ok(dmux_infer::PaneVerdict::OptionDialog) => {
+                            p.status = PaneStatus::Waiting;
+                            if !is_focused && !p.needs_attention {
+                                p.needs_attention = true;
+                                attention = Some(format!("△ {} needs input", p.display_title()));
+                            }
+                        }
+                        Ok(dmux_infer::PaneVerdict::OpenPrompt) => {
+                            p.status = PaneStatus::Idle;
+                            if !is_focused && !p.needs_attention {
+                                p.needs_attention = true;
+                                attention = Some(format!("✓ {} finished", p.display_title()));
+                            }
+                        }
+                        Ok(dmux_infer::PaneVerdict::InProgress) => {
+                            if p.status != PaneStatus::Dead {
+                                p.status = PaneStatus::Working;
+                                p.last_output = Some(Instant::now());
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, pane = %pane, "pane analysis failed; keeping heuristic verdict");
+                            if !is_focused && !p.needs_attention {
+                                p.needs_attention = true;
+                                attention = Some(format!("• {} settled", p.display_title()));
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                }
+                if let Some(msg) = attention {
+                    self.toast(msg);
+                }
             }
         }
     }
@@ -1935,21 +1993,46 @@ impl App {
                     // Still working without output (thinking); recheck later.
                     p.last_output = Some(now);
                 }
-                dmux_status::Activity::Waiting => {
-                    p.status = PaneStatus::Waiting;
-                    if !is_focused && !p.needs_attention {
-                        p.needs_attention = true;
-                        attention = Some(format!("△ {} needs input", p.display_title()));
-                    }
+                verdict @ (dmux_status::Activity::Waiting | dmux_status::Activity::Idle) => {
+                    // Heuristic verdict paints the glyph immediately. When
+                    // inference is configured, attention waits for the LLM
+                    // (the TS contract: attention only after analysis).
+                    p.status = if verdict == dmux_status::Activity::Waiting {
+                        PaneStatus::Waiting
+                    } else {
+                        PaneStatus::Idle
+                    };
                     self.dirty = true;
-                }
-                dmux_status::Activity::Idle => {
-                    p.status = PaneStatus::Idle;
-                    if !is_focused && p.agent.is_some() && !p.needs_attention {
+                    if let (Some(primary), false) = (&self.inference_primary, p.analysis_inflight) {
+                        p.analysis_inflight = true;
+                        let pane = p.tmux_pane;
+                        let primary = primary.clone();
+                        let backup = self.inference_backup.clone();
+                        let tail = tail.clone();
+                        let tx = self.app_tx.clone();
+                        tokio::spawn(async move {
+                            let result = dmux_infer::generate(
+                                &dirs_home(),
+                                Some(&primary),
+                                backup.as_ref(),
+                                dmux_infer::STATE_PROMPT,
+                                &format!("Analyze this terminal output and return a JSON object with the state:\n\n{tail}"),
+                                40,
+                            )
+                            .await
+                            .map(|text| dmux_infer::parse_state(&text))
+                            .map_err(|e| e.to_string());
+                            let _ = tx.send(AppMsg::AnalysisDone { pane, verdict: result });
+                        });
+                    } else if !is_focused && !p.needs_attention {
+                        // Heuristic-only path (no inference configured).
                         p.needs_attention = true;
-                        attention = Some(format!("✓ {} finished", p.display_title()));
+                        attention = Some(if p.status == PaneStatus::Waiting {
+                            format!("△ {} needs input", p.display_title())
+                        } else {
+                            format!("✓ {} finished", p.display_title())
+                        });
                     }
-                    self.dirty = true;
                 }
             }
         }

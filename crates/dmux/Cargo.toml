@@ -16,6 +16,7 @@ dmux-host = { workspace = true }
 dmux-core = { workspace = true }
 dmux-ui = { workspace = true }
 dmux-status = { workspace = true }
+dmux-infer = { workspace = true }
 
 tokio = { workspace = true }
 clap = { workspace = true }

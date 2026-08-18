@@ -20,8 +20,8 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Title-bar click affordances (buttons; not possible under tmux) | ✅ (new) |
 | Animated working indicators (spinners; replaces 90ms tmux title rewrites) | ✅ |
 | Config write-back of pane records (TS-compatible, unknown fields preserved) | ✅ |
-| Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate; LLM escalation still ⏳) |
-| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ |
+| Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate + LLM escalation ✅) |
+| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ (dmux-infer ✅: openai-compatible/responses/anthropic + failover + PaneAnalyzer stage-1, settings/credentials compatible; helper client + native notifications still ⏳) |
 | Merge flows / PR creation / AI merge / conflict pane | ⏳ (core merge flow ✅: dirty-check → commit → merge → cleanup, conflict-abort; PR/AI-merge/conflict-pane still ⏳) |
 | Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ (welcome-card agent resume via resumeCommandTemplate ✅; exact-session fd tracking still ⏳) |
 | Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select ✅ / search ⏳) |
