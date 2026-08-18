@@ -37,7 +37,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 - Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ✅ (same agent + prompt, fresh worktree), merge ✅, PR ✅, copyPath ✅, openInEditor ✅, toggleAutopilot ✅ (per-pane, TS `autopilot` config field, LLM option-dialog auto-accept), test/dev runners ✅ (`run_test`/`run_dev` hooks in a terminal pane via pane menu)
 - Hooks: all eleven lifecycle hooks ✅ — `worktree_created` (in-pane bootstrap), `pre_merge` (veto on nonzero exit), `post_merge`, `before_pane_create`/`pane_created`, `before_pane_close`/`pane_closed`, `before_worktree_remove`/`worktree_removed` (detached, DMUX_* env), `run_test`/`run_dev` (menu runners)
 - Notification sounds: catalog port (ids ↔ `.caf` resources) ✅, helper `soundName` payload ✅, rotation among enabled set ✅
-- Terminal auto-naming ✅ (live from pane title reports — ESC k / OSC 2; LLM naming ⏳) · footer tips ✅ (rotating idle-footer tips, `showFooterTips`) · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
+- Terminal auto-naming ✅ (live from pane title reports — ESC k / OSC 2; LLM naming ✅ — settled output names terminals, LLM names beat shell titles, human renames beat both, 120s re-check cadence) · footer tips ✅ (rotating idle-footer tips, `showFooterTips`) · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys
 - Welcome/spacer panes ✂ — native empty-state view instead
 

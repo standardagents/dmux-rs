@@ -73,6 +73,10 @@ pub struct LogicalPane {
     /// Title follows the pane's own title reports (shell panes without a
     /// human-chosen name; cleared by rename).
     pub auto_name: bool,
+    /// The current title came from LLM naming; shell title reports no longer
+    /// overwrite it, and re-naming happens on a relaxed cadence.
+    pub llm_named: bool,
+    pub llm_named_at: Option<std::time::Instant>,
     /// Heuristic settle classifier (dmux-status).
     pub engine: dmux_status::PaneStatusEngine,
     /// An LLM classification is in flight for this pane.
@@ -261,6 +265,8 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             auto_name: config_pane
                 .map(|p| p.kind() == PaneKind::Shell && p.display_name.is_none())
                 .unwrap_or(true),
+            llm_named: false,
+            llm_named_at: None,
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
             autopilot: config_pane.and_then(|p| p.autopilot).unwrap_or(false),

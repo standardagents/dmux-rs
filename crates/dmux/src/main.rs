@@ -110,6 +110,8 @@ enum AppMsg {
     RefreshDerived,
     /// LLM pane classification finished.
     AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
+    /// LLM terminal naming produced a candidate name.
+    NamingDone { pane: PaneId, name: String },
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
     /// Conflicted merge state re-established; launch the resolution pane.
@@ -1077,6 +1079,27 @@ impl App {
                 }
                 if let Some(msg) = attention {
                     self.attention_toast(msg);
+                }
+            }
+            AppMsg::NamingDone { pane, name } => {
+                let mut apply = false;
+                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
+                    p.analysis_inflight = false;
+                    if !name.is_empty() && p.auto_name {
+                        p.llm_named = true;
+                        p.llm_named_at = Some(Instant::now());
+                        if p.title != name {
+                            p.title = name.clone();
+                            let encoded = encode_pane_title(&name, &p.slug);
+                            let _ = self
+                                .client
+                                .send(format!("select-pane -t {} -T {}", p.tmux_pane, dmux_cc::quote_arg(&encoded)));
+                            apply = true;
+                        }
+                    }
+                }
+                if apply {
+                    self.dirty = true;
                 }
             }
         }
@@ -2451,6 +2474,52 @@ impl App {
             if p.agent.is_none() {
                 p.status = PaneStatus::Idle;
                 self.dirty = true;
+                // LLM terminal naming (TerminalPaneNamingService port):
+                // settled terminal output names the pane. Untitled panes name
+                // eagerly; already-LLM-named panes re-check on a relaxed
+                // cadence; human renames are protected (auto_name = false).
+                let due = p.auto_name
+                    && match p.llm_named_at {
+                        None => true,
+                        Some(at) => now.duration_since(at) >= Duration::from_secs(120),
+                    };
+                if due && !p.analysis_inflight {
+                    if let Some(primary) = &self.inference_primary {
+                        let tail = p.term.read_tail_text(25);
+                        if tail.trim().len() >= 20 {
+                            p.analysis_inflight = true;
+                            let pane = p.tmux_pane;
+                            let primary = primary.clone();
+                            let backup = self.inference_backup.clone();
+                            let tx = self.app_tx.clone();
+                            tokio::spawn(async move {
+                                let result = dmux_infer::generate(
+                                    &dirs_home(),
+                                    Some(&primary),
+                                    backup.as_ref(),
+                                    "You name terminal panes. Given terminal output, reply with ONLY a lowercase 2-4 word name describing what is happening (e.g. 'vite dev server', 'db migration'). No quotes, no punctuation.",
+                                    &tail,
+                                    16,
+                                )
+                                .await;
+                                if let Ok(name) = result {
+                                    let name: String = name
+                                        .trim()
+                                        .trim_matches(['"', '\'', '.'])
+                                        .chars()
+                                        .take(32)
+                                        .collect();
+                                    if !name.is_empty() && !name.contains('\n') {
+                                        let _ = tx.send(AppMsg::NamingDone { pane, name });
+                                        return;
+                                    }
+                                }
+                                // Clear the in-flight flag even on failure.
+                                let _ = tx.send(AppMsg::NamingDone { pane, name: String::new() });
+                            });
+                        }
+                    }
+                }
                 continue;
             }
             let tail = p.term.read_tail_text(30);
@@ -2757,7 +2826,9 @@ fn handle_side_effect(
             // Auto-naming: shell panes without a human-chosen name follow the
             // pane's own title reports (zsh's ESC k command/cwd names, OSC 2).
             let title = title.trim();
-            if !title.is_empty() && (pane.title.is_empty() || pane.auto_name) {
+            // An LLM-chosen name beats raw shell titles (which are usually
+            // just the cwd); human renames beat both (auto_name = false).
+            if !title.is_empty() && (pane.title.is_empty() || pane.auto_name) && !pane.llm_named {
                 let clipped: String = title.chars().take(24).collect();
                 if pane.title != clipped {
                     pane.title = clipped;
