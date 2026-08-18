@@ -21,19 +21,19 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Animated working indicators (spinners; replaces 90ms tmux title rewrites) | ✅ |
 | Config write-back of pane records (TS-compatible, unknown fields preserved) | ✅ |
 | Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate + LLM escalation ✅) |
-| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ (dmux-infer ✅: openai-compatible/responses/anthropic + failover + PaneAnalyzer stage-1, settings/credentials compatible; helper client + native notifications still ⏳) |
-| Merge flows / PR creation / AI merge / conflict pane | ⏳ (core merge flow ✅: dirty-check → commit → merge → cleanup, conflict-abort; PR ✅, conflict pane ✅ (agent-assisted); AI auto-merge still ⏳) |
+| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ (dmux-infer ✅: openai-compatible/responses/anthropic + failover + PaneAnalyzer stage-1, settings/credentials compatible; native notifications via helper ✅; ChatGPT + Cohere protocols ✅) |
+| Merge flows / PR creation / AI merge / conflict pane | ⏳ (core merge flow ✅: dirty-check → commit → merge → cleanup, conflict-abort; PR ✅, conflict pane ✅ (agent-assisted); AI auto-merge ✅) |
 | Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ (agent resume + exact-session tracking ✅: process-tree walk, lsof/proc fd inspection, agentSessionId capture, --resume <id>) |
-| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select ✅ / search ⏳) |
-| Kitty keyboard passthrough INTO panes (pane-requested flags) | ⏳ |
+| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select ✅ / search ✅ (^b /)) |
+| Kitty keyboard passthrough INTO panes (pane-requested flags) | ✅ (disambiguate CSI-u when the pane pushed flags) |
 | Images (kitty graphics translation) | ⏳ |
-| break-pane migration for legacy multi-pane windows | ⏳ |
+| break-pane migration for legacy multi-pane windows | ✅ (owner mode, idempotent) |
 | Multi-project sidebar, themes (8), i18n (en/ja) | multi-project grouping ✅ (headers, per-project pane records, project-scoped creation); themes accent ✅; i18n ✅ (en/ja catalog + locale switching; full string coverage growing) |
-| Distribution (npm platform packages), auto-update | npm wrapper + platform packages + release workflow ✅ (publish gated on tags/NPM_TOKEN); auto-update ⏳ |
+| Distribution (npm platform packages), auto-update | npm wrapper + platform packages + release workflow ✅ (publish gated on tags/NPM_TOKEN); auto-update ✅ (npm registry check + status notice) |
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 
-- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ⏳, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
+- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ✅, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
 - Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ⏳, PR ⏳, copyPath ✅, openInEditor ✅, toggleAutopilot ⏳, test/dev runners ⏳
 - Terminal auto-naming ✅ (live from pane title reports — ESC k / OSC 2; LLM naming ⏳) · footer tips ⏳ · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys

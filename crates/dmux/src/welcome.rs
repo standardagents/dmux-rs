@@ -6,6 +6,7 @@ use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
 use dmux_ui::{ClickMap, Theme};
 
 use crate::views::{AppCmd, ClickTarget};
+use dmux_core::i18n::t;
 
 /// Digital-rain background: sparse columns of falling glyphs, drawn beneath
 /// the welcome content. Deliberately subtle — dim greys with an accent head,
@@ -217,13 +218,13 @@ pub fn build_cards(
     let mut cards = vec![
         WelcomeCard {
             icon: "✦",
-            title: "New agents".into(),
+            title: t("welcome.new_agents").into(),
             subtitle: format!("run a prompt across {} installed agents", installed.len()),
             cmd: AppCmd::OpenNewAgent,
         },
         WelcomeCard {
             icon: "❯",
-            title: "New terminal".into(),
+            title: t("welcome.new_terminal").into(),
             subtitle: format!("shell in {project_name}"),
             cmd: AppCmd::NewTerminal,
         },
@@ -253,13 +254,13 @@ pub fn build_cards(
     }
     cards.push(WelcomeCard {
         icon: "⚙",
-        title: "Settings".into(),
+        title: t("welcome.settings").into(),
         subtitle: "agents · theme · layout · permissions".into(),
         cmd: AppCmd::OpenSettings,
     });
     cards.push(WelcomeCard {
         icon: "⌨",
-        title: "Shortcuts".into(),
+        title: t("welcome.shortcuts").into(),
         subtitle: "leader key ^b · mouse everywhere".into(),
         cmd: AppCmd::OpenShortcuts,
     });
@@ -310,7 +311,7 @@ pub fn draw(
     buf.fill(clearance, &Cell::default());
     draw_wordmark(buf, wm_x, top, content, doubled, theme);
 
-    let tagline = "The Agent Multiplexer";
+    let tagline = t("welcome.tagline");
     let tag_x = content.x + (content.w.saturating_sub(tagline.chars().count() as u16)) / 2;
     buf.draw_text(tag_x, top + wm_rows + 1, tagline, theme.text_dim, Color::Default, AttrFlags::ITALIC, content);
 

@@ -6,6 +6,8 @@
 //! over primary → backup. ChatGPT/Grok subscription and Cohere protocols are
 //! not yet ported.
 
+mod chatgpt;
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -131,6 +133,10 @@ async fn generate_one(
     user: &str,
     max_tokens: u32,
 ) -> Result<String, InferError> {
+    // ChatGPT subscription rides the codex app-server, not HTTP.
+    if target.provider_id == "chatgpt" {
+        return chatgpt::generate(&target.model_id, system, user).await;
+    }
     let resolved = resolve(home, target)?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))

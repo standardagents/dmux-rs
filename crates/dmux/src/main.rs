@@ -10,6 +10,7 @@ mod input;
 mod keys;
 mod layout;
 mod metrics;
+mod notify;
 mod render;
 mod session;
 mod tracking;
@@ -311,6 +312,7 @@ struct App {
     drag_moved: bool,
     /// Last press (time, col, row) for double-click detection.
     last_press: Option<(Instant, u16, u16)>,
+    last_search: Option<String>,
     log_path: PathBuf,
     app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
     inference_primary: Option<dmux_infer::Target>,
@@ -433,6 +435,7 @@ async fn run(
         mouse_down: false,
         drag_moved: false,
         last_press: None,
+        last_search: None,
         log_path: cli.log_file.clone().unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
         app_tx,
         inference_primary: None,
@@ -672,6 +675,22 @@ impl App {
         self.status_msg = msg.into();
         self.status_clear_at = Some(Instant::now() + STATUS_LINGER);
         self.dirty = true;
+    }
+
+    /// Attention that should also reach the OS: sidebar toast + native
+    /// notification via the macOS helper (when installed and enabled).
+    fn attention_toast(&mut self, msg: String) {
+        let native = {
+            let s = self.settings.lock().unwrap();
+            s.get_bool("enableNotifications", true)
+        };
+        if native && notify::available() {
+            let body = msg.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = notify::notify("dmux", &body);
+            });
+        }
+        self.toast(msg);
     }
 
     // ------------------------------------------------------------------
@@ -1034,7 +1053,7 @@ impl App {
                     self.dirty = true;
                 }
                 if let Some(msg) = attention {
-                    self.toast(msg);
+                    self.attention_toast(msg);
                 }
             }
         }
@@ -1507,6 +1526,16 @@ impl App {
             Routed::OpenNewAgent => return self.execute_cmd(AppCmd::OpenNewAgent),
             Routed::OpenShortcuts => return self.execute_cmd(AppCmd::OpenShortcuts),
             Routed::OpenLogs => return self.execute_cmd(AppCmd::OpenLogs),
+            Routed::SearchScrollback => {
+                let last = self.last_search.clone().unwrap_or_default();
+                self.views.push(Box::new(InputView::new(
+                    "Search scrollback",
+                    &last,
+                    "text to find (searches upward)",
+                    InputPurpose::SearchScrollback,
+                )));
+                self.dirty = true;
+            }
             Routed::NewTerminal => return self.execute_cmd(AppCmd::NewTerminal),
             Routed::AddProject => return self.execute_cmd(AppCmd::PromptAddProject),
             Routed::RenameFocused => return self.execute_cmd(AppCmd::PromptRename(self.focused)),
@@ -1610,15 +1639,24 @@ impl App {
                 self.dirty = true;
             }
             AppCmd::OpenNewAgent => {
-                let (default_agent, default_mode) = {
+                let (default_agent, default_mode, enabled) = {
                     let s = self.settings.lock().unwrap();
+                    let enabled = s
+                        .get("enabledAgents")
+                        .and_then(|v| v.as_array().cloned())
+                        .map(|l| l.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                        .unwrap_or_else(|| {
+                            agents::AGENTS.iter().filter(|a| a.default_enabled).map(|a| a.id.to_string()).collect()
+                        });
                     (
                         s.get_str("defaultAgent").map(|v| v.to_string()),
                         s.get_str("permissionMode").unwrap_or("").to_string(),
+                        enabled,
                     )
                 };
                 self.views.push(Box::new(AgentSelectView::new(
                     &self.installed_agents,
+                    &enabled,
                     default_agent.as_deref(),
                     &default_mode,
                 )));
@@ -1727,6 +1765,19 @@ impl App {
                 });
             }
             AppCmd::Noop => {}
+            AppCmd::SearchScrollback(query) => {
+                self.last_search = Some(query.clone());
+                if let Some(p) = self.panes.get_mut(self.focused) {
+                    match p.term.search_back(&query) {
+                        Some(offset) => {
+                            p.dirty = true;
+                            self.dirty = true;
+                            self.toast(format!("Found '{query}' ({offset} lines back) — ⌥PgDn to return"));
+                        }
+                        None => self.toast(format!("No match for '{query}' above")),
+                    }
+                }
+            }
             AppCmd::AiMerge { branch } => {
                 let (Some(primary), backup) = (self.inference_primary.clone(), self.inference_backup.clone()) else {
                     self.toast("No inference provider configured");
@@ -2299,7 +2350,7 @@ impl App {
             }
         }
         if let Some(msg) = attention {
-            self.toast(msg);
+            self.attention_toast(msg);
         }
         // Flood-throttled panes due for a refresh.
         let mut resumed = Vec::new();

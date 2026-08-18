@@ -7,6 +7,7 @@ use dmux_ui::{
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 use crate::agents::{AgentDef, AGENTS};
+use dmux_core::i18n::t;
 
 const TAG_LAUNCH: u64 = 1;
 const TAG_PROMPT: u64 = 2;
@@ -40,11 +41,24 @@ pub struct AgentSelectView {
 }
 
 impl AgentSelectView {
-    pub fn new(installed: &std::collections::HashSet<&'static str>, default_agent: Option<&str>, default_mode: &str) -> Self {
+    pub fn new(
+        installed: &std::collections::HashSet<&'static str>,
+        enabled: &[String],
+        default_agent: Option<&str>,
+        default_mode: &str,
+    ) -> Self {
         let mut rows: Vec<AgentRow> = AGENTS
             .iter()
+            .filter(|def| enabled.iter().any(|id| id == def.id))
             .map(|def| AgentRow { def, installed: installed.contains(def.id), count: 0 })
             .collect();
+        if rows.is_empty() {
+            rows = AGENTS
+                .iter()
+                .filter(|d| d.default_enabled)
+                .map(|def| AgentRow { def, installed: installed.contains(def.id), count: 0 })
+                .collect();
+        }
         // Installed first, then default-enabled, stable within groups.
         rows.sort_by_key(|r| (!r.installed, !r.def.default_enabled));
         // Preselect: one pane on the configured default agent (if installed),
@@ -108,15 +122,15 @@ impl View for AgentSelectView {
     ) -> Option<(u16, u16)> {
         let h = (self.rows.len() as u16 + 10).min(area.h.saturating_sub(2));
         let rect = centered(area, area.w.min(58), h);
-        let inner = draw_panel(buf, rect, "New Agents", ctx.theme, PanelStyle::Modal);
+        let inner = draw_panel(buf, rect, t("agent.title"), ctx.theme, PanelStyle::Modal);
         let bg = ctx.theme.bg_raised;
 
-        buf.draw_text(inner.x + 1, inner.y, "Prompt", ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+        buf.draw_text(inner.x + 1, inner.y, t("agent.prompt_label"), ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
         let prompt_rect = Rect::new(inner.x, inner.y + 1, inner.w, 1);
         let cursor = self.prompt.draw(buf, prompt_rect, ctx.theme, self.focus == 0);
         clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
 
-        buf.draw_text(inner.x + 1, inner.y + 3, "Allocate panes", ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+        buf.draw_text(inner.x + 1, inner.y + 3, t("agent.allocate"), ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
         let rows_y = inner.y + 4;
         for (i, row) in self.rows.iter().enumerate() {
             let y = rows_y + i as u16;
@@ -155,7 +169,7 @@ impl View for AgentSelectView {
         let perm_rect = Rect::new(inner.x, perm_y, inner.w, 1);
         let perm_bg = if perm_selected { ctx.theme.bg_selected } else { bg };
         buf.fill(perm_rect, &Cell { bg: perm_bg, ..Cell::default() });
-        buf.draw_text(inner.x + 1, perm_y, "Permissions", ctx.theme.text_dim, perm_bg, AttrFlags::empty(), perm_rect);
+        buf.draw_text(inner.x + 1, perm_y, t("agent.permissions"), ctx.theme.text_dim, perm_bg, AttrFlags::empty(), perm_rect);
         let value = draw_select_value(PERMISSION_MODES[self.permission_idx].1);
         buf.draw_text(inner.right().saturating_sub(value.chars().count() as u16 + 1), perm_y, &value, ctx.theme.accent, perm_bg, AttrFlags::empty(), perm_rect);
         clicks.add(perm_rect, ClickTarget::Overlay(TAG_PERMISSION));

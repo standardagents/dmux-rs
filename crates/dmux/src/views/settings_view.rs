@@ -74,7 +74,7 @@ fn definitions() -> Vec<Def> {
             label: "Language",
             kind: Kind::Select(vec![("en".into(), "English".into()), ("ja".into(), "日本語".into())]),
         },
-        Def { key: "enabledAgents", label: "Enabled Agents…", kind: Kind::Soon },
+        Def { key: "enabledAgents", label: "Enabled Agents…", kind: Kind::Soon }, // opens checklist
         Def { key: "enabledNotificationSounds", label: "Notification Sounds…", kind: Kind::Soon },
         Def { key: "inferenceProviders", label: "Inference Providers…", kind: Kind::Soon },
         Def { key: "hooks", label: "Manage Hooks…", kind: Kind::Soon },
@@ -141,7 +141,16 @@ impl SettingsView {
                     InputPurpose::SetTextSetting { key: def.key.to_string(), scope: self.scope },
                 )))
             }
-            Kind::Soon => ViewResult::Stay,
+            Kind::Soon => {
+                if def.key == "enabledAgents" {
+                    let has_project = self.has_project;
+                    return ViewResult::Push(Box::new(super::EnabledAgentsView::new(
+                        self.settings.clone(),
+                        has_project,
+                    )));
+                }
+                ViewResult::Stay
+            }
         }
     }
 }

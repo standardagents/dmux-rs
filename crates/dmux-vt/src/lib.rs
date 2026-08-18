@@ -391,6 +391,42 @@ impl PaneTerm {
         self.term.selection.is_some()
     }
 
+    /// Search upward through scrollback for `needle` (case-insensitive),
+    /// starting above the current view. On a match, scrolls the view so the
+    /// matching line is at the top and returns the new display offset.
+    pub fn search_back(&mut self, needle: &str) -> Option<usize> {
+        if needle.is_empty() {
+            return None;
+        }
+        let needle = needle.to_lowercase();
+        let history = self.history_len() as i32;
+        let start = self.display_offset() as i32 + 1;
+        for d in start..=history {
+            let line = Line(-d);
+            let text = self.row_text(line).to_lowercase();
+            if text.contains(&needle) {
+                self.term.scroll_display(Scroll::Bottom);
+                self.term.scroll_display(Scroll::Delta(d));
+                return Some(self.display_offset());
+            }
+        }
+        None
+    }
+
+    fn row_text(&self, line: Line) -> String {
+        let grid = self.term.grid();
+        let row = &grid[line];
+        let mut text = String::new();
+        for col in 0..self.cols {
+            let cell = &row[Column(col as usize)];
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+            text.push(cell.c);
+        }
+        text.trim_end().to_string()
+    }
+
     /// Last `n` content lines of the viewport (trailing blank rows trimmed,
     /// like tmux capture-pane) — the input for status heuristics / naming.
     pub fn read_tail_text(&self, n: u16) -> String {

@@ -12,6 +12,8 @@ pub enum InputPurpose {
     AddProjectPath,
     /// Commit message before merging a dirty worktree.
     MergeCommitMessage { slug: String },
+    /// Scrollback search in the focused pane.
+    SearchScrollback,
 }
 
 pub struct InputView {
@@ -53,6 +55,12 @@ impl InputView {
                 slug: slug.clone(),
                 message: Some(if value.is_empty() { "dmux: worktree changes".into() } else { value }),
             },
+            InputPurpose::SearchScrollback => {
+                if value.is_empty() {
+                    return ViewResult::Close;
+                }
+                AppCmd::SearchScrollback(value)
+            }
         };
         ViewResult::CloseAnd(cmd)
     }

@@ -4,6 +4,7 @@
 //! machinery from the TS implementation.
 
 mod agent_select;
+mod agents_enabled;
 mod confirm;
 mod input_view;
 mod logs;
@@ -12,6 +13,7 @@ mod settings_view;
 mod shortcuts;
 
 pub use agent_select::AgentSelectView;
+pub use agents_enabled::EnabledAgentsView;
 pub use confirm::ConfirmView;
 pub use input_view::{InputPurpose, InputView};
 pub use logs::LogsView;
@@ -59,6 +61,7 @@ pub enum AppCmd {
     /// Auto-resolve the conflicts with the configured inference provider.
     AiMerge { branch: String },
     Noop,
+    SearchScrollback(String),
     /// Push the worktree branch and open `gh pr create` in a terminal pane.
     CreatePr(usize),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },

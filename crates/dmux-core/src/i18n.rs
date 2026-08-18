@@ -95,19 +95,18 @@ pub fn tf(key: &str, arg: &str) -> String {
 mod tests {
     use super::*;
 
+    /// One test: the locale is process-global state, so parallel tests would
+    /// race each other's `set_locale` calls.
     #[test]
-    fn locale_switching() {
+    fn locale_switching_and_fallback() {
         set_locale("en");
         assert_eq!(t("menu.close"), "Close pane");
         set_locale("ja");
         assert_eq!(t("menu.close"), "ペインを閉じる");
         assert_eq!(tf("dialog.close_body", "x"), "'x' を閉じますか？プロセスは終了されます。");
-        set_locale("en");
-    }
-
-    #[test]
-    fn fallback_on_unknown_locale() {
+        // Unknown locale falls back to English.
         set_locale("fr");
         assert_eq!(t("menu.settings"), "Settings…");
+        set_locale("en");
     }
 }

@@ -29,6 +29,7 @@ const LEADER_ROWS: &[(&str, &str)] = &[
     ("^b 1..9", "focus pane N"),
     ("^b ← →", "cycle focus"),
     ("^b l", "logs"),
+    ("^b /", "search scrollback"),
     ("^b ?", "this help"),
     ("^b d", "detach (quit dmux, keep session)"),
     ("^b ^b", "send a literal Ctrl+b to the pane"),
