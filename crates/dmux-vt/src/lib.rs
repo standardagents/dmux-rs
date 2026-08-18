@@ -76,12 +76,29 @@ impl EventListener for EventProxy {
     }
 }
 
+/// Parser state for the screen/tmux-specific title sequence `ESC k <name>
+/// ST|BEL`. zsh and friends emit it to name tmux windows after the running
+/// command; it is NOT a standard VT sequence, so alacritty's parser would
+/// print the payload as text (the classic "command echoed twice" artifact).
+/// We strip it from the stream and surface the name as a Title side effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScreenTitle {
+    Normal,
+    /// Saw ESC at a chunk boundary; next byte decides.
+    Esc,
+    /// Inside `ESC k`, accumulating the name.
+    Name(Vec<u8>),
+    /// Inside the name, saw ESC (possible ST terminator).
+    NameEsc(Vec<u8>),
+}
+
 pub struct PaneTerm {
     term: Term<EventProxy>,
     parser: Processor,
     sink: Arc<EventSink>,
     cols: u16,
     rows: u16,
+    screen_title: ScreenTitle,
     /// Rough activity meter the status engine reads.
     bytes_seen: u64,
 }
@@ -93,7 +110,15 @@ impl PaneTerm {
         let config = Config { scrolling_history: scrollback_lines, ..Config::default() };
         let size = TermSize::new(cols.max(1) as usize, rows.max(1) as usize);
         let term = Term::new(config, &size, proxy);
-        Self { term, parser: Processor::new(), sink, cols: cols.max(1), rows: rows.max(1), bytes_seen: 0 }
+        Self {
+            term,
+            parser: Processor::new(),
+            sink,
+            cols: cols.max(1),
+            rows: rows.max(1),
+            screen_title: ScreenTitle::Normal,
+            bytes_seen: 0,
+        }
     }
 
     pub fn cols(&self) -> u16 {
@@ -111,8 +136,68 @@ impl PaneTerm {
     /// Feed pane output bytes; returns side effects raised while parsing.
     pub fn advance(&mut self, bytes: &[u8]) -> Vec<TermSideEffect> {
         self.bytes_seen += bytes.len() as u64;
-        self.parser.advance(&mut self.term, bytes);
-        self.drain_events()
+        let (filtered, titles) = self.strip_screen_titles(bytes);
+        self.parser.advance(&mut self.term, &filtered);
+        let mut effects = self.drain_events();
+        for title in titles {
+            effects.push(TermSideEffect::Title(title));
+        }
+        effects
+    }
+
+    /// Remove `ESC k <name> ST|BEL` sequences (chunk-split safe), collecting
+    /// the names. Everything else passes through untouched.
+    fn strip_screen_titles(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<String>) {
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut titles = Vec::new();
+        let mut state = std::mem::replace(&mut self.screen_title, ScreenTitle::Normal);
+        for &b in bytes {
+            state = match state {
+                ScreenTitle::Normal => {
+                    if b == 0x1b {
+                        ScreenTitle::Esc
+                    } else {
+                        out.push(b);
+                        ScreenTitle::Normal
+                    }
+                }
+                ScreenTitle::Esc => {
+                    if b == b'k' {
+                        ScreenTitle::Name(Vec::new())
+                    } else if b == 0x1b {
+                        out.push(0x1b);
+                        ScreenTitle::Esc
+                    } else {
+                        out.push(0x1b);
+                        out.push(b);
+                        ScreenTitle::Normal
+                    }
+                }
+                ScreenTitle::Name(mut name) => {
+                    if b == 0x07 {
+                        titles.push(String::from_utf8_lossy(&name).into_owned());
+                        ScreenTitle::Normal
+                    } else if b == 0x1b {
+                        ScreenTitle::NameEsc(name)
+                    } else {
+                        name.push(b);
+                        ScreenTitle::Name(name)
+                    }
+                }
+                ScreenTitle::NameEsc(mut name) => {
+                    if b == b'\\' {
+                        titles.push(String::from_utf8_lossy(&name).into_owned());
+                        ScreenTitle::Normal
+                    } else {
+                        name.push(0x1b);
+                        name.push(b);
+                        ScreenTitle::Name(name)
+                    }
+                }
+            };
+        }
+        self.screen_title = state;
+        (out, titles)
     }
 
     fn drain_events(&mut self) -> Vec<TermSideEffect> {
@@ -436,6 +521,38 @@ mod tests {
         t.advance(b"x");
         assert!(!matches!(t.take_damage(), Damage::None));
         assert!(matches!(t.take_damage(), Damage::None | Damage::Rows(_)));
+    }
+
+    #[test]
+    fn screen_title_sequence_stripped_not_printed() {
+        // `ESC k name ESC \` (zsh's tmux window-naming) must never print.
+        let mut t = PaneTerm::new(40, 3, 0);
+        let fx = t.advance(b"before \x1bkecho\x1b\\AFTER");
+        let tail = t.read_tail_text(3);
+        assert!(tail.contains("before AFTER"), "tail: {tail:?}");
+        assert!(!tail.contains("echo"), "title payload leaked into grid: {tail:?}");
+        assert!(fx.contains(&TermSideEffect::Title("echo".into())), "effects: {fx:?}");
+    }
+
+    #[test]
+    fn screen_title_split_across_chunks() {
+        let mut t = PaneTerm::new(40, 3, 0);
+        t.advance(b"x\x1b");
+        t.advance(b"kssh-clip");
+        let fx = t.advance(b"board\x1b\\y");
+        assert!(fx.contains(&TermSideEffect::Title("ssh-clipboard".into())));
+        let tail = t.read_tail_text(3);
+        assert!(tail.contains("xy"), "tail: {tail:?}");
+        assert!(!tail.contains("ssh"), "leak: {tail:?}");
+    }
+
+    #[test]
+    fn screen_title_bel_terminated_and_esc_passthrough() {
+        let mut t = PaneTerm::new(40, 3, 0);
+        let fx = t.advance(b"\x1bktitle\x07ok \x1b[1mBOLD");
+        assert!(fx.contains(&TermSideEffect::Title("title".into())));
+        let tail = t.read_tail_text(3);
+        assert!(tail.contains("ok BOLD"), "CSI after title must still work: {tail:?}");
     }
 
     #[test]
