@@ -350,13 +350,12 @@ impl PaneTerm {
         }
     }
 
-    /// Last `n` viewport lines as trimmed text (status heuristics / naming).
+    /// Last `n` content lines of the viewport (trailing blank rows trimmed,
+    /// like tmux capture-pane) — the input for status heuristics / naming.
     pub fn read_tail_text(&self, n: u16) -> String {
         let grid = self.term.grid();
-        let rows = self.rows;
-        let start = rows.saturating_sub(n);
-        let mut out = String::new();
-        for vrow in start..rows {
+        let mut lines: Vec<String> = Vec::with_capacity(self.rows as usize);
+        for vrow in 0..self.rows {
             let line = Line(vrow as i32);
             let row = &grid[line];
             let mut line_text = String::new();
@@ -370,8 +369,14 @@ impl PaneTerm {
                     line_text.extend(zw);
                 }
             }
-            let trimmed = line_text.trim_end();
-            out.push_str(trimmed);
+            lines.push(line_text.trim_end().to_string());
+        }
+        // Trim trailing blank rows, then keep the last `n` lines.
+        let content_end = lines.iter().rposition(|l| !l.is_empty()).map(|i| i + 1).unwrap_or(0);
+        lines.truncate(content_end);
+        let skip = lines.len().saturating_sub(n as usize);
+        let mut out = lines[skip..].join("\n");
+        if !out.is_empty() {
             out.push('\n');
         }
         out

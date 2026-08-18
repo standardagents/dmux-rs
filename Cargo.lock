@@ -432,6 +432,7 @@ dependencies = [
  "dmux-compositor",
  "dmux-core",
  "dmux-host",
+ "dmux-status",
  "dmux-ui",
  "dmux-vt",
  "hdrhistogram",
@@ -484,6 +485,13 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dmux-status"
+version = "0.1.0"
+dependencies = [
+ "regex",
 ]
 
 [[package]]

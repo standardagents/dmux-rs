@@ -92,13 +92,16 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         let focused = i == scene.focused;
         let caret = if selected { "▸" } else { " " };
         let glyph = status_glyph(pane, scene.anim);
+        let attn = if pane.needs_attention { "!" } else { " " };
         let hidden_tag = if pane.hidden { " (hidden)" } else { "" };
-        let name = truncate(pane.display_title(), area.w.saturating_sub(12 + hidden_tag.len() as u16) as usize);
-        let line = format!("{caret} {glyph} {name}{hidden_tag}");
+        let name = truncate(pane.display_title(), area.w.saturating_sub(13 + hidden_tag.len() as u16) as usize);
+        let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
         let (fg, attrs) = if pane.hidden {
             (t.text_faint, AttrFlags::empty())
         } else if focused {
             (t.accent, AttrFlags::BOLD)
+        } else if pane.status == PaneStatus::Waiting || pane.needs_attention {
+            (t.warn, AttrFlags::BOLD)
         } else if selected {
             (t.text, AttrFlags::empty())
         } else {
@@ -151,6 +154,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
 fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
     match pane.status {
         PaneStatus::Working => spinner_frame(anim).to_string(),
+        PaneStatus::Waiting => "△".to_string(),
         PaneStatus::Idle => "◌".to_string(),
         PaneStatus::Dead => "✗".to_string(),
     }

@@ -35,6 +35,8 @@ pub enum AppCmd {
     RenamePane { idx: usize, name: String },
     ToggleHidden(usize),
     ClosePane(usize),
+    CopyPath(usize),
+    OpenInEditor(usize),
     NewTerminal,
     /// Terminal in a specific directory (welcome-screen worktree cards).
     NewTerminalAt { path: String, name: String },

@@ -29,6 +29,8 @@ pub const KEEPALIVE_NAME: &str = "dmux-keepalive";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneStatus {
     Working,
+    /// Settled and waiting on the user (question / option dialog).
+    Waiting,
     Idle,
     Dead,
 }
@@ -66,6 +68,11 @@ pub struct LogicalPane {
     pub resume_at: Option<std::time::Instant>,
     /// Excluded from the layout and output-muted; still alive in tmux.
     pub hidden: bool,
+    /// Settled while unfocused — shown as `!` until the user looks.
+    pub needs_attention: bool,
+    /// Heuristic settle classifier (dmux-status).
+    pub engine: dmux_status::PaneStatusEngine,
+    pub worktree_path: Option<String>,
     pub agent: Option<String>,
     /// Feeds Phase 1 agent detection.
     #[allow(dead_code)]
@@ -231,6 +238,9 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             throttled: false,
             resume_at: None,
             hidden: config_pane.map(|p| p.is_hidden()).unwrap_or(false),
+            needs_attention: false,
+            engine: dmux_status::PaneStatusEngine::new(),
+            worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             agent: config_pane.and_then(|p| p.agent.clone()),
             current_command: info.current_command.clone(),
         });

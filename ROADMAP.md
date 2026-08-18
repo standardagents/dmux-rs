@@ -20,11 +20,11 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Title-bar click affordances (buttons; not possible under tmux) | ✅ (new) |
 | Animated working indicators (spinners; replaces 90ms tmux title rewrites) | ✅ |
 | Config write-back of pane records (TS-compatible, unknown fields preserved) | ✅ |
-| Status heuristics port (`paneAttentionHeuristics` on live grids) | ⏳ |
+| Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate; LLM escalation still ⏳) |
 | LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ |
 | Merge flows / PR creation / AI merge / conflict pane | ⏳ |
 | Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ |
-| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ⏳ |
+| Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ⏳ (pane→host OSC 52 forwarding + tmux mirror ✅) |
 | Kitty keyboard passthrough INTO panes (pane-requested flags) | ⏳ |
 | Images (kitty graphics translation) | ⏳ |
 | break-pane migration for legacy multi-pane windows | ⏳ |
@@ -34,7 +34,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 
 - Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ⏳, merge* ⏳, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ⏳, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
-- Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ⏳, PR ⏳, copyPath ⏳, openInEditor ⏳, toggleAutopilot ⏳, test/dev runners ⏳
+- Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ⏳, PR ⏳, copyPath ✅, openInEditor ✅, toggleAutopilot ⏳, test/dev runners ⏳
 - Terminal auto-naming service ⏳ (grid-read based) · footer tips ⏳ · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys
 - Welcome/spacer panes ✂ — native empty-state view instead

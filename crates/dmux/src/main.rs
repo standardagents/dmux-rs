@@ -552,6 +552,21 @@ impl App {
             || self.views.iter().any(|v| v.animating())
     }
 
+    /// Push text to the host clipboard (OSC 52) and mirror it into a tmux
+    /// buffer so plain-attached clients can paste it too.
+    fn forward_clipboard(&mut self, text: &str) {
+        if text.is_empty() || text.len() > 512 * 1024 {
+            return;
+        }
+        let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
+        if let Err(err) = self.host.write_frame(osc.as_bytes()) {
+            tracing::warn!(%err, "clipboard forward failed");
+        }
+        let _ = self
+            .client
+            .send(format!("set-buffer -b dmux {}", dmux_cc::quote_arg(text)));
+    }
+
     fn toast(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
         self.status_clear_at = Some(Instant::now() + STATUS_LINGER);
@@ -580,6 +595,7 @@ impl App {
         match ev {
             CcEvent::Output { pane, data } | CcEvent::ExtendedOutput { pane, data, .. } => {
                 self.metrics.record_input(data.len());
+                let mut clipboard_out: Vec<String> = Vec::new();
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     let now = Instant::now();
                     if now.duration_since(p.window_start) >= FLOOD_WINDOW {
@@ -593,8 +609,11 @@ impl App {
                     } else {
                         let effects = p.term.advance(&data);
                         for effect in effects {
-                            handle_side_effect(&self.client, p, effect);
+                            if let Some(text) = handle_side_effect(&self.client, p, effect) {
+                                clipboard_out.push(text);
+                            }
                         }
+                        p.engine.on_output();
                         p.dirty = true;
                         p.last_output = Some(now);
                         if p.status != PaneStatus::Dead {
@@ -610,6 +629,9 @@ impl App {
                         let _ = self.client.send(format!("refresh-client -A '{pane}:off'"));
                         self.dirty = true;
                     }
+                }
+                for text in clipboard_out {
+                    self.forward_clipboard(&text);
                 }
                 true
             }
@@ -1131,6 +1153,7 @@ impl App {
                 if i < self.panes.len() && !self.panes[i].hidden {
                     self.focused = i;
                     self.selected = i;
+                    self.panes[i].needs_attention = false;
                     let w = self.panes[i].tmux_window;
                     let _ = self.client.send(format!("select-window -t {w}"));
                     self.dirty = true;
@@ -1143,6 +1166,8 @@ impl App {
                     let hide_label = if p.hidden { "Show pane" } else { "Hide pane" };
                     items.push(MenuItem::new("Rename pane", "^b r", AppCmd::PromptRename(idx)));
                     items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
+                    items.push(MenuItem::new("Copy path", "", AppCmd::CopyPath(idx)));
+                    items.push(MenuItem::new("Open in editor", "", AppCmd::OpenInEditor(idx)));
                     items.push(MenuItem::new("Close pane", "^b x", AppCmd::ConfirmClose(idx)).danger());
                 }
                 items.push(MenuItem::new("New agents…", "^b n", AppCmd::OpenNewAgent));
@@ -1207,6 +1232,35 @@ impl App {
                         AppCmd::ClosePane(idx),
                     )));
                     self.dirty = true;
+                }
+            }
+            AppCmd::CopyPath(idx) => {
+                if let Some(p) = self.panes.get(idx) {
+                    let path = p
+                        .worktree_path
+                        .clone()
+                        .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+                    self.forward_clipboard(&path);
+                    self.toast(format!("Copied {path}"));
+                }
+            }
+            AppCmd::OpenInEditor(idx) => {
+                if let Some(p) = self.panes.get(idx) {
+                    let path = p
+                        .worktree_path
+                        .clone()
+                        .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+                    let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("editor-")).count();
+                    self.create_window(NewWindowCtx {
+                        slug: format!("editor-{n}"),
+                        display: format!("edit: {}", p.display_title()),
+                        kind: PaneKind::Shell,
+                        agent: None,
+                        launch_cmd: Some("${EDITOR:-vi} .".into()),
+                        injection: None,
+                        worktree_path: Some(path.clone()),
+                        cwd: Some(path),
+                    });
                 }
             }
             AppCmd::RenamePane { idx, name } => self.rename_pane(idx, name),
@@ -1561,15 +1615,55 @@ impl App {
 
     fn handle_deadlines(&mut self) {
         let now = Instant::now();
+        // Settle classification: quiet panes get a heuristic verdict
+        // (working spinner text / waiting on the user / idle).
+        let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
+        let mut attention: Option<String> = None;
         for p in &mut self.panes {
-            if p.status == PaneStatus::Working {
-                if let Some(t) = p.last_output {
-                    if now.duration_since(t) >= SETTLE_AFTER {
-                        p.status = PaneStatus::Idle;
-                        self.dirty = true;
+            if p.status != PaneStatus::Working {
+                continue;
+            }
+            let Some(t) = p.last_output else { continue };
+            if now.duration_since(t) < SETTLE_AFTER {
+                continue;
+            }
+            // Working/waiting classification is for agent panes; plain
+            // terminals settle straight to idle (shell echoes would pollute
+            // the heuristics — and TS never statused terminals either).
+            if p.agent.is_none() {
+                p.status = PaneStatus::Idle;
+                self.dirty = true;
+                continue;
+            }
+            let tail = p.term.read_tail_text(30);
+            let verdict = p.engine.on_settle(&tail, p.agent.as_deref());
+            tracing::debug!(pane = %p.tmux_pane, ?verdict, tail_tail = %tail.lines().rev().take(3).collect::<Vec<_>>().join(" | "), "settle verdict");
+            let is_focused = focused_pane == Some(p.tmux_pane);
+            match verdict {
+                dmux_status::Activity::Working => {
+                    // Still working without output (thinking); recheck later.
+                    p.last_output = Some(now);
+                }
+                dmux_status::Activity::Waiting => {
+                    p.status = PaneStatus::Waiting;
+                    if !is_focused && !p.needs_attention {
+                        p.needs_attention = true;
+                        attention = Some(format!("△ {} needs input", p.display_title()));
                     }
+                    self.dirty = true;
+                }
+                dmux_status::Activity::Idle => {
+                    p.status = PaneStatus::Idle;
+                    if !is_focused && p.agent.is_some() && !p.needs_attention {
+                        p.needs_attention = true;
+                        attention = Some(format!("✓ {} finished", p.display_title()));
+                    }
+                    self.dirty = true;
                 }
             }
+        }
+        if let Some(msg) = attention {
+            self.toast(msg);
         }
         // Flood-throttled panes due for a refresh.
         let mut resumed = Vec::new();
@@ -1752,21 +1846,46 @@ impl App {
     }
 }
 
-/// React to a pane emulator side effect.
-fn handle_side_effect(client: &Client<Tag>, pane: &mut LogicalPane, effect: dmux_vt::TermSideEffect) {
+/// React to a pane emulator side effect. Returns clipboard text to forward
+/// (handled by the caller once the pane borrow ends).
+fn handle_side_effect(
+    client: &Client<Tag>,
+    pane: &mut LogicalPane,
+    effect: dmux_vt::TermSideEffect,
+) -> Option<String> {
     use dmux_vt::TermSideEffect;
     match effect {
         TermSideEffect::PtyResponse(bytes) => {
             let _ = client.send(input::send_keys_hex(pane.tmux_pane, &bytes));
+            None
         }
         TermSideEffect::Title(title) => {
             if !title.is_empty() && pane.title.is_empty() {
                 pane.title = title;
             }
+            None
         }
-        TermSideEffect::Clipboard(_text) => {}
-        TermSideEffect::Bell => {}
+        TermSideEffect::Clipboard(text) => Some(text),
+        TermSideEffect::Bell => {
+            pane.needs_attention = true;
+            None
+        }
     }
+}
+
+/// Minimal base64 (standard alphabet, padded) for OSC 52 payloads.
+fn base64(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 /// Shell-quote a path/branch for the bootstrap command line.
