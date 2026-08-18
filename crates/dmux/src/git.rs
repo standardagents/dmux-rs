@@ -71,6 +71,19 @@ pub fn merge_leaving_conflicts(root: &Path, branch: &str) -> Result<Vec<String>,
     }
 }
 
+/// Stage a resolved file and, once all are staged, commit the merge.
+pub fn stage_file(root: &Path, file: &str) -> Result<(), String> {
+    git(root, &["add", "--", file]).map(|_| ())
+}
+
+pub fn commit_merge(root: &Path) -> Result<(), String> {
+    git(root, &["commit", "--no-edit"]).map(|_| ())
+}
+
+pub fn abort_merge(root: &Path) {
+    let _ = git(root, &["merge", "--abort"]);
+}
+
 /// Remove a merged worktree and its branch. Best-effort.
 pub fn cleanup_worktree(root: &Path, worktree: &Path, branch: &str) -> Result<(), String> {
     git(root, &["worktree", "remove", "--force", &worktree.to_string_lossy()])

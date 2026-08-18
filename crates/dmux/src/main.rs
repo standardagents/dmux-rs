@@ -109,6 +109,10 @@ enum AppMsg {
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
     /// Conflicted merge state re-established; launch the resolution pane.
     ConflictsReady { branch: String, files: Result<Vec<String>, String> },
+    /// A newer published version exists.
+    UpdateAvailable(String),
+    /// AI auto-merge finished (Ok = files resolved, merge committed).
+    AiMergeDone { branch: String, result: Result<usize, String> },
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -311,6 +315,7 @@ struct App {
     app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
     inference_primary: Option<dmux_infer::Target>,
     inference_backup: Option<dmux_infer::Target>,
+    update_available: Option<String>,
     tracking_inflight: bool,
     last_tracking: Instant,
 }
@@ -432,6 +437,7 @@ async fn run(
         app_tx,
         inference_primary: None,
         inference_backup: None,
+        update_available: None,
         tracking_inflight: false,
         last_tracking: Instant::now(),
     };
@@ -440,6 +446,17 @@ async fn run(
         app.inference_primary = s.get("inferencePrimary").and_then(dmux_infer::Target::from_value);
         app.inference_backup = s.get("inferenceBackup").and_then(dmux_infer::Target::from_value);
         dmux_core::i18n::set_locale(s.get_str("language").unwrap_or("en"));
+    }
+    // Update check (daily, off-loop, best-effort).
+    {
+        let tx = app.app_tx.clone();
+        tokio::spawn(async move {
+            if let Some(latest) = check_latest_version().await {
+                if is_newer(&latest, env!("CARGO_PKG_VERSION")) {
+                    let _ = tx.send(AppMsg::UpdateAvailable(latest));
+                }
+            }
+        });
     }
     if app.inference_primary.is_some() {
         tracing::info!(
@@ -844,14 +861,24 @@ impl App {
                 Err(err) => {
                     tracing::warn!(%err, %branch, "merge failed");
                     if err.contains("conflict") || err.contains("CONFLICT") {
-                        // Offer agent-assisted resolution at the project root.
                         let agent_label = self.default_agent_for_conflicts().map(|d| d.name).unwrap_or("an agent");
-                        self.views.push(Box::new(ConfirmView::new(
-                            "Merge conflict",
-                            format!("'{branch}' conflicts with the base. Launch {agent_label} to resolve?"),
-                            "Resolve",
-                            false,
-                            AppCmd::ResolveConflicts { branch },
+                        let mut items = Vec::new();
+                        if self.inference_primary.is_some() {
+                            items.push(MenuItem::new(
+                                "AI merge (auto-resolve)",
+                                "",
+                                AppCmd::AiMerge { branch: branch.clone() },
+                            ));
+                        }
+                        items.push(MenuItem::new(
+                            format!("Resolve with {agent_label}…"),
+                            "",
+                            AppCmd::ResolveConflicts { branch: branch.clone() },
+                        ));
+                        items.push(MenuItem::new("Leave it (merge aborted)", "", AppCmd::Noop));
+                        self.views.push(Box::new(MenuView::new(
+                            format!("Merge conflict: {branch}"),
+                            items,
                         )));
                         self.dirty = true;
                     } else {
@@ -863,6 +890,42 @@ impl App {
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
                 self.dirty = true;
+            }
+            AppMsg::AiMergeDone { branch, result } => match result {
+                Ok(files) => {
+                    // Merge committed; offer the standard cleanup.
+                    let slug = self
+                        .panes
+                        .iter()
+                        .find(|p| {
+                            p.worktree_path
+                                .as_deref()
+                                .map(PathBuf::from)
+                                .and_then(|w| git::current_branch(&w))
+                                .as_deref()
+                                == Some(branch.as_str())
+                        })
+                        .map(|p| p.slug.clone());
+                    self.toast(format!("✓ AI merged {files} file(s) from '{branch}'"));
+                    if let Some(slug) = slug {
+                        self.views.push(Box::new(ConfirmView::new(
+                            "Merge complete",
+                            format!("'{branch}' AI-merged and committed. Remove worktree and close pane?"),
+                            "Clean up",
+                            false,
+                            AppCmd::MergeCleanup { slug },
+                        )));
+                        self.dirty = true;
+                    }
+                }
+                Err(err) => {
+                    let short: String = err.chars().take(90).collect();
+                    self.toast(format!("✗ AI merge: {short}"));
+                }
+            },
+            AppMsg::UpdateAvailable(version) => {
+                self.update_available = Some(version.clone());
+                self.toast(format!("Update available: dmux-rs {version}"));
             }
             AppMsg::ConflictsReady { branch, files } => match files {
                 Ok(files) => {
@@ -1663,6 +1726,21 @@ impl App {
                     let _ = tx.send(AppMsg::MergeDone { slug, branch, result });
                 });
             }
+            AppCmd::Noop => {}
+            AppCmd::AiMerge { branch } => {
+                let (Some(primary), backup) = (self.inference_primary.clone(), self.inference_backup.clone()) else {
+                    self.toast("No inference provider configured");
+                    return true;
+                };
+                let root = self.project_root.clone();
+                let tx = self.app_tx.clone();
+                let b = branch.clone();
+                self.toast(format!("AI-merging '{branch}'…"));
+                tokio::spawn(async move {
+                    let result = ai_merge(&root, &b, &primary, backup.as_ref()).await;
+                    let _ = tx.send(AppMsg::AiMergeDone { branch: b, result });
+                });
+            }
             AppCmd::ResolveConflicts { branch } => {
                 let root = self.project_root.clone();
                 let tx = self.app_tx.clone();
@@ -2292,7 +2370,10 @@ impl App {
         if let Some(at) = self.status_clear_at {
             if now >= at {
                 self.status_clear_at = None;
-                self.status_msg = "^b for commands · ^b ? help".into();
+                self.status_msg = match &self.update_available {
+                    Some(v) => format!("⬆ dmux-rs {v} available · npm i -g dmux-rs"),
+                    None => "^b for commands · ^b ? help".into(),
+                };
                 self.dirty = true;
             }
         }
@@ -2479,6 +2560,113 @@ fn base64(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+/// AI auto-merge: re-establish the conflicts, resolve each conflicted file
+/// with the inference provider, stage, and commit. Aborts the merge on any
+/// failure so the root is left clean.
+async fn ai_merge(
+    root: &std::path::Path,
+    branch: &str,
+    primary: &dmux_infer::Target,
+    backup: Option<&dmux_infer::Target>,
+) -> Result<usize, String> {
+    let root_owned = root.to_path_buf();
+    let b = branch.to_string();
+    let files = tokio::task::spawn_blocking(move || git::merge_leaving_conflicts(&root_owned, &b))
+        .await
+        .map_err(|e| e.to_string())??;
+    if files.is_empty() {
+        // Clean re-merge: commit already made by git merge.
+        return Ok(0);
+    }
+    const SYSTEM: &str = "You are resolving a git merge conflict. You will receive a file containing conflict markers (<<<<<<<, =======, >>>>>>>). Produce the fully resolved file content, preserving the intent of BOTH sides wherever possible. Output ONLY the raw resolved file content — no code fences, no commentary.";
+    for file in &files {
+        let path = root.join(file);
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            git::abort_merge(root);
+            format!("read {file}: {e}")
+        })?;
+        if content.len() > 48 * 1024 {
+            git::abort_merge(root);
+            return Err(format!("{file} too large for AI merge"));
+        }
+        let resolved = dmux_infer::generate(
+            &dirs_home(),
+            Some(primary),
+            backup,
+            SYSTEM,
+            &format!("File: {file}
+
+{content}"),
+            8000,
+        )
+        .await
+        .map_err(|e| {
+            git::abort_merge(root);
+            format!("{file}: {e}")
+        })?;
+        // Strip a wrapping code fence if the model added one despite orders.
+        let trimmed = resolved.trim();
+        let final_text = if trimmed.starts_with("```") {
+            let inner = trimmed.trim_start_matches("```");
+            let inner = inner.split_once('\n').map(|(_, rest)| rest).unwrap_or(inner);
+            inner.trim_end().trim_end_matches("```").trim_end().to_string()
+        } else {
+            resolved.clone()
+        };
+        if final_text.contains("<<<<<<<") || final_text.trim().is_empty() {
+            git::abort_merge(root);
+            return Err(format!("{file}: model left conflicts unresolved"));
+        }
+        std::fs::write(&path, final_text).map_err(|e| {
+            git::abort_merge(root);
+            format!("write {file}: {e}")
+        })?;
+        git::stage_file(root, file).map_err(|e| {
+            git::abort_merge(root);
+            e
+        })?;
+    }
+    git::commit_merge(root).map_err(|e| {
+        git::abort_merge(root);
+        e
+    })?;
+    Ok(files.len())
+}
+
+/// Latest published dmux-rs version from the npm registry (best-effort).
+async fn check_latest_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .build()
+        .ok()?;
+    let resp = client
+        .get("https://registry.npmjs.org/dmux-rs/latest")
+        .header("accept", "application/json")
+        .send()
+        .await
+        .ok()?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v["version"].as_str().map(String::from)
+}
+
+/// Loose semver comparison: a > b?
+fn is_newer(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.trim_start_matches('v')
+            .split(|c: char| c == '.' || c == '-')
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let (a, b) = (parse(a), parse(b));
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        if x != y {
+            return x > y;
+        }
+    }
+    false
 }
 
 /// Shell-quote a path/branch for the bootstrap command line.

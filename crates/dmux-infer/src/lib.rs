@@ -28,6 +28,7 @@ enum Protocol {
     OpenAiCompatible,
     OpenAiResponses,
     Anthropic,
+    Cohere,
 }
 
 struct ProviderDef {
@@ -52,6 +53,7 @@ const PROVIDERS: &[ProviderDef] = &[
     ProviderDef { id: "together", env_keys: &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"], base_url: "https://api.together.xyz/v1", protocol: Protocol::OpenAiCompatible },
     ProviderDef { id: "fireworks", env_keys: &["FIREWORKS_API_KEY"], base_url: "https://api.fireworks.ai/inference/v1", protocol: Protocol::OpenAiCompatible },
     ProviderDef { id: "perplexity", env_keys: &["PERPLEXITY_API_KEY"], base_url: "https://api.perplexity.ai", protocol: Protocol::OpenAiCompatible },
+    ProviderDef { id: "cohere", env_keys: &["COHERE_API_KEY", "CO_API_KEY"], base_url: "https://api.cohere.ai/v1", protocol: Protocol::Cohere },
 ];
 
 /// Settings-shaped inference target (`inferencePrimary` / `inferenceBackup`).
@@ -172,6 +174,16 @@ async fn generate_one(
                 ("anthropic-version".into(), "2023-06-01".into()),
             ],
         ),
+        Protocol::Cohere => (
+            format!("{}/chat", resolved.base_url),
+            json!({
+                "model": target.model_id,
+                "preamble": system,
+                "message": user,
+                "max_tokens": max_tokens,
+            }),
+            vec![("authorization".into(), format!("Bearer {}", resolved.api_key))],
+        ),
     };
 
     let mut req = client.post(&url).json(&body);
@@ -199,6 +211,7 @@ async fn generate_one(
             })
             .or_else(|| payload["output_text"].as_str().map(String::from)),
         Protocol::Anthropic => payload["content"][0]["text"].as_str().map(String::from),
+        Protocol::Cohere => payload["text"].as_str().map(String::from),
     };
     text.filter(|t| !t.is_empty())
         .ok_or_else(|| InferError::BadResponse("no text in response".into()))
@@ -305,7 +318,7 @@ mod tests {
 
     #[test]
     fn unknown_provider_unsupported() {
-        let t = Target { provider_id: "cohere".into(), model_id: "x".into(), base_url: None, env_key: None };
+        let t = Target { provider_id: "chatgpt".into(), model_id: "x".into(), base_url: None, env_key: None };
         let err = resolve(std::path::Path::new("/nonexistent"), &t).unwrap_err();
         assert!(matches!(err, InferError::Unsupported(_)));
     }

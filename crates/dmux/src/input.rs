@@ -7,7 +7,8 @@
 //! keyboard protocol, plus a small set of Alt alternates.
 
 use dmux_host::{
-    KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons, MouseEvent,
+    KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, KittyKeyboardFlags, Modifiers,
+    MouseButtons, MouseEvent,
 };
 use dmux_vt::InputModes;
 
@@ -130,11 +131,15 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
 }
 
 pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
+    let encoding = if modes.kitty_keyboard {
+        // The pane app pushed kitty keyboard flags: encode CSI-u so it gets
+        // the disambiguated keys it asked for.
+        KeyboardEncoding::Kitty(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+    } else {
+        KeyboardEncoding::Xterm
+    };
     let encode_modes = KeyCodeEncodeModes {
-        // Phase 0 always encodes legacy xterm toward panes; pane-side kitty
-        // passthrough is a follow-up (host-side kitty is already used for our
-        // own Super chords).
-        encoding: KeyboardEncoding::Xterm,
+        encoding,
         application_cursor_keys: modes.app_cursor,
         newline_mode: false,
         modify_other_keys: None,

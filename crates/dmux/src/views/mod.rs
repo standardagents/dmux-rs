@@ -56,6 +56,9 @@ pub enum AppCmd {
     /// Re-establish merge conflicts at the root and launch an agent to
     /// resolve them.
     ResolveConflicts { branch: String },
+    /// Auto-resolve the conflicts with the configured inference provider.
+    AiMerge { branch: String },
+    Noop,
     /// Push the worktree branch and open `gh pr create` in a terminal pane.
     CreatePr(usize),
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },

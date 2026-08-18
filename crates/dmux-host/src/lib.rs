@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
+pub use termwiz::escape::csi::KittyKeyboardFlags;
 pub use termwiz::input::{
     InputEvent, KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons,
     MouseEvent,

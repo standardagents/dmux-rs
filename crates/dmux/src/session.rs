@@ -78,6 +78,8 @@ pub struct LogicalPane {
     /// An LLM classification is in flight for this pane.
     pub analysis_inflight: bool,
     pub worktree_path: Option<String>,
+    /// The tmux pane was on the alternate screen at adoption time.
+    pub alt_screen: bool,
     pub pane_pid: u32,
     /// Owning project root (None = the main project).
     pub project_root: Option<String>,
@@ -130,7 +132,13 @@ impl LogicalPane {
     }
 
     pub fn seed_command(&self) -> String {
-        format!("capture-pane -epqJ -t {} -S -{}", self.tmux_pane, SEED_HISTORY_LINES)
+        if self.alt_screen {
+            // Alt-screen apps (vim, TUIs) have no meaningful history; capture
+            // just the visible screen so the seed matches what tmux shows.
+            format!("capture-pane -epqJ -t {}", self.tmux_pane)
+        } else {
+            format!("capture-pane -epqJ -t {} -S -{}", self.tmux_pane, SEED_HISTORY_LINES)
+        }
     }
 
     pub fn cursor_command(&self) -> String {
@@ -159,8 +167,6 @@ pub struct TmuxPaneInfo {
     pub title: String,
     pub width: u16,
     pub height: u16,
-    /// Alt-screen panes need separate primary/alt seeding (follow-up).
-    #[allow(dead_code)]
     pub alternate_on: bool,
     pub current_command: String,
     pub window_name: String,
@@ -256,6 +262,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
+            alt_screen: info.alternate_on,
             pane_pid: info.pane_pid,
             project_root: config_pane.and_then(|p| p.project_root.clone()),
             agent: config_pane.and_then(|p| p.agent.clone()),
