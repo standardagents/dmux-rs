@@ -33,8 +33,10 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 
-- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ⏳, prReview ⏳, diffPeek ⏳, enabledAgents ✅, inferenceSetup ⏳, notificationSounds ⏳, hooks ⏳, progress ⏳ (generic progress ✅ as toast/badge), projectSelect ⏳
-- Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ⏳, PR ⏳, copyPath ✅, openInEditor ✅, toggleAutopilot ⏳, test/dev runners ⏳
+- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ✅ (welcome resume cards), prReview ⏳ (PR opens `gh pr create` in a pane), diffPeek ⏳, enabledAgents ✅, inferenceSetup ✅ (status view: targets + detected credentials; editing stays JSON), notificationSounds ✅ (checklist), hooks ✅ (inventory view; `worktree_created` + `pre_merge` execute), progress ⏳ (generic progress ✅ as toast/badge), projectSelect ✅ (add-project + sidebar grouping)
+- Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ⏳, merge ✅, PR ✅, copyPath ✅, openInEditor ✅, toggleAutopilot ⏳, test/dev runners ⏳
+- Hooks: `worktree_created` (env: DMUX_ROOT/SLUG/WORKTREE_PATH/BRANCH) ✅ · `pre_merge` (nonzero exit vetoes merge, DMUX_TARGET_BRANCH) ✅ · remaining nine lifecycle hooks ⏳
+- Notification sounds: catalog port (ids ↔ `.caf` resources) ✅, helper `soundName` payload ✅, rotation among enabled set ✅
 - Terminal auto-naming ✅ (live from pane title reports — ESC k / OSC 2; LLM naming ⏳) · footer tips ⏳ · toasts ✅ (status line + linger) · file browser ✂ (native file picking rethought later) · web/remote ✂
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys
 - Welcome/spacer panes ✂ — native empty-state view instead

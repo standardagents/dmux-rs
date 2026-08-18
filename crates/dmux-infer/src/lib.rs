@@ -223,6 +223,24 @@ async fn generate_one(
         .ok_or_else(|| InferError::BadResponse("no text in response".into()))
 }
 
+/// One row for the providers settings view: id, primary env var, and whether
+/// a credential was found (env or the stored credentials file).
+pub struct ProviderStatus {
+    pub id: &'static str,
+    pub env_key: &'static str,
+    pub has_key: bool,
+}
+
+pub fn provider_statuses(home: &std::path::Path) -> Vec<ProviderStatus> {
+    PROVIDERS
+        .iter()
+        .map(|d| {
+            let keys: Vec<String> = d.env_keys.iter().map(|k| k.to_string()).collect();
+            ProviderStatus { id: d.id, env_key: d.env_keys[0], has_key: lookup_key(home, d.id, &keys).is_some() }
+        })
+        .collect()
+}
+
 /// Generate with primary → backup failover (TS `callInference` semantics).
 pub async fn generate(
     home: &std::path::Path,

@@ -13,6 +13,7 @@ mod metrics;
 mod notify;
 mod render;
 mod session;
+mod sounds;
 mod tracking;
 mod views;
 mod welcome;
@@ -686,8 +687,14 @@ impl App {
         };
         if native && notify::available() {
             let body = msg.clone();
+            // Rotate through the configured helper sounds (TS randomizes;
+            // a timestamp pick avoids an rng dependency).
+            let sound = {
+                let s = self.settings.lock().unwrap();
+                sounds::pick_resource(s.get("enabledNotificationSounds"), timestamp())
+            };
             tokio::task::spawn_blocking(move || {
-                let _ = notify::notify("dmux", &body);
+                let _ = notify::notify("dmux", &body, sound.as_deref());
             });
         }
         self.toast(msg);
@@ -1635,7 +1642,11 @@ impl App {
             }
             AppCmd::OpenSettings => {
                 let has_project = self.settings.lock().unwrap().has_project_scope();
-                self.views.push(Box::new(SettingsView::new(self.settings.clone(), has_project)));
+                let root = self
+                    .active_project_root()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.project_root.clone());
+                self.views.push(Box::new(SettingsView::new(self.settings.clone(), has_project, root)));
                 self.dirty = true;
             }
             AppCmd::OpenNewAgent => {
@@ -2116,10 +2127,11 @@ impl App {
                     let root = self.project_root.to_string_lossy().into_owned();
                     let base = if base_branch.is_empty() { String::new() } else { format!(" {base_branch}") };
                     let cmd = format!(
-                        "clear; git -C {root} worktree add -b {branch} {wt}{base} >/dev/null 2>&1 || git -C {root} worktree add {wt} {branch} >/dev/null 2>&1; cd {wt} 2>/dev/null || cd {root}; {agent_cmd}",
+                        "clear; git -C {root} worktree add -b {branch} {wt}{base} >/dev/null 2>&1 || git -C {root} worktree add {wt} {branch} >/dev/null 2>&1; cd {wt} 2>/dev/null || cd {root}; if [ -x {root}/.dmux-hooks/worktree_created ]; then DMUX_ROOT={root} DMUX_SLUG={slug_q} DMUX_WORKTREE_PATH={wt} DMUX_BRANCH={branch} {root}/.dmux-hooks/worktree_created >/dev/null 2>&1 || true; fi; {agent_cmd}",
                         root = shq(&root),
                         wt = shq(&wt_str),
                         branch = shq(&branch),
+                        slug_q = shq(&slug),
                     );
                     (cmd, Some(wt_str))
                 } else {

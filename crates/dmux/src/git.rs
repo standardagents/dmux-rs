@@ -38,6 +38,26 @@ pub fn commit_and_merge(
     branch: &str,
     message: Option<&str>,
 ) -> Result<String, String> {
+    // Project pre_merge hook (`.dmux-hooks/pre_merge`): a nonzero exit vetoes
+    // the merge, matching the TS hook contract.
+    let hook = root.join(".dmux-hooks").join("pre_merge");
+    if hook.is_file() {
+        let target = current_branch(root).unwrap_or_default();
+        let status = std::process::Command::new(&hook)
+            .current_dir(worktree)
+            .env("DMUX_ROOT", root)
+            .env("DMUX_WORKTREE_PATH", worktree)
+            .env("DMUX_BRANCH", branch)
+            .env("DMUX_TARGET_BRANCH", &target)
+            .status();
+        match status {
+            Ok(st) if !st.success() => {
+                return Err(format!("pre_merge hook vetoed the merge (exit {})", st.code().unwrap_or(-1)));
+            }
+            Err(err) => return Err(format!("pre_merge hook: {err}")),
+            _ => {}
+        }
+    }
     if let Some(msg) = message {
         git(worktree, &["add", "-A"]).map_err(|e| format!("git add: {e}"))?;
         git(worktree, &["commit", "-m", msg]).map_err(|e| format!("git commit: {e}"))?;

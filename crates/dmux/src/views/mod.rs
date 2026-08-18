@@ -6,20 +6,26 @@
 mod agent_select;
 mod agents_enabled;
 mod confirm;
+mod hooks_view;
+mod infer_view;
 mod input_view;
 mod logs;
 mod menu;
 mod settings_view;
 mod shortcuts;
+mod sounds_view;
 
 pub use agent_select::AgentSelectView;
 pub use agents_enabled::EnabledAgentsView;
 pub use confirm::ConfirmView;
+pub use hooks_view::HooksView;
+pub use infer_view::InferProvidersView;
 pub use input_view::{InputPurpose, InputView};
 pub use logs::LogsView;
 pub use menu::{MenuItem, MenuView};
 pub use settings_view::SettingsView;
 pub use shortcuts::ShortcutsView;
+pub use sounds_view::SoundsView;
 
 use dmux_compositor::{CellBuffer, Rect};
 use dmux_host::KeyEvent;

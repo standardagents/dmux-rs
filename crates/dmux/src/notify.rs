@@ -25,12 +25,13 @@ pub fn available() -> bool {
 }
 
 /// Send a native notification. Blocking but bounded; call from spawn_blocking.
-pub fn notify(title: &str, body: &str) -> bool {
+pub fn notify(title: &str, body: &str, sound: Option<&str>) -> bool {
     let Some(path) = helper_socket() else { return false };
     let payload = serde_json::json!({
         "type": "notify",
         "title": title,
         "body": body,
+        "soundName": sound,
         "titleToken": "",
         "bundleId": serde_json::Value::Null,
     });

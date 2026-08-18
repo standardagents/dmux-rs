@@ -16,8 +16,8 @@ enum Kind {
     Select(Vec<(String, String)>),
     Number { min: i64, max: i64 },
     Text,
-    /// Sub-menu features not yet ported; rendered dim.
-    Soon,
+    /// Opens a dedicated sub-view (checklists, status pages).
+    Sub,
 }
 
 struct Def {
@@ -74,10 +74,10 @@ fn definitions() -> Vec<Def> {
             label: "Language",
             kind: Kind::Select(vec![("en".into(), "English".into()), ("ja".into(), "日本語".into())]),
         },
-        Def { key: "enabledAgents", label: "Enabled Agents…", kind: Kind::Soon }, // opens checklist
-        Def { key: "enabledNotificationSounds", label: "Notification Sounds…", kind: Kind::Soon },
-        Def { key: "inferenceProviders", label: "Inference Providers…", kind: Kind::Soon },
-        Def { key: "hooks", label: "Manage Hooks…", kind: Kind::Soon },
+        Def { key: "enabledAgents", label: "Enabled Agents…", kind: Kind::Sub },
+        Def { key: "enabledNotificationSounds", label: "Notification Sounds…", kind: Kind::Sub },
+        Def { key: "inferenceProviders", label: "Inference Providers…", kind: Kind::Sub },
+        Def { key: "hooks", label: "Project Hooks…", kind: Kind::Sub },
     ]
 }
 
@@ -89,16 +89,22 @@ pub struct SettingsView {
     list: ListState,
     scope: SettingsScope,
     has_project: bool,
+    project_root: std::path::PathBuf,
 }
 
 impl SettingsView {
-    pub fn new(settings: Arc<Mutex<SettingsStore>>, has_project: bool) -> Self {
+    pub fn new(
+        settings: Arc<Mutex<SettingsStore>>,
+        has_project: bool,
+        project_root: std::path::PathBuf,
+    ) -> Self {
         Self {
             settings,
             defs: definitions(),
             list: ListState::default(),
             scope: if has_project { SettingsScope::Project } else { SettingsScope::Global },
             has_project,
+            project_root,
         }
     }
 
@@ -141,16 +147,21 @@ impl SettingsView {
                     InputPurpose::SetTextSetting { key: def.key.to_string(), scope: self.scope },
                 )))
             }
-            Kind::Soon => {
-                if def.key == "enabledAgents" {
-                    let has_project = self.has_project;
-                    return ViewResult::Push(Box::new(super::EnabledAgentsView::new(
-                        self.settings.clone(),
-                        has_project,
-                    )));
+            Kind::Sub => match def.key {
+                "enabledAgents" => ViewResult::Push(Box::new(super::EnabledAgentsView::new(
+                    self.settings.clone(),
+                    self.has_project,
+                ))),
+                "enabledNotificationSounds" => ViewResult::Push(Box::new(super::SoundsView::new(
+                    self.settings.clone(),
+                    self.has_project,
+                ))),
+                "inferenceProviders" => {
+                    ViewResult::Push(Box::new(super::InferProvidersView::new(self.settings.clone())))
                 }
-                ViewResult::Stay
-            }
+                "hooks" => ViewResult::Push(Box::new(super::HooksView::new(self.project_root.clone()))),
+                _ => ViewResult::Stay,
+            },
         }
     }
 }
@@ -208,7 +219,7 @@ impl View for SettingsView {
                     let cur = values[i].as_str().unwrap_or("");
                     if cur.is_empty() { "(unset) ✎".to_string() } else { format!("{cur} ✎") }
                 }
-                Kind::Soon => "soon".to_string(),
+                Kind::Sub => "›".to_string(),
             };
             let scope_mark = match scopes[i] {
                 Some(SettingsScope::Project) => "ᵖ ",
@@ -217,7 +228,7 @@ impl View for SettingsView {
             };
             let label = format!("{scope_mark}{}", def.label);
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(buf, row_rect, &label, &value_text, ctx.theme, selected, !matches!(def.kind, Kind::Soon));
+            draw_kv_row(buf, row_rect, &label, &value_text, ctx.theme, selected, true);
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
 
