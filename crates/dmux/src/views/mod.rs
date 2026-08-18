@@ -48,6 +48,11 @@ pub enum AppCmd {
     OpenProjectAt(String),
     /// Reopen a worktree and resume its agent's most recent session.
     ResumeWorktree { path: String, slug: String, agent: String },
+    /// Merge flow: entry point, then execution (message = commit-first), then
+    /// post-merge cleanup.
+    MergeStart(usize),
+    MergeExec { slug: String, message: Option<String> },
+    MergeCleanup { slug: String },
     LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },
     SetSetting { key: String, value: serde_json::Value, scope: dmux_core::SettingsScope },
 }

@@ -4,6 +4,7 @@
 //! damage-diffed, synchronized-output frames.
 
 mod agents;
+mod git;
 mod input;
 mod keys;
 mod layout;
@@ -81,6 +82,15 @@ struct NewWindowCtx {
     worktree_path: Option<String>,
     /// Working directory for the new window (default: project root).
     cwd: Option<String>,
+}
+
+/// Results from background tasks (git merges, later inference) delivered
+/// into the main loop.
+#[derive(Debug)]
+enum AppMsg {
+    MergeDone { slug: String, branch: String, result: Result<String, String> },
+    /// Async filesystem work finished; recompute anything derived from disk.
+    RefreshDerived,
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -280,6 +290,7 @@ struct App {
     /// Last press (time, col, row) for double-click detection.
     last_press: Option<(Instant, u16, u16)>,
     log_path: PathBuf,
+    app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
 }
 
 async fn run(
@@ -305,6 +316,7 @@ async fn run(
     let mut resize_rx = dmux_host::spawn_resize_watcher();
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    let (app_tx, mut app_rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
 
     let caps = host.caps();
     tracing::info!(
@@ -395,6 +407,7 @@ async fn run(
         drag_moved: false,
         last_press: None,
         log_path: cli.log_file.clone().unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
+        app_tx,
     };
     app.refresh_welcome_cards();
 
@@ -480,6 +493,9 @@ async fn run(
             }
             Some(new_size) = resize_rx.recv() => {
                 app.handle_resize(new_size);
+            }
+            Some(msg) = app_rx.recv() => {
+                app.handle_app_msg(msg);
             }
             _ = sigterm.recv() => break,
             _ = sighup.recv() => break,
@@ -766,6 +782,32 @@ impl App {
             }
             Tag::NewWindow(ctx) => {
                 self.finish_new_window(*ctx, &reply);
+            }
+        }
+    }
+
+    fn handle_app_msg(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::MergeDone { slug, branch, result } => match result {
+                Ok(target) => {
+                    self.views.push(Box::new(ConfirmView::new(
+                        "Merge complete",
+                        format!("'{branch}' merged into '{target}'. Remove worktree and close pane?"),
+                        "Clean up",
+                        false,
+                        AppCmd::MergeCleanup { slug },
+                    )));
+                    self.dirty = true;
+                }
+                Err(err) => {
+                    tracing::warn!(%err, %branch, "merge failed");
+                    let short: String = err.chars().take(80).collect();
+                    self.toast(format!("✗ {short}"));
+                }
+            },
+            AppMsg::RefreshDerived => {
+                self.refresh_welcome_cards();
+                self.dirty = true;
             }
         }
     }
@@ -1289,6 +1331,9 @@ impl App {
                     let hide_label = if p.hidden { "Show pane" } else { "Hide pane" };
                     items.push(MenuItem::new("Rename pane", "^b r", AppCmd::PromptRename(idx)));
                     items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
+                    if p.worktree_path.is_some() {
+                        items.push(MenuItem::new("Merge worktree…", "", AppCmd::MergeStart(idx)));
+                    }
                     items.push(MenuItem::new("Copy path", "", AppCmd::CopyPath(idx)));
                     items.push(MenuItem::new("Open in editor", "", AppCmd::OpenInEditor(idx)));
                     items.push(MenuItem::new("Close pane", "^b x", AppCmd::ConfirmClose(idx)).danger());
@@ -1389,6 +1434,65 @@ impl App {
                         worktree_path: Some(path.clone()),
                         cwd: Some(path),
                     });
+                }
+            }
+            AppCmd::MergeStart(idx) => {
+                let Some(p) = self.panes.get(idx) else { return true };
+                let Some(wt) = p.worktree_path.clone() else { return true };
+                let slug = p.slug.clone();
+                let wt_path = PathBuf::from(&wt);
+                let branch = git::current_branch(&wt_path).unwrap_or_else(|| slug.clone());
+                let root_branch = git::current_branch(&self.project_root).unwrap_or_else(|| "HEAD".into());
+                if git::worktree_dirty(&wt_path) {
+                    self.views.push(Box::new(InputView::new(
+                        format!("Commit & merge '{branch}' into '{root_branch}'"),
+                        "",
+                        "commit message for uncommitted changes",
+                        InputPurpose::MergeCommitMessage { slug },
+                    )));
+                } else {
+                    self.views.push(Box::new(ConfirmView::new(
+                        "Merge worktree",
+                        format!("Merge '{branch}' into '{root_branch}'?"),
+                        "Merge",
+                        false,
+                        AppCmd::MergeExec { slug, message: None },
+                    )));
+                }
+                self.dirty = true;
+            }
+            AppCmd::MergeExec { slug, message } => {
+                let Some(p) = self.panes.iter().find(|p| p.slug == slug) else { return true };
+                let Some(wt) = p.worktree_path.clone() else { return true };
+                let wt_path = PathBuf::from(&wt);
+                let branch = git::current_branch(&wt_path).unwrap_or_else(|| slug.clone());
+                let root = self.project_root.clone();
+                let tx = self.app_tx.clone();
+                self.toast(format!("Merging '{branch}'…"));
+                tokio::task::spawn_blocking(move || {
+                    let result = git::commit_and_merge(&root, &wt_path, &branch, message.as_deref());
+                    let _ = tx.send(AppMsg::MergeDone { slug, branch, result });
+                });
+            }
+            AppCmd::MergeCleanup { slug } => {
+                if let Some(idx) = self.panes.iter().position(|p| p.slug == slug) {
+                    let wt = self.panes[idx].worktree_path.clone();
+                    let branch = wt
+                        .as_deref()
+                        .map(PathBuf::from)
+                        .and_then(|p| git::current_branch(&p))
+                        .unwrap_or_else(|| slug.clone());
+                    self.close_pane(idx);
+                    if let Some(wt) = wt {
+                        let root = self.project_root.clone();
+                        let wt_path = PathBuf::from(wt);
+                        let tx = self.app_tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let _ = git::cleanup_worktree(&root, &wt_path, &branch);
+                            let _ = tx.send(AppMsg::RefreshDerived);
+                        });
+                    }
+                    self.toast("Worktree merged and cleaned up");
                 }
             }
             AppCmd::RenamePane { idx, name } => self.rename_pane(idx, name),

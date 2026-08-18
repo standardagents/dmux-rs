@@ -10,6 +10,8 @@ pub enum InputPurpose {
     RenamePane(usize),
     SetTextSetting { key: String, scope: dmux_core::SettingsScope },
     AddProjectPath,
+    /// Commit message before merging a dirty worktree.
+    MergeCommitMessage { slug: String },
 }
 
 pub struct InputView {
@@ -47,6 +49,10 @@ impl InputView {
                 }
                 AppCmd::OpenProjectAt(value)
             }
+            InputPurpose::MergeCommitMessage { slug } => AppCmd::MergeExec {
+                slug: slug.clone(),
+                message: Some(if value.is_empty() { "dmux: worktree changes".into() } else { value }),
+            },
         };
         ViewResult::CloseAnd(cmd)
     }
