@@ -78,6 +78,7 @@ pub struct LogicalPane {
     /// An LLM classification is in flight for this pane.
     pub analysis_inflight: bool,
     pub worktree_path: Option<String>,
+    pub pane_pid: u32,
     pub agent: Option<String>,
     /// Feeds Phase 1 agent detection.
     #[allow(dead_code)]
@@ -161,10 +162,11 @@ pub struct TmuxPaneInfo {
     pub alternate_on: bool,
     pub current_command: String,
     pub window_name: String,
+    pub pane_pid: u32,
 }
 
 pub fn list_panes_command() -> String {
-    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}'".to_string()
+    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}\u{1}#{pane_pid}'".to_string()
 }
 
 pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
@@ -174,6 +176,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
         if parts.len() < 8 {
             continue;
         }
+        let pane_pid = parts.get(8).and_then(|s| s.parse().ok()).unwrap_or(0);
         let (Some(pane), Some(window)) = (
             parts[0].strip_prefix('%').and_then(|s| s.parse().ok()).map(PaneId),
             parts[1].strip_prefix('@').and_then(|s| s.parse().ok()).map(WindowId),
@@ -189,6 +192,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
             alternate_on: parts[5] == "1",
             current_command: parts[6].to_string(),
             window_name: parts[7].to_string(),
+            pane_pid,
         });
     }
     out
@@ -250,6 +254,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
+            pane_pid: info.pane_pid,
             agent: config_pane.and_then(|p| p.agent.clone()),
             current_command: info.current_command.clone(),
         });

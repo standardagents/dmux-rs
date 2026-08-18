@@ -5,12 +5,14 @@
 
 mod agents;
 mod git;
+
 mod input;
 mod keys;
 mod layout;
 mod metrics;
 mod render;
 mod session;
+mod tracking;
 mod views;
 mod welcome;
 
@@ -45,6 +47,13 @@ const STATUS_LINGER: Duration = Duration::from_secs(4);
 const FLOOD_WINDOW: Duration = Duration::from_millis(250);
 const FLOOD_BYTES_PER_WINDOW: u64 = 1_000_000;
 const FLOOD_RESEED_EVERY: Duration = Duration::from_millis(500);
+/// Agent process/session tracking sweep cadence (env-overridable for tests).
+fn tracking_interval() -> Duration {
+    static SECS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    Duration::from_secs(*SECS.get_or_init(|| {
+        std::env::var("DMUX_TRACKING_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30)
+    }))
+}
 
 #[derive(ClapParser, Debug)]
 #[command(name = "dmux-rs", about = "dmux control-mode renderer prototype")]
@@ -93,6 +102,8 @@ enum AppMsg {
     RefreshDerived,
     /// LLM pane classification finished.
     AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
+    /// Agent process tracking sweep finished.
+    TrackingDone(Vec<(String, tracking::AgentObservation)>),
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -295,6 +306,8 @@ struct App {
     app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
     inference_primary: Option<dmux_infer::Target>,
     inference_backup: Option<dmux_infer::Target>,
+    tracking_inflight: bool,
+    last_tracking: Instant,
 }
 
 async fn run(
@@ -414,6 +427,8 @@ async fn run(
         app_tx,
         inference_primary: None,
         inference_backup: None,
+        tracking_inflight: false,
+        last_tracking: Instant::now(),
     };
     {
         let s = app.settings.lock().unwrap();
@@ -459,6 +474,9 @@ async fn run(
             .min()
             .map(tokio::time::Instant::from_std);
         let status_deadline = app.status_clear_at.map(tokio::time::Instant::from_std);
+        let tracking_deadline = (!app.tracking_inflight
+            && app.panes.iter().any(|p| p.agent.is_some() && p.pane_pid > 0))
+        .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking_interval()));
         let deadline = [
             render_deadline,
             settle_deadline,
@@ -467,6 +485,7 @@ async fn run(
             anim_deadline,
             injection_deadline,
             status_deadline,
+            tracking_deadline,
         ]
         .into_iter()
         .flatten()
@@ -825,6 +844,29 @@ impl App {
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
                 self.dirty = true;
+            }
+            AppMsg::TrackingDone(observations) => {
+                self.tracking_inflight = false;
+                let mut changed = false;
+                for (slug, obs) in observations {
+                    if let Some(rec) = self.config.panes.iter_mut().find(|r| r.slug == slug) {
+                        let mut update = |key: &str, value: serde_json::Value| {
+                            if rec.extra.get(key) != Some(&value) {
+                                rec.extra.insert(key.to_string(), value);
+                                changed = true;
+                            }
+                        };
+                        update("activeAgent", serde_json::Value::String(obs.agent_id.to_string()));
+                        update("agentProcessId", serde_json::Value::from(obs.agent_pid));
+                        if let Some(session) = &obs.session_id {
+                            update("agentSessionId", serde_json::Value::String(session.clone()));
+                        }
+                    }
+                }
+                if changed {
+                    self.save_config();
+                    tracing::debug!("agent tracking updated config records");
+                }
             }
             AppMsg::AnalysisDone { pane, verdict } => {
                 let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
@@ -1620,8 +1662,17 @@ impl App {
                     let s = self.settings.lock().unwrap();
                     s.get_str("permissionMode").unwrap_or("").to_string()
                 };
+                // Prefer the exact captured session id when tracking saved one.
+                let session_id = self
+                    .config
+                    .panes
+                    .iter()
+                    .find(|r| r.slug == slug)
+                    .and_then(|r| r.extra.get("agentSessionId"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 let cmd = agents::agent(&agent)
-                    .and_then(|def| agents::compose_resume(def, &mode))
+                    .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
                     .unwrap_or_else(|| agent.clone());
                 self.create_window(NewWindowCtx {
                     display: slug.clone(),
@@ -2081,6 +2132,28 @@ impl App {
             bytes.push(b'\r');
             for chunk in bytes.chunks(256) {
                 let _ = self.client.send(input::send_keys_hex(pane, chunk));
+            }
+        }
+        if !self.tracking_inflight
+            && now.duration_since(self.last_tracking) >= tracking_interval()
+        {
+            let targets: Vec<(String, u32)> = self
+                .panes
+                .iter()
+                .filter(|p| p.agent.is_some() && p.pane_pid > 0 && p.status != PaneStatus::Dead)
+                .map(|p| (p.slug.clone(), p.pane_pid))
+                .collect();
+            if !targets.is_empty() {
+                tracing::debug!(count = targets.len(), "tracking sweep starting");
+                self.tracking_inflight = true;
+                self.last_tracking = now;
+                let tx = self.app_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let observations = tracking::observe(&targets);
+                    let _ = tx.send(AppMsg::TrackingDone(observations));
+                });
+            } else {
+                self.last_tracking = now;
             }
         }
         if let Some(at) = self.status_clear_at {

@@ -30,6 +30,8 @@ pub struct AgentDef {
     pub default_enabled: bool,
     /// Resume-most-recent-session command template ({permissions} substituted).
     pub resume_template: Option<&'static str>,
+    /// Exact-session resume template ({sessionId} + {permissions}).
+    pub resume_session_template: Option<&'static str>,
 }
 
 pub const AGENTS: &[AgentDef] = &[
@@ -45,6 +47,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: Some("--dangerously-skip-permissions"),
         default_enabled: true,
         resume_template: Some("claude --continue{permissions}"),
+        resume_session_template: Some("claude --resume {sessionId}{permissions}"),
     },
     AgentDef {
         id: "opencode",
@@ -58,6 +61,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: true,
         resume_template: None,
+        resume_session_template: None,
     },
     AgentDef {
         id: "codex",
@@ -71,6 +75,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: Some("--dangerously-bypass-approvals-and-sandbox"),
         default_enabled: true,
         resume_template: Some("codex resume --last{permissions}"),
+        resume_session_template: Some("codex resume {sessionId}{permissions}"),
     },
     AgentDef {
         id: "grok",
@@ -84,6 +89,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: Some("grok --continue{permissions}"),
+        resume_session_template: None,
     },
     AgentDef {
         id: "cline",
@@ -97,6 +103,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: None,
+        resume_session_template: None,
     },
     AgentDef {
         id: "gemini",
@@ -110,6 +117,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: Some("--yolo"),
         default_enabled: false,
         resume_template: Some("gemini --resume latest{permissions}"),
+        resume_session_template: None,
     },
     AgentDef {
         id: "qwen",
@@ -123,6 +131,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: Some("--yolo"),
         default_enabled: false,
         resume_template: Some("qwen --continue{permissions}"),
+        resume_session_template: None,
     },
     AgentDef {
         id: "amp",
@@ -136,6 +145,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: None,
+        resume_session_template: None,
     },
     AgentDef {
         id: "pi",
@@ -149,6 +159,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: Some("pi --continue{permissions}"),
+        resume_session_template: None,
     },
     AgentDef {
         id: "cursor",
@@ -162,6 +173,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: None,
+        resume_session_template: None,
     },
     AgentDef {
         id: "copilot",
@@ -175,6 +187,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: Some("copilot --continue{permissions}"),
+        resume_session_template: None,
     },
     AgentDef {
         id: "crush",
@@ -188,6 +201,7 @@ pub const AGENTS: &[AgentDef] = &[
         flags_bypass: None,
         default_enabled: false,
         resume_template: None,
+        resume_session_template: None,
     },
 ];
 
@@ -230,6 +244,16 @@ pub fn compose_resume(def: &AgentDef, mode: &str) -> Option<String> {
     let template = def.resume_template?;
     let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
     Some(template.replace("{permissions}", &flags))
+}
+
+/// Resume an exact captured session (TS `resumeSessionCommandTemplate`),
+/// falling back to resume-latest when unsupported.
+pub fn compose_resume_session(def: &AgentDef, session_id: Option<&str>, mode: &str) -> Option<String> {
+    if let (Some(template), Some(id)) = (def.resume_session_template, session_id) {
+        let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
+        return Some(template.replace("{sessionId}", id).replace("{permissions}", &flags));
+    }
+    compose_resume(def, mode)
 }
 
 /// Compose the in-pane shell command that reads the prompt file, deletes it,
