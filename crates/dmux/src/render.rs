@@ -31,6 +31,19 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         draw_pane_title(buf, scene, pane, i, rect, clicks);
         pane.term.render_into(buf, rect);
         clicks.add(rect, ClickTarget::PaneBody(i));
+        // Right-edge border in the gutter column: separates neighboring panes
+        // and marks the pane's edge against the empty background.
+        let border_x = rect.right();
+        if border_x < buf.cols() {
+            let border_fg = if i == scene.focused { scene.theme.accent_soft } else { scene.theme.border };
+            for row in rect.y.saturating_sub(TITLE_ROWS)..rect.bottom() {
+                buf.set(
+                    border_x,
+                    row,
+                    Cell { ch: '│', fg: border_fg, bg: Color::Default, ..Cell::default() },
+                );
+            }
+        }
         if pane.paused || pane.throttled || pane.status == PaneStatus::Dead || pane.term.display_offset() > 0 {
             draw_pane_badge(buf, scene.theme, pane, rect);
         }

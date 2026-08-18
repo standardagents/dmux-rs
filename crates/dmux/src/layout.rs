@@ -64,11 +64,10 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
     let grid_cols = best.0;
     let grid_rows = n16.div_ceil(grid_cols);
 
-    // Cap column width at the configured max; center the capped grid in the
-    // content area instead of stretching panes to fill it.
+    // Cap column width at the configured max. The grid anchors to the left
+    // edge (beside the sidebar) and flows rightward as panes are added.
     let cell_w = (content_w / grid_cols).min(max_w + GUTTER);
-    let grid_total = cell_w * grid_cols;
-    let x0 = content_x + (content_w.saturating_sub(grid_total)) / 2;
+    let x0 = content_x;
     let pane_h = rows / grid_rows;
     for i in 0..n16 {
         let gc = i % grid_cols;
@@ -114,14 +113,14 @@ mod tests {
     }
 
     #[test]
-    fn single_pane_capped_and_centered() {
+    fn single_pane_capped_and_left_anchored() {
         let l = compute(300, 50, 1);
         assert_eq!(l.panes.len(), 1);
         let r = l.panes[0];
         // Width capped at the comfort max, not stretched to 300.
         assert_eq!(r.w, DEFAULT_MAX_WIDTH);
-        // Centered within the content area.
-        assert!(r.x > SIDEBAR_WIDTH + 20, "should be centered, got x={}", r.x);
+        // Anchored beside the sidebar, flowing rightward.
+        assert_eq!(r.x, SIDEBAR_WIDTH + GUTTER);
         assert_eq!(r.y, TITLE_ROWS);
     }
 
