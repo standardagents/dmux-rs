@@ -21,9 +21,9 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Animated working indicators (spinners; replaces 90ms tmux title rewrites) | ✅ |
 | Config write-back of pane records (TS-compatible, unknown fields preserved) | ✅ |
 | Status heuristics port (`paneAttentionHeuristics` on live grids) | ✅ (dmux-status crate + LLM escalation ✅) |
-| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ⏳ (dmux-infer ✅: openai-compatible/responses/anthropic + failover + PaneAnalyzer stage-1, settings/credentials compatible; native notifications via helper ✅; ChatGPT + Cohere protocols ✅) |
-| Merge flows / PR creation / AI merge / conflict pane | ⏳ (core merge flow ✅: dirty-check → commit → merge → cleanup, conflict-abort; PR ✅, conflict pane ✅ (agent-assisted); AI auto-merge ✅) |
-| Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ⏳ (agent resume + exact-session tracking ✅: process-tree walk, lsof/proc fd inspection, agentSessionId capture, --resume <id>) |
+| LLM status escalation (`dmux-infer`), attention service, macOS helper client | ✅ (dmux-infer: openai-compatible/responses/anthropic + failover + PaneAnalyzer stage-1, settings/credentials compatible; native notifications via helper ✅; ChatGPT + Cohere protocols ✅) |
+| Merge flows / PR creation / AI merge / conflict pane | ✅ (core merge flow: dirty-check → commit → merge → cleanup, conflict-abort; PR ✅, conflict pane ✅ (agent-assisted); AI auto-merge ✅) |
+| Resume/reopen branches, agent crash restore (`paneAgentTracking` port) | ✅ (agent resume + exact-session tracking: process-tree walk, lsof/proc fd inspection, agentSessionId capture, --resume <id>) |
 | Selection + OSC 52 copy (dmux-side selection, tmux buffer mirror) | ✅ (drag select + copy, Shift override, app-mouse drag forwarding; word-select ✅ / search ✅ (^b /)) |
 | Kitty keyboard passthrough INTO panes (pane-requested flags) | ✅ (disambiguate CSI-u when the pane pushed flags) |
 | Images (kitty graphics translation) | ⏳ |
@@ -33,7 +33,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 
-- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ✅ (welcome resume cards), prReview ⏳ (PR opens `gh pr create` in a pane), diffPeek ✅ (worktree diff pager incl. untracked), enabledAgents ✅, inferenceSetup ✅ (status view: targets + detected credentials; editing stays JSON), notificationSounds ✅ (checklist), hooks ✅ (inventory view; `worktree_created` + `pre_merge` execute), progress ⏳ (generic progress ✅ as toast/badge), projectSelect ✅ (add-project + sidebar grouping)
+- Popups → native overlays: newPane ✅, settings ✅, kebab/pane menu ✅, confirm ✅, input ✅, shortcuts ✅, agentChoice (superseded by allocator ✅), logs ✅, merge (core) ✅, reopenWorktree ✅ (welcome resume cards), prReview ✂ (superseded: PR runs interactively via `gh pr create` in a pane), diffPeek ✅ (worktree diff pager incl. untracked), enabledAgents ✅, inferenceSetup ✅ (status view: targets + detected credentials; editing stays JSON), notificationSounds ✅ (checklist), hooks ✅ (inventory view; `worktree_created` + `pre_merge` execute), progress ✂ (superseded by toasts/badges — no blocking progress dialogs), projectSelect ✅ (add-project + sidebar grouping)
 - Actions (18): view/focus ✅, close ✅, rename ✅, hide/show ✅, duplicate ✅ (same agent + prompt, fresh worktree), merge ✅, PR ✅, copyPath ✅, openInEditor ✅, toggleAutopilot ✅ (per-pane, TS `autopilot` config field, LLM option-dialog auto-accept), test/dev runners ✅ (`run_test`/`run_dev` hooks in a terminal pane via pane menu)
 - Hooks: all eleven lifecycle hooks ✅ — `worktree_created` (in-pane bootstrap), `pre_merge` (veto on nonzero exit), `post_merge`, `before_pane_create`/`pane_created`, `before_pane_close`/`pane_closed`, `before_worktree_remove`/`worktree_removed` (detached, DMUX_* env), `run_test`/`run_dev` (menu runners)
 - Notification sounds: catalog port (ids ↔ `.caf` resources) ✅, helper `soundName` payload ✅, rotation among enabled set ✅
