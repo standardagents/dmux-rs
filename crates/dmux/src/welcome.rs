@@ -138,14 +138,60 @@ pub struct WelcomeCard {
     pub cmd: AppCmd,
 }
 
-/// Block wordmark, drawn with a vertical accent gradient.
-const WORDMARK: &[&str] = &[
-    "     █                                ",
-    "  ▄▄▄█  ▄▄▄▄▄▄▄  ▄    ▄  ▄▄  ▄▄",
-    " █   █  █  █  █  █    █   ▀▄▄▀ ",
-    " █   █  █  █  █  █    █   ▄▀▀▄ ",
-    "  ▀▀▀▀  ▀  ▀  ▀   ▀▀▀▀▀  ▀▀  ▀▀",
+/// The dmux letterforms (same bitmap as the TS welcome pane / brand SVG).
+/// Rendered double-height with horizontal scanline banding in brand orange —
+/// the terminal translation of the slatted wordmark in dmux.svg.
+const WORDMARK_BITMAP: &[&str] = &[
+    "    ███                                     ",
+    "    ███                                     ",
+    "███████  █████████████   ███  ███  ███  ███",
+    "██   ██  ███  ███  ███   ███  ███   ██████ ",
+    "██   ██  ███  ███  ███   ███  ███    ████  ",
+    "██   ██  ███  ███  ███   ███  ███   ██████ ",
+    "███████  ███  ███  ███   ████████  ███  ███",
 ];
+
+/// Brand orange gradient, light at the top → #ea6400 at the base.
+const BRAND_RAMP: &[(u8, u8, u8)] = &[
+    (255, 158, 80),
+    (252, 143, 60),
+    (248, 128, 40),
+    (244, 114, 20),
+    (240, 104, 8),
+    (236, 100, 2),
+    (234, 100, 0),
+];
+
+/// Draw the wordmark at (x, y). Each bitmap row becomes two screen rows; the
+/// second row of upper pairs is a half-block, cutting horizontal slits that
+/// tighten toward the baseline — the brand's scanline slats.
+fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool) {
+    let subs: u16 = if doubled { 2 } else { 1 };
+    for (bi, line) in WORDMARK_BITMAP.iter().enumerate() {
+        let (r, g, b) = BRAND_RAMP[bi.min(BRAND_RAMP.len() - 1)];
+        let color = Color::Rgb(r, g, b);
+        for sub in 0..subs {
+            let row = y + bi as u16 * subs + sub;
+            // Slit rows: the second half of each pair in the upper 2/3 of the
+            // mark renders as upper-half blocks, leaving a horizontal gap.
+            let slit = doubled && sub == 1 && bi < WORDMARK_BITMAP.len() * 2 / 3;
+            let mut cx = x;
+            for ch in line.chars() {
+                if ch != ' ' {
+                    let glyph = if slit { '▀' } else { '█' };
+                    buf.set(
+                        cx,
+                        row,
+                        Cell { ch: glyph, fg: color, bg: Color::Default, ..Cell::default() },
+                    );
+                } else if clip.contains(cx, row) {
+                    buf.set(cx, row, Cell::default());
+                }
+                cx += 1;
+            }
+        }
+    }
+}
 
 pub fn build_cards(
     installed: &std::collections::HashSet<&'static str>,
@@ -204,38 +250,39 @@ pub fn draw(
     scene: &WelcomeScene<'_>,
     clicks: &mut ClickMap<ClickTarget>,
 ) {
-    if content.w < 40 || content.h < 16 {
+    if content.w < 48 || content.h < 16 {
         return;
     }
-    let gradient = [theme.accent, theme.accent, theme.accent_soft, theme.accent_soft, theme.text_faint];
 
     // Vertical layout: wordmark + tagline, card grid, agent strip, footer.
     let cards_rows = scene.cards.len().div_ceil(2) as u16 * 4;
-    let total_h = WORDMARK.len() as u16 + 3 + cards_rows + 4;
+    let wm_bitmap_rows = WORDMARK_BITMAP.len() as u16;
+    // Double-height brand mark when there's room; single height on short hosts.
+    let doubled = content.h >= wm_bitmap_rows * 2 + 3 + cards_rows + 6;
+    let wm_rows = if doubled { wm_bitmap_rows * 2 } else { wm_bitmap_rows };
+    let total_h = wm_rows + 3 + cards_rows + 4;
     let top = content.y + (content.h.saturating_sub(total_h)) / 2;
 
     // Wordmark centered, with a clearance zone so the rain never crowds the
     // wordmark or tagline.
-    let wm_w = WORDMARK.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let wm_w = WORDMARK_BITMAP.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
     let wm_x = content.x + (content.w.saturating_sub(wm_w)) / 2;
     let clearance = Rect::new(
         wm_x.saturating_sub(4),
         top.saturating_sub(1),
         wm_w + 8,
-        WORDMARK.len() as u16 + 4,
+        wm_rows + 4,
     )
     .intersect(&content);
     buf.fill(clearance, &Cell::default());
-    for (i, line) in WORDMARK.iter().enumerate() {
-        let color = gradient[i.min(gradient.len() - 1)];
-        buf.draw_text(wm_x, top + i as u16, line, color, Color::Default, AttrFlags::BOLD, content);
-    }
+    draw_wordmark(buf, wm_x, top, content, doubled);
+
     let tagline = "The Agent Multiplexer";
     let tag_x = content.x + (content.w.saturating_sub(tagline.chars().count() as u16)) / 2;
-    buf.draw_text(tag_x, top + WORDMARK.len() as u16 + 1, tagline, theme.text_dim, Color::Default, AttrFlags::ITALIC, content);
+    buf.draw_text(tag_x, top + wm_rows + 1, tagline, theme.text_dim, Color::Default, AttrFlags::ITALIC, content);
 
     // Card grid, two columns.
-    let grid_top = top + WORDMARK.len() as u16 + 3;
+    let grid_top = top + wm_rows + 3;
     let grid_w = content.w.min(96).saturating_sub(4);
     let grid_x = content.x + (content.w.saturating_sub(grid_w)) / 2;
     let card_w = grid_w / 2 - 1;

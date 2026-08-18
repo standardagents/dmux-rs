@@ -127,15 +127,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &cols.to_string(),
                 "-y",
                 &rows.to_string(),
+                // A fresh session holds ONLY the keepalive window, so dmux
+                // boots straight into the welcome screen, not a bare shell.
+                "-n",
+                session::KEEPALIVE_NAME,
+                "sleep 2147483647",
             ])
             .status()?;
         if !status.success() {
             eprintln!("failed to create tmux session '{session_name}' in {}", project_root.display());
             std::process::exit(1);
         }
-        let _ = tmux_base(&cli)
-            .args(["select-pane", "-t", &format!("{session_name}:0.0"), "-T", "terminal-1"])
-            .status();
         eprintln!("created session '{session_name}' for {}", project_root.display());
     }
 
@@ -694,9 +696,9 @@ impl App {
                 tracing::info!(?pid, own_sizing = self.own_sizing, "controller check");
                 if !self.own_sizing {
                     self.toast("observe mode: TS dmux owns this session");
-                } else {
-                    self.ensure_keepalive();
                 }
+                // Keepalive creation happens in apply_pane_list, after the
+                // pane listing has revealed whether one already exists.
                 self.apply_window_sizes();
             }
             Tag::NewWindow(ctx) => {
@@ -716,7 +718,16 @@ impl App {
 
     fn apply_pane_list(&mut self, reply: &Reply) {
         let infos = session::parse_pane_list(reply);
-        self.keepalive_present = infos.iter().any(|i| i.window_name == session::KEEPALIVE_NAME);
+        // Track (and dedupe) keepalive windows.
+        let keepalives: Vec<_> = infos
+            .iter()
+            .filter(|i| i.window_name == session::KEEPALIVE_NAME)
+            .map(|i| i.window)
+            .collect();
+        self.keepalive_present = !keepalives.is_empty();
+        for extra in keepalives.iter().skip(1) {
+            let _ = self.client.send(format!("kill-window -t {extra}"));
+        }
         // Forget closing-markers for panes tmux no longer lists.
         let listed: std::collections::HashSet<PaneId> = infos.iter().map(|i| i.pane).collect();
         self.closing.retain(|p| listed.contains(p));
