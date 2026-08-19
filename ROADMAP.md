@@ -41,6 +41,27 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 - Remote-pane-action queue (`M-M` + SIGUSR2) ✂ — replaced by real global keys
 - Welcome/spacer panes ✂ — native empty-state view instead
 
+## Rendering-fidelity contract
+
+`scripts/fidelity.sh` proves dmux-rs paints panes **cell-for-cell identical
+(chars + fg + bg) to tmux's grid**, through the full pipeline (control mode →
+VT → compositor → host emission), on both the live-output path and the seed
+path (restart), over a corpus of hostile content (BCE bands, page
+backgrounds, scrolled bands, wide/ambiguous glyphs, emoji, styles, dynamic
+palettes). Run it after any change to dmux-vt / dmux-compositor / the seed
+path. Documented, deliberate divergences from tmux's own client rendering:
+
+- **Scroll-compacted trailing backgrounds**: tmux drops trailing BCE
+  backgrounds when scrolled lines are compacted (its own clients render them
+  default); we keep them, like real terminals do.
+- **OSC 10/11/4 pane palettes**: tmux themes only written cells; we theme
+  erased cells too (real-terminal semantics — themed shells look right).
+  The palette cannot be recovered across a dmux restart (tmux doesn't expose
+  it); it returns with the app's next repaint.
+- **tmux-level theming** (`window-style`, `pane-border-status`, status bar)
+  is not reproduced — dmux owns pane chrome. `pane-border-status` is forced
+  off on dmux windows (it steals a content row inside the window).
+
 ## Key-command policy (the "toes" problem)
 
 Panes run vim/emacs/Claude Code/fzf — they own the keyboard. Rules:

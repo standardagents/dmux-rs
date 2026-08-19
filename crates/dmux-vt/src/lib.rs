@@ -11,6 +11,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as VtColor, CursorShape, NamedColor, Processor};
@@ -336,6 +337,7 @@ impl PaneTerm {
         let display_offset = self.term.grid().display_offset() as i32;
         let selection = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
         let grid = self.term.grid();
+        let colors = self.term.colors();
         let max_rows = clip.h.min(self.rows);
         let max_cols = clip.w.min(self.cols);
         for vrow in 0..max_rows {
@@ -346,7 +348,7 @@ impl PaneTerm {
                 if cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     continue;
                 }
-                let mut converted = convert_cell(cell);
+                let mut converted = convert_cell(cell, colors);
                 if let Some(range) = &selection {
                     if range.contains(Point::new(line, Column(vcol as usize))) {
                         converted.attrs.toggle(AttrFlags::INVERSE);
@@ -498,7 +500,24 @@ fn convert_color(color: VtColor) -> Color {
     }
 }
 
-fn convert_cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
+/// Resolve a color through the pane's dynamic palette (OSC 4/10/11):
+/// themed shells and editors redefine default/indexed colors per pane, and
+/// tmux renders those as explicit RGB — so must we, or the theme is lost.
+fn resolve_color(colors: &Colors, color: VtColor) -> Color {
+    let slot: Option<usize> = match color {
+        VtColor::Named(n) => Some(n as usize),
+        VtColor::Indexed(i) => Some(i as usize),
+        VtColor::Spec(_) => None,
+    };
+    if let Some(s) = slot {
+        if let Some(rgb) = colors[s] {
+            return Color::Rgb(rgb.r, rgb.g, rgb.b);
+        }
+    }
+    convert_color(color)
+}
+
+fn convert_cell(cell: &alacritty_terminal::term::cell::Cell, colors: &Colors) -> Cell {
     let mut attrs = AttrFlags::empty();
     let f = cell.flags;
     attrs.set(AttrFlags::BOLD, f.contains(Flags::BOLD));
@@ -517,8 +536,8 @@ fn convert_cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
     Cell {
         ch: cell.c,
         zerowidth: cell.zerowidth().map(|zw| zw.to_vec().into_boxed_slice()),
-        fg: convert_color(cell.fg),
-        bg: convert_color(cell.bg),
+        fg: resolve_color(colors, cell.fg),
+        bg: resolve_color(colors, cell.bg),
         attrs,
         link: 0,
     }

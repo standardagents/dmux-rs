@@ -809,11 +809,21 @@ impl App {
                 }
                 true
             }
-            CcEvent::WindowClose(w) | CcEvent::UnlinkedWindowClose(w) => {
+            CcEvent::WindowClose(w) => {
                 for p in self.panes.iter_mut().filter(|p| p.tmux_window == w) {
                     p.status = PaneStatus::Dead;
                     p.dirty = true;
                 }
+                self.request_reconcile();
+                true
+            }
+            CcEvent::UnlinkedWindowClose(_) => {
+                // A window closed in a session OURS is not attached to
+                // (grouped sessions, other users' sessions). Our windows are
+                // always linked to our session, so this is never one of our
+                // panes dying — marking Dead here false-kills healthy panes
+                // whenever session groups churn. Reconcile picks up any real
+                // topology change.
                 self.request_reconcile();
                 true
             }
@@ -1227,6 +1237,12 @@ impl App {
             match self.panes.iter_mut().find(|p| p.tmux_pane == new_pane.tmux_pane) {
                 Some(existing) => {
                     existing.tmux_window = new_pane.tmux_window;
+                    // tmux still lists the pane: whatever marked it dead was
+                    // wrong (or it recovered) — resurrect.
+                    if existing.status == PaneStatus::Dead {
+                        existing.status = PaneStatus::Idle;
+                        existing.dirty = true;
+                    }
                     if (existing.cols, existing.rows) != (new_pane.cols, new_pane.rows) {
                         existing.cols = new_pane.cols;
                         existing.rows = new_pane.rows;
@@ -1321,6 +1337,13 @@ impl App {
             }
             if self.sized_windows.insert(p.tmux_window) {
                 let _ = self.client.send(format!("set-option -w -t {} window-size manual", p.tmux_window));
+                // User configs with `pane-border-status` steal a row INSIDE
+                // the window, making the pane one row shorter than the window
+                // we size — the bottom row of every pane would be invisible.
+                // Scoped to our windows; the user's other sessions keep it.
+                let _ = self
+                    .client
+                    .send(format!("set-option -w -t {} pane-border-status off", p.tmux_window));
             }
             let _ = self.client.send(format!("resize-window -t {} -x {} -y {}", p.tmux_window, rect.w, rect.h));
         }

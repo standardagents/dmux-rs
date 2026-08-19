@@ -118,6 +118,14 @@ impl LogicalPane {
         let mut seed: Vec<u8> = Vec::new();
         let count = reply.lines.len();
         for (i, line) in reply.lines.iter().enumerate() {
+            // Rows revealed by scrolling (long history seeds) BCE-fill with
+            // whatever background the previous line's open SGR carried —
+            // residue tmux's grid doesn't have on rows the capture leaves
+            // empty or short. Erase each row under a default pen first,
+            // save/restoring the cursor AND the carried SGR around it
+            // (DECSC/DECRC) so tmux's lazy cross-line SGR continuity — which
+            // the -N capture format relies on — is preserved exactly.
+            seed.extend_from_slice(b"\x1b7\x1b[0m\x1b[2K\x1b8");
             seed.extend_from_slice(line);
             // No trailing-cell reconstruction here: the capture itself is
             // faithful because seed_command uses -N (background-filled blanks
@@ -131,6 +139,12 @@ impl LogicalPane {
             }
         }
         self.term.advance(&seed);
+        // The replay leaves the pen (current SGR) at whatever the capture
+        // happened to end with — not the app's real pen state. Reset it so
+        // later pen-dependent output (e.g. a BCE 2J clear) doesn't fill with
+        // a stale color; apps that clear with a background set it right
+        // before, so default is the faithful assumption.
+        self.term.advance(b"\x1b[0m");
         if let Some((x, y)) = cursor {
             self.term.advance(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
         }
