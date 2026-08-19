@@ -423,7 +423,6 @@ struct App {
     reexec_after: Option<PathBuf>,
     want_exit: bool,
     own_sizing: bool,
-    sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
     /// Welcome-screen state (shown when no panes are visible).
     welcome_cards: Vec<welcome::WelcomeCard>,
     welcome_sel: usize,
@@ -602,7 +601,6 @@ async fn run(
         reexec_after: None,
         want_exit: false,
         own_sizing: false,
-        sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
         welcome_sel: 0,
         welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
@@ -1936,16 +1934,23 @@ impl App {
             if (p.cols, p.rows) == (rect.w, rect.h) || rect.is_empty() {
                 continue;
             }
-            if self.sized_windows.insert(p.tmux_window) {
-                let _ = self.client.send(format!("set-option -w -t {} window-size manual", p.tmux_window));
-                // User configs with `pane-border-status` steal a row INSIDE
-                // the window, making the pane one row shorter than the window
-                // we size — the bottom row of every pane would be invisible.
-                // Scoped to our windows; the user's other sessions keep it.
-                let _ = self
-                    .client
-                    .send(format!("set-option -w -t {} pane-border-status off", p.tmux_window));
-            }
+            // Re-asserted on EVERY sizing pass, not once per window (#30):
+            // a window that reverts to `window-size latest` (option lost,
+            // set-option racing window creation, tmux/client interference)
+            // tracks some client's geometry — testers saw 442-column,
+            // 20-row terminals inside full-height panes (#30), oversized
+            // restored widths (#24), and a one-row-short bottom (#25,
+            // latest-mode height = client minus status row). The commands
+            // are idempotent and only sent while the size is wrong, so the
+            // converged steady state sends nothing.
+            let _ = self.client.send(format!("set-option -w -t {} window-size manual", p.tmux_window));
+            // User configs with `pane-border-status` steal a row INSIDE
+            // the window, making the pane one row shorter than the window
+            // we size — the bottom row of every pane would be invisible.
+            // Scoped to our windows; the user's other sessions keep it.
+            let _ = self
+                .client
+                .send(format!("set-option -w -t {} pane-border-status off", p.tmux_window));
             let _ = self.client.send(format!("resize-window -t {} -x {} -y {}", p.tmux_window, rect.w, rect.h));
         }
     }
