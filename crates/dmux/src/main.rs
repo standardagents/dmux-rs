@@ -553,9 +553,13 @@ async fn run(
             let s = app.settings.lock().unwrap();
             s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
         };
+        let poll_secs: u64 = std::env::var("DMUX_UPDATE_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                 let r = repo.clone();
                 let tag = tokio::task::spawn_blocking(move || updater::latest_tag(&r)).await;
                 let Ok(Ok(tag)) = tag else { continue };
