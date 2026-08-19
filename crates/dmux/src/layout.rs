@@ -69,7 +69,18 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
 
     // Cap column width at the configured max. The grid anchors to the left
     // edge (beside the sidebar) and flows rightward as panes are added.
-    let cell_w = (content_w / grid_cols).min(max_w + GUTTER);
+    let natural_w = content_w / grid_cols;
+    let cell_w = natural_w.min(max_w + GUTTER);
+    // Division remainder when the width cap is NOT in play (#43): the last
+    // grid column absorbs it, exactly like the last row absorbs the height
+    // remainder — otherwise up to grid_cols-1 unpainted canvas columns
+    // strip along the terminal's right edge. A capped grid deliberately
+    // leaves canvas instead.
+    let w_remainder = if cell_w == natural_w {
+        content_w - grid_cols * cell_w
+    } else {
+        0
+    };
     let x0 = content_x;
     let pane_h = rows / grid_rows;
     for i in 0..n16 {
@@ -83,12 +94,13 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
         } else {
             pane_h
         };
+        let w_extra = if gc == grid_cols - 1 { w_remainder } else { 0 };
         // Reserve the title bar; body starts below it. One column of spacing
         // between horizontally adjacent panes.
         let body = Rect::new(
             x,
             y + TITLE_ROWS,
-            cell_w.saturating_sub(GUTTER),
+            cell_w.saturating_sub(GUTTER) + w_extra,
             h.saturating_sub(TITLE_ROWS),
         );
         layout.panes.push(body);
@@ -104,6 +116,24 @@ pub fn compute(cols: u16, rows: u16, n: usize) -> Layout {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn last_column_absorbs_width_remainder() {
+        // #43: content 159 wide, 2 columns → 79+79 left a one-column strip
+        // at the terminal's right edge. The last column absorbs it: each
+        // pane's border column (right()) tiles the space and the final
+        // border lands on the terminal's last column.
+        let l = super::compute(200, 50, 4);
+        assert_eq!(l.panes.len(), 4);
+        let rightmost = l.panes.iter().map(|p| p.right()).max().unwrap();
+        assert_eq!(rightmost, 199, "border column reaches the final column");
+        let bottom = l.panes.iter().map(|p| p.bottom()).max().unwrap();
+        assert_eq!(bottom, 50, "last row reaches the final row");
+        // Capped grids still leave deliberate canvas: enormous width, one
+        // pane — the comfort cap wins over edge-filling.
+        let capped = super::compute(400, 50, 1);
+        assert!(capped.panes[0].right() < 399);
+    }
+
     use super::*;
 
     #[test]
