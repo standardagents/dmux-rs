@@ -3465,6 +3465,27 @@ impl App {
 
 /// React to a pane emulator side effect. Returns clipboard text to forward
 /// (handled by the caller once the pane borrow ends).
+/// Trim leading spinner/status glyphs from a pane-reported title. Agents
+/// animate these in their OSC/ESC-k titles; dmux renders its own status
+/// glyph, so keeping the app's copy showed two spinners per sidebar row
+/// (#9). Strips the known spinner families plus separators, never the name.
+fn strip_status_glyphs(title: &str) -> &str {
+    title.trim_start_matches(|c: char| {
+        matches!(c,
+            // Claude/Codex asterisk-family frames.
+            '✳' | '✻' | '✽' | '✶' | '✢' | '✣' | '✤' | '✥' | '✦' | '✧' | '∗' | '*' | '·' |
+            // Circle/clock spinner families and status dots.
+            '◐' | '◓' | '◑' | '◒' | '◴' | '◷' | '◶' | '◵' | '◜' | '◝' | '◞' | '◟' |
+            '⏺' | '●' | '○' | '◌' | '◍' | '◉' | '⊙' |
+            // dmux's own status glyphs, echoed back by some shells.
+            '△' | '✗' |
+            // Variation selectors that ride along with emoji forms.
+            '\u{fe0e}' | '\u{fe0f}'
+        ) || ('\u{2800}'..='\u{28ff}').contains(&c) // braille spinners
+            || c.is_whitespace()
+    })
+}
+
 fn handle_side_effect(
     client: &Client<Tag>,
     pane: &mut LogicalPane,
@@ -3479,7 +3500,10 @@ fn handle_side_effect(
         TermSideEffect::Title(title) => {
             // Auto-naming: shell panes without a human-chosen name follow the
             // pane's own title reports (zsh's ESC k command/cwd names, OSC 2).
-            let title = title.trim();
+            // Agents (Claude Code, Codex) prefix titles with their own
+            // animated spinner glyph; the sidebar already draws a status
+            // glyph, so a verbatim title showed two spinners per row (#9).
+            let title = strip_status_glyphs(title.trim());
             // An LLM-chosen name beats raw shell titles (which are usually
             // just the cwd); human renames beat both (auto_name = false).
             if !title.is_empty() && (pane.title.is_empty() || pane.auto_name) && !pane.llm_named {
@@ -3749,6 +3773,19 @@ mod tests {
         assert_eq!(ts.len(), 24);
         assert!(ts.ends_with("Z"));
         assert!(ts.starts_with("20"));
+    }
+
+    #[test]
+    fn reported_titles_lose_their_leading_spinners() {
+        // Claude Code animates an asterisk-family glyph in its titles.
+        assert_eq!(strip_status_glyphs("✳ dmux-rs"), "dmux-rs");
+        assert_eq!(strip_status_glyphs("✻ ✳ dmux-rs"), "dmux-rs");
+        // Braille spinner frames.
+        assert_eq!(strip_status_glyphs("⠹ building"), "building");
+        // Plain titles pass through, including mid-title glyphs.
+        assert_eq!(strip_status_glyphs("cargo build ✳ hot"), "cargo build ✳ hot");
+        // A title that is ONLY a spinner strips to empty (then ignored).
+        assert_eq!(strip_status_glyphs("✳"), "");
     }
 
     #[test]
