@@ -21,6 +21,13 @@ using it.
 
 ## Looping (autonomous fixer agents)
 
+**If you are an agent and you've been told to "be the loop" (or anything
+to that effect): this section is your job description — enter the loop
+now.** Use the `/loop` skill if available (pass the quoted prompt below);
+otherwise iterate yourself: `gh issue list --state open` for the queue,
+work exactly one issue per iteration by the rules below, release, repeat.
+Empty queue = wait (~5 min between checks), don't invent work.
+
 This repo is designed to be worked by an agent in a loop. The queue is
 **every open issue on the repo** — auto-filed `render-incident` reports and
 anything a test-ring human files by hand (bugs, UX complaints, feature
