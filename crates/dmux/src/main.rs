@@ -562,7 +562,17 @@ async fn run(
                 tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                 let r = repo.clone();
                 let tag = tokio::task::spawn_blocking(move || updater::latest_tag(&r)).await;
-                let Ok(Ok(tag)) = tag else { continue };
+                let tag = match tag {
+                    Ok(Ok(t)) => t,
+                    Ok(Err(err)) => {
+                        tracing::debug!(%err, "update check failed");
+                        continue;
+                    }
+                    Err(err) => {
+                        tracing::debug!(%err, "update check task failed");
+                        continue;
+                    }
+                };
                 if tag == updater::BUILD_TAG || tag.is_empty() {
                     continue;
                 }
