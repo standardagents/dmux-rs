@@ -82,6 +82,10 @@ struct Cli {
     /// Log file (default: ~/.dmux/logs/dmux-rs.log).
     #[arg(long)]
     log_file: Option<PathBuf>,
+    /// Replay a render-verify incident file offline and report whether the
+    /// recorded stream still diverges from the stored tmux capture.
+    #[arg(long, value_name = "FILE")]
+    replay_incident: Option<PathBuf>,
 }
 
 /// Context for a window dmux-rs created and is waiting on.
@@ -150,6 +154,26 @@ enum Tag {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    if let Some(path) = &cli.replay_incident {
+        let text = std::fs::read_to_string(path)?;
+        match verify::replay_incident(&text) {
+            None => {
+                eprintln!("could not parse incident file (wrong format?)");
+                std::process::exit(2);
+            }
+            Some(diffs) if diffs.is_empty() => {
+                println!("replay clean: recorded stream matches the stored tmux capture");
+                return Ok(());
+            }
+            Some(diffs) => {
+                println!("replay diverges: {} cells", diffs.len());
+                for d in diffs.iter().take(20) {
+                    println!("  {d}");
+                }
+                std::process::exit(1);
+            }
+        }
+    }
     init_logging(&cli)?;
 
     if std::env::var_os("TMUX").is_some() {
@@ -321,6 +345,10 @@ struct App {
     /// DMUX_VERIFY=1: shadow-compare settled panes against tmux's grid and
     /// write incident bundles on mismatch.
     verify_enabled: bool,
+    /// Fault injection for verifying the verifier (DMUX_FAULT_DROP_BYTES=N):
+    /// silently drop the first N pane-output bytes, simulating a
+    /// stream-consumption bug the shadow verifier must catch.
+    fault_drop: usize,
     own_sizing: bool,
     sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
     /// Welcome-screen state (shown when no panes are visible).
@@ -456,6 +484,7 @@ async fn run(
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
         verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v == "1").unwrap_or(false),
+        fault_drop: std::env::var("DMUX_FAULT_DROP_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
         own_sizing: false,
         sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
@@ -756,6 +785,13 @@ impl App {
         match ev {
             CcEvent::Output { pane, data } | CcEvent::ExtendedOutput { pane, data, .. } => {
                 self.metrics.record_input(data.len());
+                let data = if self.fault_drop > 0 {
+                    let n = data.len().min(self.fault_drop);
+                    self.fault_drop -= n;
+                    data[n..].to_vec()
+                } else {
+                    data
+                };
                 let mut clipboard_out: Vec<String> = Vec::new();
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     let now = Instant::now();
@@ -765,17 +801,11 @@ impl App {
                     }
                     p.window_bytes += data.len() as u64;
 
-                    if self.verify_enabled {
-                        p.recent_output.extend_from_slice(&data);
-                        if p.recent_output.len() > verify::RING_CAP {
-                            let cut = p.recent_output.len() - verify::RING_CAP;
-                            p.recent_output.drain(..cut);
-                        }
-                    }
                     if let Some(buffer) = &mut p.reseed_buffer {
+                        // Recorded when the seed drains it (finish_reseed).
                         buffer.push(data);
                     } else {
-                        let effects = p.term.advance(&data);
+                        let effects = p.advance_recorded(&data);
                         for effect in effects {
                             if let Some(text) = handle_side_effect(&self.client, p, effect) {
                                 clipboard_out.push(text);
@@ -928,7 +958,7 @@ impl App {
                         // Seed failed: stop buffering so live output flows again.
                         if let Some(buffered) = p.reseed_buffer.take() {
                             for chunk in buffered {
-                                let _ = p.term.advance(&chunk);
+                                let _ = p.advance_recorded(&chunk);
                             }
                         }
                         self.dirty = true;
@@ -1279,6 +1309,7 @@ impl App {
         let adopted = session::adopt_panes(Some(&self.config), &infos);
 
         for mut new_pane in adopted {
+            new_pane.record_stream = self.verify_enabled;
             match self.panes.iter_mut().find(|p| p.tmux_pane == new_pane.tmux_pane) {
                 Some(existing) => {
                     existing.tmux_window = new_pane.tmux_window;

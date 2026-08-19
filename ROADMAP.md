@@ -43,12 +43,25 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 
 ## Rendering-fidelity contract
 
-**Shadow verifier** (`DMUX_VERIFY=1`): in any real session, settled panes are
-periodically compared cell-for-cell against tmux's grid; a mismatch toasts
-and writes `~/.dmux/incidents/render-*.txt` with both grids plus the raw
-`%output` ring (base64 — replay with `base64 -d | griddump COLS ROWS raw`).
-Every real-world artifact becomes a reproducible regression test. Run with
-it on when chasing rendering bugs.
+**Shadow verifier** (`DMUX_VERIFY=1`) — the detect→reproduce→fix→lock loop:
+
+1. **Detect**: settled panes are compared cell-for-cell against tmux's grid
+   (tmux parses the same pty stream independently — it is the oracle). A
+   mismatch toasts and writes `~/.dmux/incidents/render-*.txt`: the diffs,
+   both grids, the escaped capture, and the pane's seed-anchored raw byte
+   recording (replaying it from an empty grid reproduces the live grid
+   deterministically; `replay-deterministic:` in the header says whether the
+   recording overflowed).
+2. **Reproduce**: `dmux-rs --replay-incident <file>` replays the recorded
+   bytes offline and re-diffs against the stored capture — no tmux, no
+   session, fully deterministic. Bisect the stream to isolate the sequence.
+3. **Fix**: patch dmux-vt / the seed path until the replay is clean.
+4. **Lock**: copy the incident to `crates/dmux/tests/corpus/*.incident` —
+   the `corpus_incidents_replay_clean` test replays every corpus file in CI
+   forever.
+
+`DMUX_FAULT_DROP_BYTES=N` injects a synthetic stream-consumption fault to
+self-test the whole loop.
 
 
 `scripts/fidelity.sh` proves dmux-rs paints panes **cell-for-cell identical

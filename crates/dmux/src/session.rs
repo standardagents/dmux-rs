@@ -83,8 +83,15 @@ pub struct LogicalPane {
     pub analysis_inflight: bool,
     /// Auto-accept option dialogs when the LLM classifies one (TS autopilot).
     pub autopilot: bool,
-    /// Raw %output ring buffer (shadow-verify mode only; empty otherwise).
+    /// Record the pane's byte stream for the shadow verifier (set when
+    /// DMUX_VERIFY is on). The recording is anchored at the last seed so a
+    /// replay from empty state reproduces the live grid deterministically.
+    pub record_stream: bool,
+    /// Seed-anchored raw byte recording (verify mode only; empty otherwise).
     pub recent_output: Vec<u8>,
+    /// The recording overflowed its cap since the last seed — replay is no
+    /// longer deterministic from the start.
+    pub ring_truncated: bool,
     /// Last shadow verification of this pane.
     pub last_verify: Option<std::time::Instant>,
     pub worktree_path: Option<String>,
@@ -113,6 +120,10 @@ impl LogicalPane {
     pub fn begin_reseed(&mut self) {
         self.term = PaneTerm::new(self.cols, self.rows, PANE_SCROLLBACK);
         self.reseed_buffer = Some(Vec::new());
+        // A seed resets the stream recording anchor: from here, replaying
+        // the recording from an empty grid reproduces the live grid.
+        self.recent_output.clear();
+        self.ring_truncated = false;
         self.dirty = true;
     }
 
@@ -120,16 +131,30 @@ impl LogicalPane {
     /// output buffered while the capture was in flight.
     pub fn finish_reseed(&mut self, reply: &Reply, cursor: Option<(u16, u16)>) {
         let seed = seed_bytes(reply);
-        self.term.advance(&seed);
+        self.advance_recorded(&seed);
         if let Some((x, y)) = cursor {
-            self.term.advance(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
+            self.advance_recorded(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
         }
         if let Some(buffered) = self.reseed_buffer.take() {
             for chunk in buffered {
-                self.term.advance(&chunk);
+                self.advance_recorded(&chunk);
             }
         }
         self.dirty = true;
+    }
+
+    /// Feed bytes to the emulator, mirroring them into the seed-anchored
+    /// recording when the shadow verifier is on.
+    pub fn advance_recorded(&mut self, bytes: &[u8]) -> Vec<dmux_vt::TermSideEffect> {
+        if self.record_stream {
+            self.recent_output.extend_from_slice(bytes);
+            if self.recent_output.len() > crate::verify::RING_CAP {
+                let cut = self.recent_output.len() - crate::verify::RING_CAP;
+                self.recent_output.drain(..cut);
+                self.ring_truncated = true;
+            }
+        }
+        self.term.advance(bytes)
     }
 
     pub fn seed_command_visible(&self) -> String {
@@ -305,7 +330,9 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
             autopilot: config_pane.and_then(|p| p.autopilot).unwrap_or(false),
+            record_stream: false,
             recent_output: Vec::new(),
+            ring_truncated: false,
             last_verify: None,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,

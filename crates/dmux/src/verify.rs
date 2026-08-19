@@ -114,12 +114,13 @@ pub fn write_incident(
 
     let mut out = String::new();
     out.push_str(&format!(
-        "dmux-rs render-verify incident\npane: {} ({}) {}x{}\ndiffs: {}\n\n== first diffs ==\n",
+        "dmux-rs render-verify incident\npane: {} ({}) {}x{}\ndiffs: {}\nreplay-deterministic: {}\n\n== first diffs ==\n",
         pane.slug,
         pane.tmux_pane,
         pane.cols,
         pane.rows,
-        diffs.len()
+        diffs.len(),
+        if pane.ring_truncated { "no (recording overflowed since last seed)" } else { "yes" }
     ));
     for d in diffs {
         out.push_str(d);
@@ -140,6 +141,124 @@ pub fn write_incident(
     out.push('\n');
     std::fs::write(&path, out)?;
     Ok(path)
+}
+
+/// Parsed incident bundle: (cols, rows, capture lines, raw stream bytes).
+pub fn parse_incident(text: &str) -> Option<(u16, u16, Vec<Vec<u8>>, Vec<u8>)> {
+    let dims_line = text.lines().find(|l| l.starts_with("pane: "))?;
+    let dims = dims_line.rsplit(' ').next()?;
+    let (c, r) = dims.split_once('x')?;
+    let (cols, rows) = (c.parse().ok()?, r.parse().ok()?);
+
+    let cap_start = text.find("== tmux capture")?;
+    let cap_body = &text[text[cap_start..].find('\n')? + cap_start + 1..];
+    let cap_end = cap_body.find("\n== ")?;
+    let capture: Vec<Vec<u8>> = cap_body[..cap_end]
+        .lines()
+        .map(unescape_default)
+        .collect();
+
+    let ring_start = text.find("== raw %output ring")?;
+    let ring_body = &text[text[ring_start..].find('\n')? + ring_start + 1..];
+    let b64: String = ring_body.split_whitespace().collect();
+    let ring = base64_decode(&b64)?;
+    Some((cols, rows, capture, ring))
+}
+
+/// Inverse of `str::escape_default` for the capture section.
+fn unescape_default(line: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push(b'\n'),
+            Some('r') => out.push(b'\r'),
+            Some('t') => out.push(b'\t'),
+            Some('\\') => out.push(b'\\'),
+            Some('\'') => out.push(b'\''),
+            Some('"') => out.push(b'"'),
+            Some('0') => out.push(0),
+            Some('u') => {
+                // \u{XXXX}
+                if chars.next() == Some('{') {
+                    let mut hex = String::new();
+                    for h in chars.by_ref() {
+                        if h == '}' {
+                            break;
+                        }
+                        hex.push(h);
+                    }
+                    if let Ok(v) = u32::from_str_radix(&hex, 16) {
+                        if let Some(ch) = char::from_u32(v) {
+                            let mut buf = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        }
+                    }
+                }
+            }
+            Some('x') => {
+                let h: String = chars.by_ref().take(2).collect();
+                if let Ok(v) = u8::from_str_radix(&h, 16) {
+                    out.push(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for ch in s.bytes() {
+        if ch == b'=' {
+            break;
+        }
+        let v = TABLE.iter().position(|&t| t == ch)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Replay an incident's recorded stream and compare against its stored tmux
+/// capture — the offline form of the live verification. Returns the diffs.
+pub fn replay_incident(text: &str) -> Option<Vec<String>> {
+    let (cols, rows, capture, ring) = parse_incident(text)?;
+    let mut live = PaneTerm::new(cols, rows, 0);
+    live.advance(&ring);
+    let reply = Reply { lines: capture, ok: true, rtt: std::time::Duration::ZERO };
+    let mut scratch = PaneTerm::new(cols, rows, 0);
+    scratch.advance(&seed_bytes(&reply));
+    let a = render_grid(&live, cols, rows);
+    let b = render_grid(&scratch, cols, rows);
+    let mut diffs = Vec::new();
+    for row in 0..rows {
+        for col in 0..cols {
+            let (x, y) = (a.get(col, row), b.get(col, row));
+            let ch_eq = x.ch == y.ch || (x.ch == ' ' && y.ch == '\0') || (x.ch == '\0' && y.ch == ' ');
+            let fg_eq = color_equiv(x.fg, y.fg, &live, 256);
+            let bg_eq = color_equiv(x.bg, y.bg, &live, 257);
+            let tolerated =
+                x.ch == ' ' && y.ch == ' ' && fg_eq && y.bg == Color::Default && x.bg != Color::Default;
+            if !(ch_eq && fg_eq && bg_eq) && !tolerated {
+                diffs.push(format!("({col},{row}) replay={:?} capture={:?}", x.ch, y.ch));
+            }
+        }
+    }
+    Some(diffs)
 }
 
 #[cfg(test)]
@@ -176,6 +295,29 @@ mod tests {
             "",
         ]);
         assert!(compare(&pane, &cap).is_empty(), "identical content must not alert");
+    }
+
+    /// Every incident promoted into tests/corpus/ must replay with zero
+    /// diffs after its fix lands — real-world bugs become permanent
+    /// regression tests.
+    #[test]
+    fn corpus_incidents_replay_clean() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("corpus");
+        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("incident") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read corpus incident");
+            let diffs = replay_incident(&text).expect("parse corpus incident");
+            assert!(
+                diffs.is_empty(),
+                "corpus incident {:?} still diverges: {:?}",
+                path.file_name(),
+                &diffs[..diffs.len().min(5)]
+            );
+        }
     }
 
     #[test]
