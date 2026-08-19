@@ -65,8 +65,7 @@ impl View for ShortcutsView {
             AttrFlags::BOLD,
             inner,
         );
-        let mut y = inner.y + 1;
-        for (key, desc) in LEADER_ROWS {
+        for (y, (key, desc)) in (inner.y + 1..).zip(LEADER_ROWS) {
             if y >= inner.bottom().saturating_sub(1) {
                 break;
             }
@@ -88,7 +87,6 @@ impl View for ShortcutsView {
                 AttrFlags::empty(),
                 inner,
             );
-            y += 1;
         }
 
         let title = if self.kitty {
@@ -105,8 +103,7 @@ impl View for ShortcutsView {
             AttrFlags::BOLD,
             inner,
         );
-        let mut y = inner.y + 1;
-        for (key, desc) in &self.direct {
+        for (y, (key, desc)) in (inner.y + 1..).zip(&self.direct) {
             if y >= inner.bottom().saturating_sub(2) {
                 break;
             }
@@ -120,7 +117,6 @@ impl View for ShortcutsView {
                 AttrFlags::empty(),
                 inner,
             );
-            y += 1;
         }
         buf.draw_text(
             col2,

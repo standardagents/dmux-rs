@@ -170,6 +170,7 @@ impl CellBuffer {
     /// Draw a string at (col,row) with the given style, clipped to `clip`.
     /// Returns the column after the last cell written. Handles wide chars by
     /// writing a WIDE_SPACER continuation cell.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text(
         &mut self,
         mut col: u16,

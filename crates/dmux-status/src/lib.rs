@@ -250,8 +250,7 @@ pub fn is_likely_user_typing(previous: &str, current: &str) -> bool {
         let mostly_shared = line_max > 0 && prefix as f32 / line_max as f32 >= 0.7;
         let probe = if cur.is_empty() { prev } else { cur };
         let prompt_like = prompt_line().is_match(probe) || prompt_continuation().is_match(probe);
-        ((cur.starts_with(prev) || prev.starts_with(cur)) && prompt_like)
-            || (mostly_shared && prompt_like)
+        prompt_like && (cur.starts_with(prev) || prev.starts_with(cur) || mostly_shared)
     })
 }
 

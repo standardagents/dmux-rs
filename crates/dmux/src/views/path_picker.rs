@@ -44,7 +44,9 @@ pub fn read_dir_listing(dir: &Path) -> Result<DirListing, String> {
         let name = item.file_name().to_string_lossy().into_owned();
         // Follow symlinks so a linked directory is enterable; a broken link
         // simply lists as a file (not accepted, but visible).
-        let is_dir = std::fs::metadata(item.path()).map(|m| m.is_dir()).unwrap_or(false);
+        let is_dir = std::fs::metadata(item.path())
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
         entries.push(FsEntry { name, is_dir });
     }
     sort_dirs_first(&mut entries);
@@ -54,14 +56,19 @@ pub fn read_dir_listing(dir: &Path) -> Result<DirListing, String> {
 /// Directories first, each group sorted case-insensitively (#32).
 pub fn sort_dirs_first(entries: &mut [FsEntry]) {
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 }
 
 /// Case-insensitive prefix filter on the typed segment.
 pub fn filter_entries<'a>(entries: &'a [FsEntry], query: &str) -> Vec<&'a FsEntry> {
     let q = query.to_lowercase();
-    entries.iter().filter(|e| e.name.to_lowercase().starts_with(&q)).collect()
+    entries
+        .iter()
+        .filter(|e| e.name.to_lowercase().starts_with(&q))
+        .collect()
 }
 
 /// Interpret typed text as a jump target: absolute paths and `~` (alone or
@@ -106,12 +113,16 @@ impl PathPickerView {
     fn reload(&mut self) {
         self.listing = read_dir_listing(&self.dir);
         self.list = ListState::default();
-        self.input = TextInput::with_value("").placeholder("type to filter · / or ~ jumps · ⏎ opens");
+        self.input =
+            TextInput::with_value("").placeholder("type to filter · / or ~ jumps · ⏎ opens");
     }
 
     fn filtered(&self) -> Vec<FsEntry> {
         match &self.listing {
-            Ok(l) => filter_entries(&l.entries, &self.input.value).into_iter().cloned().collect(),
+            Ok(l) => filter_entries(&l.entries, &self.input.value)
+                .into_iter()
+                .cloned()
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
@@ -155,7 +166,9 @@ impl PathPickerView {
         }
         if self.list.selected == 0 {
             // Synthetic "use this directory" row accepts the current dir.
-            return ViewResult::CloseAnd(AppCmd::OpenProjectAt(self.dir.to_string_lossy().into_owned()));
+            return ViewResult::CloseAnd(AppCmd::OpenProjectAt(
+                self.dir.to_string_lossy().into_owned(),
+            ));
         }
         let rows = self.filtered();
         let Some(entry) = rows.get(self.list.selected - 1).cloned() else {
@@ -172,7 +185,9 @@ impl PathPickerView {
 }
 
 fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 impl View for PathPickerView {
@@ -192,13 +207,27 @@ impl View for PathPickerView {
         let dir_str = self.dir.to_string_lossy();
         let max = inner.w.saturating_sub(2) as usize;
         let shown: String = if dir_str.chars().count() > max {
-            let tail: String =
-                dir_str.chars().rev().take(max.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: String = dir_str
+                .chars()
+                .rev()
+                .take(max.saturating_sub(1))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             format!("…{tail}")
         } else {
             dir_str.into_owned()
         };
-        buf.draw_text(inner.x + 1, inner.y, &shown, ctx.theme.accent, ctx.theme.bg_raised, AttrFlags::BOLD, inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y,
+            &shown,
+            ctx.theme.accent,
+            ctx.theme.bg_raised,
+            AttrFlags::BOLD,
+            inner,
+        );
 
         // Filter input.
         let cursor = self.input.draw(
@@ -210,8 +239,20 @@ impl View for PathPickerView {
 
         // Notice / error line.
         let msg_row = inner.y + 2;
-        if let Some(msg) = self.notice.as_deref().or(self.listing.as_ref().err().map(|e| e.as_str())) {
-            buf.draw_text(inner.x + 1, msg_row, msg, ctx.theme.warn, ctx.theme.bg_raised, AttrFlags::empty(), inner);
+        if let Some(msg) =
+            self.notice
+                .as_deref()
+                .or(self.listing.as_ref().err().map(|e| e.as_str()))
+        {
+            buf.draw_text(
+                inner.x + 1,
+                msg_row,
+                msg,
+                ctx.theme.warn,
+                ctx.theme.bg_raised,
+                AttrFlags::empty(),
+                inner,
+            );
         }
 
         // Entry list: synthetic accept row, then dirs-first entries.
@@ -221,18 +262,33 @@ impl View for PathPickerView {
         self.list.clamp(self.row_count());
         self.list.ensure_visible(visible);
         let mut y = list_top;
-        for (row_i, label, is_dir, dim) in std::iter::once((0usize, "▸ use this directory".to_string(), true, false))
-            .chain(rows.iter().enumerate().map(|(i, e)| {
-                let label = if e.is_dir { format!("{}/", e.name) } else { e.name.clone() };
-                (i + 1, label, e.is_dir, !e.is_dir)
-            }))
-            .skip(self.list.scroll)
-            .take(visible)
+        for (row_i, label, is_dir, dim) in
+            std::iter::once((0usize, "▸ use this directory".to_string(), true, false))
+                .chain(rows.iter().enumerate().map(|(i, e)| {
+                    let label = if e.is_dir {
+                        format!("{}/", e.name)
+                    } else {
+                        e.name.clone()
+                    };
+                    (i + 1, label, e.is_dir, !e.is_dir)
+                }))
+                .skip(self.list.scroll)
+                .take(visible)
         {
             let selected = row_i == self.list.selected;
             let line = Rect::new(inner.x, y, inner.w, 1);
-            let bg = if selected { ctx.theme.bg_selected } else { ctx.theme.bg_raised };
-            buf.fill(line, &dmux_compositor::Cell { bg, ..Default::default() });
+            let bg = if selected {
+                ctx.theme.bg_selected
+            } else {
+                ctx.theme.bg_raised
+            };
+            buf.fill(
+                line,
+                &dmux_compositor::Cell {
+                    bg,
+                    ..Default::default()
+                },
+            );
             let fg = if row_i == 0 {
                 ctx.theme.accent
             } else if is_dir {
@@ -242,7 +298,11 @@ impl View for PathPickerView {
             } else {
                 ctx.theme.text_dim
             };
-            let attrs = if selected || row_i == 0 { AttrFlags::BOLD } else { AttrFlags::empty() };
+            let attrs = if selected || row_i == 0 {
+                AttrFlags::BOLD
+            } else {
+                AttrFlags::empty()
+            };
             buf.draw_text(inner.x + 2, y, &label, fg, bg, attrs, line);
             clicks.add(line, ClickTarget::Overlay(row_i as u64));
             y += 1;
@@ -264,7 +324,12 @@ impl View for PathPickerView {
         draw_hint_bar(
             buf,
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
-            &[("↑↓", "select"), ("⏎", "open/accept"), ("⌫", "parent"), ("esc", "cancel")],
+            &[
+                ("↑↓", "select"),
+                ("⏎", "open/accept"),
+                ("⌫", "parent"),
+                ("esc", "cancel"),
+            ],
             ctx.theme,
         );
         cursor
@@ -338,7 +403,10 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, is_dir: bool) -> FsEntry {
-        FsEntry { name: name.into(), is_dir }
+        FsEntry {
+            name: name.into(),
+            is_dir,
+        }
     }
 
     #[test]
@@ -356,7 +424,11 @@ mod tests {
 
     #[test]
     fn filtering_is_prefix_and_case_insensitive() {
-        let v = vec![entry("Projects", true), entry("pictures", true), entry("music", false)];
+        let v = vec![
+            entry("Projects", true),
+            entry("pictures", true),
+            entry("music", false),
+        ];
         let hits = filter_entries(&v, "p");
         assert_eq!(hits.len(), 2);
         assert!(filter_entries(&v, "MU")[0].name == "music");
@@ -366,9 +438,18 @@ mod tests {
     #[test]
     fn typed_paths_resolve_absolute_and_home() {
         let home = Path::new("/Users/me");
-        assert_eq!(resolve_typed_path("~", home), Some(PathBuf::from("/Users/me")));
-        assert_eq!(resolve_typed_path("~/code", home), Some(PathBuf::from("/Users/me/code")));
-        assert_eq!(resolve_typed_path("/tmp/x", home), Some(PathBuf::from("/tmp/x")));
+        assert_eq!(
+            resolve_typed_path("~", home),
+            Some(PathBuf::from("/Users/me"))
+        );
+        assert_eq!(
+            resolve_typed_path("~/code", home),
+            Some(PathBuf::from("/Users/me/code"))
+        );
+        assert_eq!(
+            resolve_typed_path("/tmp/x", home),
+            Some(PathBuf::from("/tmp/x"))
+        );
         // Relative text is a filter, not a jump.
         assert_eq!(resolve_typed_path("src", home), None);
     }

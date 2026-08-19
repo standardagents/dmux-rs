@@ -114,8 +114,7 @@ impl View for InferProvidersView {
             AttrFlags::BOLD,
             inner,
         );
-        let mut y = inner.y + 4;
-        for (id, env_key, has_key) in &self.providers {
+        for (y, (id, env_key, has_key)) in (inner.y + 4..).zip(&self.providers) {
             if y >= inner.bottom().saturating_sub(2) {
                 break;
             }
@@ -143,7 +142,6 @@ impl View for InferProvidersView {
                 AttrFlags::empty(),
                 inner,
             );
-            y += 1;
         }
         buf.draw_text(
             inner.x + 1,

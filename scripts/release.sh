@@ -32,7 +32,7 @@ SHA=$(git rev-parse --short HEAD)
 # Re-validate: never publish anything the suite or the fidelity harness
 # hasn't blessed (unattended releases have no human eyeball).
 echo "[$VERSION] validating…"
-cargo test --quiet 2>&1 | tail -1
+bash scripts/check.sh
 cargo build --quiet --bin dmux-rs --bin griddump
 bash scripts/fidelity.sh >/dev/null 2>&1 || { echo "fidelity harness FAILED — no release"; exit 1; }
 

@@ -43,15 +43,11 @@ pub fn diff_frame(
             }
             let old = front.get(col, row);
             // A wide char must be re-emitted if either of its two columns changed.
-            let changed = if force_full {
-                true
-            } else if new != old {
-                true
-            } else if new.display_width() == 2 && col + 1 < cols {
-                back.get(col + 1, row) != front.get(col + 1, row)
-            } else {
-                false
-            };
+            let changed = force_full
+                || new != old
+                || (new.display_width() == 2
+                    && col + 1 < cols
+                    && back.get(col + 1, row) != front.get(col + 1, row));
 
             if changed {
                 emitter.move_to(col, row);

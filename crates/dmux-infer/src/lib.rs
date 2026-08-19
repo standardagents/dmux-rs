@@ -187,7 +187,7 @@ fn resolve(home: &std::path::Path, target: &Target) -> Result<Resolved, InferErr
             .clone()
             .ok_or_else(|| InferError::Unsupported("custom (no baseUrl)".into()))?;
         let env_key = target.env_key.clone().unwrap_or_default();
-        let key = lookup_key(home, "custom", &[env_key.clone()])
+        let key = lookup_key(home, "custom", std::slice::from_ref(&env_key))
             .ok_or_else(|| InferError::NoKey("custom".into(), env_key))?;
         return Ok(Resolved {
             base_url: base.trim_end_matches('/').to_string(),

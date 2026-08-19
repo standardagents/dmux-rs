@@ -1,0 +1,28 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install tmux
+        run: brew install tmux
+      - name: Check Rust quality
+        run: scripts/check.sh
+      - name: Build fidelity binaries
+        run: cargo build --workspace --bins
+      - name: Check rendering fidelity
+        run: scripts/fidelity.sh

@@ -83,6 +83,8 @@ pub struct Client<T> {
     pending: Arc<Mutex<VecDeque<PendingSlot<T>>>>,
 }
 
+pub type SpawnedClient<T> = (Client<T>, mpsc::Receiver<CcEvent>, ReplyRouter<T>, Child);
+
 impl<T> Clone for Client<T> {
     fn clone(&self) -> Self {
         Self {
@@ -96,10 +98,7 @@ impl<T> Client<T> {
     /// Spawn `tmux <args...>` (must include `-C` and an attach/new-session).
     /// Returns the client, the ordered event stream, the router, and the
     /// child process handle.
-    pub fn spawn(
-        tmux_bin: &str,
-        args: &[String],
-    ) -> Result<(Client<T>, mpsc::Receiver<CcEvent>, ReplyRouter<T>, Child), CcError> {
+    pub fn spawn(tmux_bin: &str, args: &[String]) -> Result<SpawnedClient<T>, CcError> {
         let mut child = Command::new(tmux_bin)
             .args(args)
             .stdin(Stdio::piped())
