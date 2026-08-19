@@ -11,9 +11,12 @@ using it.
    compared cell-for-cell against tmux's authoritative grid. tmux parses the
    same pty stream independently; it is the oracle.
 2. **Report** — a divergence auto-files an issue here (label
-   `render-incident`) with the build, both grids, first diffs, and a secret
-   gist holding the full incident bundle including the seed-anchored byte
-   stream. Deduped: one issue per pane per process lifetime.
+   `render-incident`): a short human summary in the body, with all evidence
+   stored as raw files in one secret gist (`incident.txt` bundle with the
+   seed-anchored byte stream, `our-grid.txt`, `tmux-capture.txt`,
+   `first-diffs.txt`). Evidence is never inlined in the issue markdown —
+   GitHub transforms it; raw gist files are byte-exact. Deduped: one issue
+   per pane per process lifetime.
 3. **Fix** — the fixer agent (see below) reproduces offline and patches.
 4. **Ship** — `scripts/release.sh` publishes a build; every running head
    polls releases and hot-swaps itself in place (tmux keeps the session; the
@@ -108,7 +111,10 @@ ROADMAP.md, validate identically, and keep `main` releasable.
 
 For each open issue with label `render-incident`:
 
-1. Download the gist linked in the issue body → `incident.txt`.
+1. Download the bundle from the gist linked in the issue body:
+   `gh gist view <gist-id> --filename incident.txt --raw > incident.txt`
+   (the gist holds multiple raw evidence files; issues filed before
+   v0.1.4 have a single-file gist — plain `--raw` works there).
 2. Reproduce: `cargo run --bin dmux-rs -- --replay-incident incident.txt`
    (exit 1 + cell diffs = reproduced; bisect the byte stream to isolate the
    escape sequence at fault).

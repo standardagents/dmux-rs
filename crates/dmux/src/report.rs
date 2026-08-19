@@ -1,8 +1,11 @@
 //! Automatic incident reporting: a shadow-verifier mismatch files a real
-//! GitHub issue on the dmux-rs repo — description, both grids, and a secret
-//! gist holding the full incident bundle (the byte stream is too big for an
-//! issue body). First-party users have repo access, so plain `gh` auth is
-//! the only credential needed. Filed issues are remembered locally
+//! GitHub issue on the dmux-rs repo. The issue body is a short human
+//! summary only — all machine-read evidence (bundle, both grids, diffs)
+//! lives as separate raw files in one secret gist, because GitHub renders
+//! issue markdown with its own transformations while raw gist files are
+//! served byte-exact. (True issue attachments are web-UI-only; the API has
+//! no way to add them.) First-party users have repo access, so plain `gh`
+//! auth is the only credential needed. Filed issues are remembered locally
 //! (`~/.dmux/issues-filed.json`) for the sidebar.
 
 use std::path::{Path, PathBuf};
@@ -63,37 +66,41 @@ fn run_gh(args: &[&str], stdin: Option<&str>) -> Result<String, String> {
     }
 }
 
-/// Compose the issue body: human description first, machine evidence after.
+/// Compose the issue body: a short human summary. No grid or diff blobs —
+/// GitHub transforms markdown content (even inside code fences), so
+/// everything machine-read lives as raw files in the linked gist.
 pub fn issue_body(
     build: &str,
     slug: &str,
     cols: u16,
     rows: u16,
     diffs: &[String],
-    our_grid: &str,
-    tmux_grid_escaped: &str,
     gist_url: &str,
     deterministic: bool,
 ) -> String {
-    let clip = |s: &str, max: usize| -> String {
-        if s.len() > max {
-            format!("{}\n… (truncated)", &s[..max])
-        } else {
-            s.to_string()
-        }
-    };
+    let first = diffs
+        .first()
+        .map(|d| d.split(' ').next().unwrap_or("").to_string())
+        .unwrap_or_else(|| "-".into());
     format!(
         "**Automatic render-divergence report** (shadow verifier)\n\n\
          The live dmux-rs grid diverged from tmux's authoritative grid for the same pane. \
-         The full incident bundle (including the seed-anchored byte stream) is in the linked gist; \
-         replay it offline with `dmux-rs --replay-incident <file>`.\n\n\
+         All evidence is stored as raw files in the linked secret gist — fetch them raw \
+         (byte-exact); nothing machine-read is inlined here because GitHub transforms \
+         issue markdown.\n\n\
          | field | value |\n|---|---|\n\
          | build | `{build}` |\n| pane | `{slug}` ({cols}x{rows}) |\n\
-         | differing cells | {n} |\n| deterministic replay | {det} |\n\n\
-         **Incident bundle:** {gist_url}\n\n\
-         <details><summary>First differing cells</summary>\n\n```\n{diffs}\n```\n</details>\n\n\
-         <details><summary>Our grid (text)</summary>\n\n```\n{ours}\n```\n</details>\n\n\
-         <details><summary>tmux grid (capture -epqN, escaped)</summary>\n\n```\n{tmux}\n```\n</details>\n\n\
+         | differing cells | {n} |\n| first diff at | `{first}` |\n\
+         | deterministic replay | {det} |\n\n\
+         **Incident gist:** {gist_url}\n\n\
+         Gist files:\n\
+         - `incident.txt` — full bundle (both grids, diffs, seed-anchored byte stream)\n\
+         - `our-grid.txt` — dmux-rs grid text\n\
+         - `tmux-capture.txt` — tmux `capture-pane -epqN` output, escaped\n\
+         - `first-diffs.txt` — differing cells\n\n\
+         Fetch + replay:\n\
+         `gh gist view <gist-id> --filename incident.txt --raw > incident.txt`\n\
+         `dmux-rs --replay-incident incident.txt`\n\n\
          ---\nFix loop: `--replay-incident` to reproduce → patch → add the bundle to \
          `crates/dmux/tests/corpus/` → release. Filed automatically; deduped per pane per process lifetime.",
         build = build,
@@ -101,12 +108,32 @@ pub fn issue_body(
         cols = cols,
         rows = rows,
         n = diffs.len(),
+        first = first,
         det = if deterministic { "yes" } else { "no (recording overflowed)" },
         gist_url = gist_url,
-        diffs = clip(&diffs.join("\n"), 4_000),
-        ours = clip(our_grid, 12_000),
-        tmux = clip(tmux_grid_escaped, 12_000),
     )
+}
+
+/// Write the evidence set as individual files (raw gist files → byte-exact
+/// downloads). Fixed names: the fixer runbook fetches `incident.txt` by
+/// filename. Returns the paths in gist-argument order.
+fn write_evidence_files(
+    dir: &Path,
+    incident_path: &Path,
+    our_grid: &str,
+    tmux_grid_escaped: &str,
+    diffs: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let bundle = dir.join("incident.txt");
+    std::fs::copy(incident_path, &bundle).map_err(|e| format!("copy incident: {e}"))?;
+    let ours = dir.join("our-grid.txt");
+    std::fs::write(&ours, our_grid).map_err(|e| e.to_string())?;
+    let tmux = dir.join("tmux-capture.txt");
+    std::fs::write(&tmux, tmux_grid_escaped).map_err(|e| e.to_string())?;
+    let first_diffs = dir.join("first-diffs.txt");
+    std::fs::write(&first_diffs, diffs.join("\n")).map_err(|e| e.to_string())?;
+    Ok(vec![bundle, ours, tmux, first_diffs])
 }
 
 pub struct Filed {
@@ -141,7 +168,8 @@ pub fn file_issue(
 
     if let Some(dir) = dry_run_dir {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let body = issue_body(build, slug, cols, rows, diffs, our_grid, tmux_grid_escaped, "dry-run://gist", deterministic);
+        write_evidence_files(&dir.join("evidence"), incident_path, our_grid, tmux_grid_escaped, diffs)?;
+        let body = issue_body(build, slug, cols, rows, diffs, "dry-run://gist", deterministic);
         std::fs::write(dir.join("issue-title.txt"), &title).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("issue-body.md"), &body).map_err(|e| e.to_string())?;
         let issue = FiledIssue {
@@ -160,21 +188,25 @@ pub fn file_issue(
     // GitHub App, lands on the shared Project, and queues locally through
     // outages. Standing approval for automated filing comes from AGENTS.md.
     // Falls back to plain gh for ring members without the CLI.
-    // 1. Secret gist with the full bundle.
-    let gist_url = run_gh(
-        &[
-            "gist",
-            "create",
-            "--desc",
-            &format!("dmux-rs render incident: {slug} ({build})"),
-            &incident_path.to_string_lossy(),
-        ],
-        None,
-    )?;
+    // 1. Secret multi-file gist: bundle + grids + diffs as raw files.
+    static EVIDENCE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let staging = std::env::temp_dir().join(format!(
+        "dmux-rs-evidence-{}-{}",
+        std::process::id(),
+        EVIDENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let evidence = write_evidence_files(&staging, incident_path, our_grid, tmux_grid_escaped, diffs)?;
+    let desc = format!("dmux-rs render incident: {slug} ({build})");
+    let file_args: Vec<String> = evidence.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let mut gist_args: Vec<&str> = vec!["gist", "create", "--desc", &desc];
+    gist_args.extend(file_args.iter().map(|s| s.as_str()));
+    let gist_result = run_gh(&gist_args, None);
+    let _ = std::fs::remove_dir_all(&staging);
+    let gist_url = gist_result?;
     let gist_url = gist_url.lines().last().unwrap_or("").trim().to_string();
 
     // 2. The issue itself.
-    let body = issue_body(build, slug, cols, rows, diffs, our_grid, tmux_grid_escaped, &gist_url, deterministic);
+    let body = issue_body(build, slug, cols, rows, diffs, &gist_url, deterministic);
     let (number, issue_url) = match file_via_issue_cli(repo, &title, &body) {
         Some(Ok((n, url))) => {
             // Label best-effort; `issue new` has no label flag.
@@ -266,4 +298,49 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_inlines_no_machine_content() {
+        // GitHub transforms markdown content; grids/diffs must live only as
+        // raw gist files, never inline in the body.
+        let diffs = vec!["(1,82) live='\u{fffd}' tmux=' '".to_string()];
+        let body = issue_body("build-x", "pane-a", 80, 24, &diffs, "https://gist/x", true);
+        assert!(!body.contains("```"), "no code-fence blobs in the body");
+        assert!(!body.contains("<details>"), "no collapsed grid sections");
+        assert!(body.contains("incident.txt"));
+        assert!(body.contains("our-grid.txt"));
+        assert!(body.contains("https://gist/x"));
+    }
+
+    #[test]
+    fn dry_run_writes_evidence_files() {
+        let dir = std::env::temp_dir().join(format!("dmux-report-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let home = dir.join("home");
+        let incident = dir.join("bundle.txt");
+        // Raw bytes must round-trip exactly, including a partial UTF-8 tail.
+        let raw: &[u8] = b"header\n\xe2\x9c";
+        std::fs::write(&incident, raw).unwrap();
+        let diffs = vec!["(1,2) a b".to_string(), "(3,4) c d".to_string()];
+        let dry = dir.join("out");
+        file_issue(
+            "org/repo", &home, "build-y", "slug-z", 10, 5,
+            &diffs, "our grid\n", "tmux grid\n", &incident, false, Some(&dry),
+        )
+        .unwrap();
+        let ev = dry.join("evidence");
+        assert_eq!(std::fs::read(ev.join("incident.txt")).unwrap(), raw);
+        assert_eq!(std::fs::read_to_string(ev.join("our-grid.txt")).unwrap(), "our grid\n");
+        assert_eq!(std::fs::read_to_string(ev.join("tmux-capture.txt")).unwrap(), "tmux grid\n");
+        assert_eq!(std::fs::read_to_string(ev.join("first-diffs.txt")).unwrap(), "(1,2) a b\n(3,4) c d");
+        let body = std::fs::read_to_string(dry.join("issue-body.md")).unwrap();
+        assert!(!body.contains("our grid"), "grid content must not leak into the body");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
