@@ -73,6 +73,53 @@ fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux
     dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
 }
 
+/// What a key does while the sidebar owns the keyboard (#27). Pure so the
+/// routing contract is testable: global bindings pass through, sidebar
+/// commands map to actions, Escape alone leaves focus, and EVERYTHING else
+/// is consumed as a no-op — arbitrary typing must never fall back into a
+/// pane or silently move focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarKeyAction {
+    /// A global binding (the leader chord or a user keymap entry): handled
+    /// by normal routing, sidebar focus untouched.
+    PassThrough,
+    /// Unknown key: consumed, nothing happens.
+    Ignore,
+    Up,
+    Down,
+    Activate,
+    Menu,
+    Hide,
+    Close,
+    NewAgent,
+    NewTerminal,
+    LeaveFocus,
+}
+
+fn sidebar_key_action(key: &dmux_host::KeyEvent, keymap: &keys::Keymap) -> SidebarKeyAction {
+    use dmux_host::KeyCode;
+    if let Some(chord) = keys::event_chord(key) {
+        if keymap.is_leader(&chord) || keymap.lookup(&chord).is_some() {
+            return SidebarKeyAction::PassThrough;
+        }
+    }
+    if !key.modifiers.is_empty() {
+        return SidebarKeyAction::Ignore;
+    }
+    match key.key {
+        KeyCode::UpArrow | KeyCode::Char('k') => SidebarKeyAction::Up,
+        KeyCode::DownArrow | KeyCode::Char('j') => SidebarKeyAction::Down,
+        KeyCode::Enter => SidebarKeyAction::Activate,
+        KeyCode::Char('m') | KeyCode::Char(' ') => SidebarKeyAction::Menu,
+        KeyCode::Char('h') => SidebarKeyAction::Hide,
+        KeyCode::Char('x') => SidebarKeyAction::Close,
+        KeyCode::Char('n') => SidebarKeyAction::NewAgent,
+        KeyCode::Char('t') => SidebarKeyAction::NewTerminal,
+        KeyCode::Escape => SidebarKeyAction::LeaveFocus,
+        _ => SidebarKeyAction::Ignore,
+    }
+}
+
 /// Sidebar drag-reorder gesture (#26). A press on a row arms a candidate;
 /// crossing onto a different terminal row enters reorder mode (an ordinary
 /// click never does); release commits over a sidebar row or cancels
@@ -2102,20 +2149,25 @@ impl App {
     /// Sidebar-focus navigation. Returns Some(keep_running) when consumed;
     /// any unhandled key drops sidebar focus and routes normally.
     fn handle_sidebar_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
-        use dmux_host::KeyCode;
-        if !key.modifiers.is_empty() {
-            self.sidebar_focused = false;
-            return None;
-        }
-        let len = self.panes.len();
-        match key.key {
-            KeyCode::UpArrow | KeyCode::Char('k') if len > 0 => {
-                self.selected = (self.selected + len - 1) % len;
+        match sidebar_key_action(key, &self.keymap) {
+            SidebarKeyAction::PassThrough => return None,
+            SidebarKeyAction::Ignore => {
+                // Unknown key while the sidebar owns focus (#27): consumed
+                // as a no-op — never forwarded to a pane, focus unchanged.
             }
-            KeyCode::DownArrow | KeyCode::Char('j') if len > 0 => {
-                self.selected = (self.selected + 1) % len;
+            SidebarKeyAction::Up => {
+                let len = self.panes.len();
+                if len > 0 {
+                    self.selected = (self.selected + len - 1) % len;
+                }
             }
-            KeyCode::Enter => {
+            SidebarKeyAction::Down => {
+                let len = self.panes.len();
+                if len > 0 {
+                    self.selected = (self.selected + 1) % len;
+                }
+            }
+            SidebarKeyAction::Activate => {
                 self.sidebar_focused = false;
                 let i = self.selected;
                 if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
@@ -2123,19 +2175,14 @@ impl App {
                 }
                 return Some(self.execute_cmd(AppCmd::FocusPane(i)));
             }
-            KeyCode::Char('m') | KeyCode::Char(' ') => {
-                return Some(self.execute_cmd(AppCmd::OpenPaneMenu));
-            }
-            KeyCode::Char('h') => return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected))),
-            KeyCode::Char('x') => return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected))),
-            KeyCode::Char('n') => return Some(self.execute_cmd(AppCmd::OpenNewAgent)),
-            KeyCode::Char('t') => return Some(self.execute_cmd(AppCmd::NewTerminal)),
-            KeyCode::Escape => {
+            SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
+            SidebarKeyAction::Hide => return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected))),
+            SidebarKeyAction::Close => return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected))),
+            SidebarKeyAction::NewAgent => return Some(self.execute_cmd(AppCmd::OpenNewAgent)),
+            SidebarKeyAction::NewTerminal => return Some(self.execute_cmd(AppCmd::NewTerminal)),
+            SidebarKeyAction::LeaveFocus => {
+                // The ONLY key that intentionally leaves sidebar focus (#27).
                 self.sidebar_focused = false;
-            }
-            _ => {
-                self.sidebar_focused = false;
-                return None;
             }
         }
         self.dirty = true;
@@ -4265,6 +4312,38 @@ mod tests {
         assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
         let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
         assert!(panes_to_break_out(&after).is_empty());
+    }
+
+    #[test]
+    fn sidebar_typing_never_leaks_or_drops_focus() {
+        use dmux_host::{KeyCode, Modifiers};
+        let keymap = keys::Keymap::from_overrides(&Default::default());
+        let key = |k: KeyCode, m: Modifiers| dmux_host::KeyEvent { key: k, modifiers: m };
+        // A word typed while sidebar-focused: every unbound letter is a
+        // no-op — never PassThrough (which would reach a pane), never
+        // LeaveFocus (#27). Letters with sidebar meanings map to actions.
+        for c in "wordy".chars() {
+            let action = sidebar_key_action(&key(KeyCode::Char(c), Modifiers::NONE), &keymap);
+            assert!(
+                !matches!(action, SidebarKeyAction::PassThrough | SidebarKeyAction::LeaveFocus),
+                "typed '{c}' must stay in the sidebar, got {action:?}"
+            );
+        }
+        // Unknown modified keys are consumed too.
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Char('z'), Modifiers::CTRL), &keymap),
+            SidebarKeyAction::Ignore
+        );
+        // The leader chord passes through so global bindings keep working.
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Char('b'), Modifiers::CTRL), &keymap),
+            SidebarKeyAction::PassThrough
+        );
+        // Recognized hotkeys, Enter, and Escape keep their meanings.
+        assert_eq!(sidebar_key_action(&key(KeyCode::Char('j'), Modifiers::NONE), &keymap), SidebarKeyAction::Down);
+        assert_eq!(sidebar_key_action(&key(KeyCode::Enter, Modifiers::NONE), &keymap), SidebarKeyAction::Activate);
+        assert_eq!(sidebar_key_action(&key(KeyCode::Escape, Modifiers::NONE), &keymap), SidebarKeyAction::LeaveFocus);
+        assert_eq!(sidebar_key_action(&key(KeyCode::Char('q'), Modifiers::NONE), &keymap), SidebarKeyAction::Ignore);
     }
 
     #[test]
