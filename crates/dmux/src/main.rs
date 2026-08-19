@@ -48,6 +48,37 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
 const HUD_REFRESH: Duration = Duration::from_millis(500);
 const ANIM_INTERVAL: Duration = Duration::from_millis(120);
+
+/// Absolute animation schedule (#17): the next tick is pinned when armed and
+/// advances only when a tick actually fires. Recomputing `now + interval`
+/// each event-loop pass let any wakeup arriving inside the interval (pane
+/// output, control messages) postpone the tick forever — spinners visibly
+/// stalled under sustained output.
+#[derive(Default)]
+struct AnimClock {
+    next: Option<Instant>,
+}
+
+impl AnimClock {
+    /// The pinned deadline, arming it from `now` if unarmed.
+    fn deadline(&mut self, now: Instant, interval: Duration) -> Instant {
+        *self.next.get_or_insert(now + interval)
+    }
+
+    /// True exactly when the pinned deadline has passed (or the clock was
+    /// never armed); re-arms `interval` from `now` — no catch-up bursts.
+    fn fire_if_due(&mut self, now: Instant, interval: Duration) -> bool {
+        let due = self.next.map(|at| now >= at).unwrap_or(true);
+        if due {
+            self.next = Some(now + interval);
+        }
+        due
+    }
+
+    fn disarm(&mut self) {
+        self.next = None;
+    }
+}
 /// The rain runs at a showier frame rate — cheap, and it's a perf demo.
 const RAIN_INTERVAL: Duration = Duration::from_millis(33);
 const STATUS_LINGER: Duration = Duration::from_secs(4);
@@ -346,6 +377,7 @@ struct App {
     /// row); Esc or focusing a pane hands the keyboard back.
     sidebar_focused: bool,
     anim: u64,
+    anim_clock: AnimClock,
     /// Prompts waiting to be typed into send-keys-transport agent panes.
     pending_injections: Vec<(PaneId, String, Instant)>,
     /// Active native worktree bootstraps, keyed by pane slug; the pane body
@@ -517,6 +549,7 @@ async fn run(
         leader_armed: false,
         sidebar_focused: false,
         anim: 0,
+        anim_clock: AnimClock::default(),
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
         verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v != "0").unwrap_or(true),
@@ -648,10 +681,13 @@ async fn run(
             .filter_map(|p| p.resume_at)
             .min()
             .map(tokio::time::Instant::from_std);
-        let anim_deadline = app.animating().then(|| {
+        let anim_deadline = if app.animating() {
             let interval = if app.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
-            tokio::time::Instant::from_std(now + interval)
-        });
+            Some(tokio::time::Instant::from_std(app.anim_clock.deadline(now, interval)))
+        } else {
+            app.anim_clock.disarm();
+            None
+        };
         let injection_deadline = app
             .pending_injections
             .iter()
@@ -3397,11 +3433,14 @@ impl App {
             }
         }
         if self.animating() {
-            self.anim = self.anim.wrapping_add(1);
-            if self.welcome_active() {
-                self.welcome_rain.step();
+            let interval = if self.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
+            if self.anim_clock.fire_if_due(now, interval) {
+                self.anim = self.anim.wrapping_add(1);
+                if self.welcome_active() {
+                    self.welcome_rain.step();
+                }
+                self.dirty = true;
             }
-            self.dirty = true;
         }
         if self.hud {
             self.dirty = true;
@@ -3927,6 +3966,29 @@ mod tests {
         assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
         let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
         assert!(panes_to_break_out(&after).is_empty());
+    }
+
+    #[test]
+    fn anim_clock_survives_unrelated_wakeups() {
+        // #17: wakeups inside the interval must not postpone the tick.
+        let interval = Duration::from_millis(120);
+        let t0 = Instant::now();
+        let mut clock = AnimClock::default();
+        let armed = clock.deadline(t0, interval);
+        // Ten unrelated event-loop passes, each "30ms later": the pinned
+        // deadline never moves.
+        for i in 1..=10 {
+            let now = t0 + Duration::from_millis(30 * i);
+            assert_eq!(clock.deadline(now, interval), armed, "wakeup {i} moved the deadline");
+        }
+        // Not due before the pin…
+        assert!(!clock.fire_if_due(t0 + Duration::from_millis(119), interval));
+        // …fires at the pin, and re-arms one interval from the fire time.
+        assert!(clock.fire_if_due(t0 + interval, interval));
+        assert_eq!(clock.deadline(t0 + interval, interval), t0 + interval + interval);
+        // Disarm forgets the schedule.
+        clock.disarm();
+        assert!(clock.fire_if_due(t0 + interval, interval), "unarmed clock fires immediately");
     }
 
     #[test]
