@@ -24,9 +24,20 @@ using it.
 **If you are an agent and you've been told to "be the loop" (or anything
 to that effect): this section is your job description — enter the loop
 now.** Use the `/loop` skill if available (pass the quoted prompt below);
-otherwise iterate yourself: `gh issue list --state open` for the queue,
-work exactly one issue per iteration by the rules below, release, repeat.
+otherwise iterate yourself: the queue is the repo's open issues — use the
+team `issue` CLI when installed (`issue list`; it is org-Project-aware and
+queues writes locally), falling back to `gh issue list --state open`.
+Work exactly one issue per iteration by the rules below, release, repeat.
 Empty queue = wait (~5 min between checks), don't invent work.
+
+**Team issue tracking**: this org uses the `issue` CLI / skill
+(`@standardagents/issues`). When present, prefer it over raw `gh` for
+issue work in this repo: search it for related issues before substantial
+work, post progress comments through it as you go, and close through it
+when an issue is done (the runbook's close step counts as the explicit
+direction it requires). It adds issues to the shared org Project and
+survives GitHub outages via its local write queue. Leave assignments,
+labels, claims, and milestones unchanged unless an issue asks.
 
 This repo is designed to be worked by an agent in a loop. The queue is
 **every open issue on the repo** — auto-filed `render-incident` reports and
