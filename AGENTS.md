@@ -39,8 +39,9 @@ issue work in this repo: search it for related issues before substantial
 work, post progress comments through it as you go, and close through it
 when an issue is done (the runbook's close step counts as the explicit
 direction it requires). It adds issues to the shared org Project and
-survives GitHub outages via its local write queue. Leave assignments,
-labels, claims, and milestones unchanged unless an issue asks.
+survives GitHub outages via its local write queue. Leave labels and
+milestones unchanged unless an issue asks; assignment is the exception —
+the loop self-assigns each issue it claims (see loop rules).
 
 **Standing approval (this repo only)**: the `issue` skill normally asks a
 human before creating an issue and wants explicit direction before
@@ -82,6 +83,24 @@ Loop rules:
 - **One issue per iteration.** Reproduce → fix → corpus-lock → validate →
   push to `main` → close the issue with the commit sha. Never batch
   half-finished fixes.
+- **Claim by self-assigning.** When you pick up an issue, assign yourself
+  (`gh issue edit <n> --add-assignee @me`) before starting work, so humans
+  and other agents can see it's taken.
+- **Move the card to "In Progress".** When you claim an issue, move it on
+  the org Project board: `scripts/board.sh <n> "In Progress"`. The script
+  no-ops with a note if the gh token lacks the `project` scope (grant it
+  once with `gh auth refresh -s project`). Closing the issue moves the
+  card to Done via the board's own workflow.
+- **Auto-closing commits.** Include `Fixes #<n>` in the fix commit message
+  so GitHub closes the issue automatically when the commit lands on
+  `main`.
+- **Explain every fix on its issue.** When you fix and push, comment on
+  the issue (through the `issue` CLI) with what the problem actually was
+  (root cause, not just symptom) and how you fixed it, plus the commit
+  sha and released version — auto-close doesn't tell the reporter
+  anything, and testers should feel heard, not processed. Keep it very
+  short and simple: a few plain sentences a non-expert can skim, not a
+  tome — deep technical detail belongs in the commit message.
 - **Validation is non-negotiable**: `cargo test` fully green AND
   `scripts/fidelity.sh` ALL PASS before any push. A fix that breaks either
   is not a fix.
