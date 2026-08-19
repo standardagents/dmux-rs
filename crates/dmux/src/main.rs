@@ -2356,13 +2356,18 @@ impl App {
             }
             AppCmd::ConfirmClose(idx) => {
                 if let Some(p) = self.panes.get(idx) {
-                    self.views.push(Box::new(ConfirmView::new(
-                        t("dialog.close_title"),
-                        tf("dialog.close_body", p.display_title()),
-                        t("dialog.close_confirm"),
-                        true,
-                        AppCmd::ClosePane(idx),
-                    )));
+                    self.views.push(Box::new(
+                        ConfirmView::new(
+                            t("dialog.close_title"),
+                            tf("dialog.close_body", p.display_title()),
+                            t("dialog.close_confirm"),
+                            true,
+                            AppCmd::ClosePane(idx),
+                        )
+                        // The user just asked to close this pane; Enter
+                        // confirms (#11). Esc/n still cancel.
+                        .focus_confirm(),
+                    ));
                     self.dirty = true;
                 }
             }

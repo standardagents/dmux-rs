@@ -28,6 +28,15 @@ impl ConfirmView {
             yes_focused: !danger,
         }
     }
+
+    /// Start with the confirm button focused even for a danger action —
+    /// for flows the user just explicitly requested (pane close, #11):
+    /// the dialog is the confirmation, so Enter should be the fast path.
+    /// Esc / `n` / Tab-to-Cancel all keep working.
+    pub fn focus_confirm(mut self) -> Self {
+        self.yes_focused = true;
+        self
+    }
 }
 
 impl View for ConfirmView {
@@ -78,5 +87,45 @@ impl View for ConfirmView {
             TAG_YES => ViewResult::CloseAnd(self.cmd.clone()),
             _ => ViewResult::Close,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmux_host::Modifiers;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent { key: code, modifiers: Modifiers::NONE }
+    }
+
+    fn close_dialog() -> ConfirmView {
+        ConfirmView::new("Close pane", "Close it?", "Close", true, AppCmd::Quit).focus_confirm()
+    }
+
+    #[test]
+    fn close_dialog_confirms_on_enter() {
+        // #11: the user already asked to close — Enter is the fast path.
+        let mut v = close_dialog();
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::CloseAnd(_)));
+    }
+
+    #[test]
+    fn cancel_paths_stay_intact() {
+        // Esc and `n` cancel regardless of focus.
+        let mut v = close_dialog();
+        assert!(matches!(v.on_key(&key(KeyCode::Escape)), ViewResult::Close));
+        let mut v = close_dialog();
+        assert!(matches!(v.on_key(&key(KeyCode::Char('n'))), ViewResult::Close));
+        // Tab moves focus to Cancel; Enter then cancels.
+        let mut v = close_dialog();
+        assert!(matches!(v.on_key(&key(KeyCode::Tab)), ViewResult::Stay));
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Close));
+    }
+
+    #[test]
+    fn plain_danger_dialogs_still_default_to_cancel() {
+        let mut v = ConfirmView::new("t", "m", "Do it", true, AppCmd::Quit);
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Close));
     }
 }
