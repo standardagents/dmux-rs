@@ -1589,6 +1589,22 @@ impl App {
         for extra in keepalives.iter().skip(1) {
             let _ = self.client.send(format!("kill-window -t {extra}"));
         }
+        // Legacy multi-pane windows (splits inherited from older sessions or
+        // other clients): dmux's model is one pane per window, so in owner
+        // mode every extra pane is broken out into its own window. Without
+        // this, apply_window_sizes skips shared windows entirely and stale
+        // split layouts survive forever (#7). Idempotent: the reconcile
+        // after the breaks lists only single-pane windows.
+        if self.own_sizing {
+            let extras = panes_to_break_out(&infos);
+            for pane in &extras {
+                tracing::info!(pane = %pane, "breaking legacy multi-pane window");
+                let _ = self.client.send(format!("break-pane -d -s {pane}"));
+            }
+            if !extras.is_empty() {
+                self.request_reconcile();
+            }
+        }
         // Forget closing-markers for panes tmux no longer lists.
         let listed: std::collections::HashSet<PaneId> = infos.iter().map(|i| i.pane).collect();
         self.closing.retain(|p| listed.contains(p));
@@ -3648,6 +3664,13 @@ fn tip_index(now_ms: u64, len: usize) -> usize {
     (now_ms / 15_000) as usize % len.max(1)
 }
 
+/// Every pane after the first in each window: legacy splits that owner mode
+/// breaks out into their own windows (one pane per window is dmux's model).
+fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
+    let mut seen: std::collections::HashSet<dmux_cc::WindowId> = std::collections::HashSet::new();
+    infos.iter().filter(|i| !seen.insert(i.window)).map(|i| i.pane).collect()
+}
+
 fn iso_now() -> String {
     // Close-enough ISO timestamp without a chrono dependency (UTC seconds).
     let secs = std::time::SystemTime::now()
@@ -3708,6 +3731,27 @@ mod tests {
         assert_eq!(ts.len(), 24);
         assert!(ts.ends_with("Z"));
         assert!(ts.starts_with("20"));
+    }
+
+    #[test]
+    fn legacy_multi_pane_windows_break_out_extras() {
+        let mk = |pane: u32, window: u32| session::TmuxPaneInfo {
+            pane: PaneId(pane),
+            window: dmux_cc::WindowId(window),
+            title: String::new(),
+            width: 80,
+            height: 24,
+            alternate_on: false,
+            current_command: "bash".into(),
+            window_name: "w".into(),
+            pane_pid: 1,
+        };
+        // Window 0 has three panes, window 1 has one: only the two extras
+        // of window 0 are broken out; a re-run on the result is a no-op.
+        let infos = vec![mk(0, 0), mk(1, 0), mk(2, 0), mk(3, 1)];
+        assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
+        let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
+        assert!(panes_to_break_out(&after).is_empty());
     }
 
     #[test]
