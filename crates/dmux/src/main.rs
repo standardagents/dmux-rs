@@ -3338,7 +3338,7 @@ impl App {
                 "tip: ^b h hides a pane without killing it",
                 "tip: autopilot (pane menu) auto-accepts option dialogs",
             ];
-            TIPS[tip_index(timestamp(), TIPS.len())].to_string()
+            pick_tip(TIPS, timestamp(), self.layout.sidebar.w as usize).to_string()
         } else {
             "^b for commands · ^b ? help".to_string()
         };
@@ -3664,6 +3664,18 @@ fn tip_index(now_ms: u64, len: usize) -> usize {
     (now_ms / 15_000) as usize % len.max(1)
 }
 
+/// Width-aware tip pick: rotate (15s steps) through only the tips that fit
+/// the footer, so narrow sidebars show complete messages instead of clipped
+/// fragments (#8). Falls back to the shortest tip when nothing fits.
+fn pick_tip<'a>(tips: &[&'a str], now_ms: u64, width: usize) -> &'a str {
+    let fitting: Vec<&'a str> =
+        tips.iter().copied().filter(|t| t.chars().count() <= width).collect();
+    if fitting.is_empty() {
+        return tips.iter().copied().min_by_key(|t| t.chars().count()).unwrap_or("");
+    }
+    fitting[tip_index(now_ms, fitting.len())]
+}
+
 /// Every pane after the first in each window: legacy splits that owner mode
 /// breaks out into their own windows (one pane per window is dmux's model).
 fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
@@ -3731,6 +3743,19 @@ mod tests {
         assert_eq!(ts.len(), 24);
         assert!(ts.ends_with("Z"));
         assert!(ts.starts_with("20"));
+    }
+
+    #[test]
+    fn tips_are_picked_to_fit_the_sidebar() {
+        let tips = &["short tip", "a much longer tip that only fits wide sidebars"];
+        // Narrow sidebar: only the fitting tip is ever shown, at any time.
+        assert_eq!(pick_tip(tips, 0, 20), "short tip");
+        assert_eq!(pick_tip(tips, 16_000, 20), "short tip");
+        // Wide sidebar: rotation covers both.
+        assert_eq!(pick_tip(tips, 0, 80), tips[0]);
+        assert_eq!(pick_tip(tips, 15_000, 80), tips[1]);
+        // Nothing fits: shortest tip, never an empty footer.
+        assert_eq!(pick_tip(tips, 0, 3), "short tip");
     }
 
     #[test]
