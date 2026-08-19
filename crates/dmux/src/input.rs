@@ -142,6 +142,15 @@ pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
         // The pane app pushed kitty keyboard flags: encode CSI-u so it gets
         // the disambiguated keys it asked for.
         KeyboardEncoding::Kitty(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+    } else if legacy_encoding_loses_modifiers(key) {
+        // tmux `extended-keys on` semantics: keys the legacy encoding cannot
+        // express (shift/ctrl+Enter, ctrl+Tab, ctrl+shift+char) pass through
+        // in CSI-u form even to apps that never requested a keyboard
+        // protocol — agent TUIs like Claude Code parse CSI-u natively, and
+        // this is exactly what the user experiences under plain tmux. Only
+        // lossy keys reach this branch, so ordinary keys keep their classic
+        // forms.
+        KeyboardEncoding::CsiU
     } else {
         KeyboardEncoding::Xterm
     };
@@ -152,6 +161,20 @@ pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
         modify_other_keys: None,
     };
     key.key.encode(key.modifiers, encode_modes, true).ok().map(|s| s.into_bytes())
+}
+
+/// True when the Xterm/legacy encoding would silently drop this key's
+/// modifiers (e.g. shift+Enter encodes as a bare CR).
+fn legacy_encoding_loses_modifiers(key: &KeyEvent) -> bool {
+    let shift = key.modifiers.contains(Modifiers::SHIFT);
+    let ctrl = key.modifiers.contains(Modifiers::CTRL);
+    match key.key {
+        KeyCode::Enter => shift || ctrl,
+        // shift+Tab has a legacy form (CSI Z); ctrl variants do not.
+        KeyCode::Tab => ctrl,
+        KeyCode::Char(_) => ctrl && shift,
+        _ => false,
+    }
 }
 
 /// Wrap paste text in bracketed-paste markers when the pane requested them.
@@ -294,5 +317,19 @@ mod tests {
     fn paste_bracketing() {
         let out = encode_paste("x", InputModes { bracketed_paste: true, ..Default::default() });
         assert_eq!(out, b"\x1b[200~x\x1b[201~");
+    }
+
+    #[test]
+    fn extended_keys_pass_through_like_tmux() {
+        // Modified Enter must reach the pane in CSI-u form even when the app
+        // never requested a keyboard protocol (Claude Code's shift+Enter
+        // newline; tmux `extended-keys on` behaves the same way).
+        let m = InputModes::default();
+        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::SHIFT), m).unwrap(), b"\x1b[13;2u");
+        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::CTRL), m).unwrap(), b"\x1b[13;5u");
+        // Unmodified and legacy-expressible keys keep their classic forms.
+        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::NONE), m).unwrap(), b"\r");
+        assert_eq!(encode_key(&key(KeyCode::Tab, Modifiers::SHIFT), m).unwrap(), b"\x1b[Z");
+        assert_eq!(encode_key(&key(KeyCode::Char('c'), Modifiers::CTRL), m).unwrap(), b"\x03");
     }
 }
