@@ -4,6 +4,7 @@
 //! damage-diffed, synchronized-output frames.
 
 mod agents;
+mod bootstrap;
 mod git;
 mod hooks;
 
@@ -99,6 +100,16 @@ struct NewWindowCtx {
     cwd: Option<String>,
     /// Owning project root when not the main project.
     project_root: Option<String>,
+    /// Native bootstrap (worktree + hook run by dmux, loader UI in the pane)
+    /// with the agent launch deferred until it finishes.
+    bootstrap: Option<BootstrapSpec>,
+}
+
+#[derive(Debug)]
+struct BootstrapSpec {
+    plan: bootstrap::Plan,
+    launch: bootstrap::Launch,
+    agent_label: String,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -112,6 +123,8 @@ enum AppMsg {
     AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
     /// LLM terminal naming produced a candidate name.
     NamingDone { pane: PaneId, name: String },
+    /// Native worktree bootstrap progress for a pane (keyed by slug).
+    Bootstrap { slug: String, ev: bootstrap::Ev },
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
     /// Conflicted merge state re-established; launch the resolution pane.
@@ -296,6 +309,9 @@ struct App {
     anim: u64,
     /// Prompts waiting to be typed into send-keys-transport agent panes.
     pending_injections: Vec<(PaneId, String, Instant)>,
+    /// Active native worktree bootstraps, keyed by pane slug; the pane body
+    /// renders a loader card while one exists.
+    bootstraps: std::collections::HashMap<String, bootstrap::Ui>,
     own_sizing: bool,
     sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
     /// Welcome-screen state (shown when no panes are visible).
@@ -428,6 +444,7 @@ async fn run(
         leader_armed: false,
         anim: 0,
         pending_injections: Vec::new(),
+        bootstraps: std::collections::HashMap::new(),
         own_sizing: false,
         sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
@@ -654,7 +671,8 @@ impl App {
     }
 
     fn animating(&self) -> bool {
-        self.welcome_active()
+        !self.bootstraps.is_empty()
+            || self.welcome_active()
             || self
                 .panes
                 .iter()
@@ -987,6 +1005,7 @@ impl App {
                     };
                     let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("conflicts-")).count();
                     self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                         slug: format!("conflicts-{n}"),
                         display: format!("conflicts: {branch}"),
@@ -1079,6 +1098,52 @@ impl App {
                 }
                 if let Some(msg) = attention {
                     self.attention_toast(msg);
+                }
+            }
+            AppMsg::Bootstrap { slug, ev } => {
+                let mut fail_toast: Option<String> = None;
+                let mut launch_now: Option<(PaneId, bootstrap::Launch)> = None;
+                if let Some(ui) = self.bootstraps.get_mut(&slug) {
+                    match ev {
+                        bootstrap::Ev::Step(i) => ui.current = i.min(ui.steps.len().saturating_sub(1)),
+                        bootstrap::Ev::Detail(line) => ui.detail = line,
+                        bootstrap::Ev::Failed(err) => {
+                            fail_toast = Some(format!("Bootstrap failed for '{}': {err}", ui.title));
+                            ui.failed = Some(err);
+                            ui.done_at = Some(Instant::now());
+                        }
+                        bootstrap::Ev::Done => {
+                            ui.done_at = Some(Instant::now());
+                            ui.detail.clear();
+                            if let Some(launch) = ui.launch.take() {
+                                launch_now = Some((ui.pane, launch));
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                }
+                if let Some((pane, launch)) = launch_now {
+                    let cmd = format!(
+                        "clear; cd {} 2>/dev/null || cd {}; {}",
+                        shq(&launch.wt),
+                        shq(&launch.root),
+                        launch.agent_cmd
+                    );
+                    let mut bytes = cmd.into_bytes();
+                    bytes.push(b'\r');
+                    for chunk in bytes.chunks(256) {
+                        let _ = self.client.send(input::send_keys_hex(pane, chunk));
+                    }
+                    if let Some((prompt, delay_ms)) = launch.injection {
+                        self.pending_injections.push((
+                            pane,
+                            prompt,
+                            Instant::now() + Duration::from_millis(delay_ms),
+                        ));
+                    }
+                }
+                if let Some(msg) = fail_toast {
+                    self.toast(msg);
                 }
             }
             AppMsg::NamingDone { pane, name } => {
@@ -1782,6 +1847,7 @@ impl App {
                         .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
                     let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("editor-")).count();
                     self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                         slug: format!("editor-{n}"),
                         display: format!("edit: {}", p.display_title()),
@@ -1879,6 +1945,7 @@ impl App {
                 let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("hook-")).count();
                 let label = if name == "run_test" { "tests" } else { "dev" };
                 self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                     slug: format!("hook-{n}"),
                     display: format!("{label}: {}", p.display_title()),
@@ -1971,6 +2038,7 @@ impl App {
                 // Interactive in a pane so gh auth/questions stay visible.
                 let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("pr-")).count();
                 self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                     slug: format!("pr-{n}"),
                     display: format!("PR: {branch}"),
@@ -2054,6 +2122,7 @@ impl App {
                     .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
                     .unwrap_or_else(|| agent.clone());
                 self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                     display: slug.clone(),
                     slug,
@@ -2070,6 +2139,7 @@ impl App {
             AppCmd::NewTerminalAt { path, name } => {
                 let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
                 self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
                     slug: format!("terminal-{n}"),
                     display: name,
@@ -2172,6 +2242,7 @@ impl App {
             self.ensure_keepalive();
         }
         let pane = self.panes.remove(idx);
+        self.bootstraps.remove(&pane.slug);
         let hook_root = pane
             .project_root
             .clone()
@@ -2200,6 +2271,7 @@ impl App {
             .count();
         let slug = format!("terminal-{n}");
         self.create_window(NewWindowCtx {
+                    bootstrap: None,
                     prompt: String::new(),
             display: slug.clone(),
             slug,
@@ -2258,31 +2330,39 @@ impl App {
                 };
                 let agent_cmd = agents::compose_launch(def, prompt_file.as_deref(), &mode);
 
-                let (launch_cmd, worktree_path) = if self.is_git {
+                // Git projects bootstrap natively: the pane opens straight
+                // into a loader card while dmux runs worktree add + the
+                // worktree_created hook itself, then starts the agent.
+                let (launch_cmd, injection, worktree_path, bootstrap) = if self.is_git {
                     let branch = format!("{branch_prefix}{slug}");
                     let wt = self.project_root.join(".dmux").join("worktrees").join(&slug);
                     let wt_str = wt.to_string_lossy().into_owned();
                     let root = self.project_root.to_string_lossy().into_owned();
-                    let base = if base_branch.is_empty() { String::new() } else { format!(" {base_branch}") };
-                    let cmd = format!(
-                        "clear; git -C {root} worktree add -b {branch} {wt}{base} >/dev/null 2>&1 || git -C {root} worktree add {wt} {branch} >/dev/null 2>&1; cd {wt} 2>/dev/null || cd {root}; if [ -x {root}/.dmux-hooks/worktree_created ]; then DMUX_ROOT={root} DMUX_SLUG={slug_q} DMUX_WORKTREE_PATH={wt} DMUX_BRANCH={branch} {root}/.dmux-hooks/worktree_created >/dev/null 2>&1 || true; fi; {agent_cmd}",
-                        root = shq(&root),
-                        wt = shq(&wt_str),
-                        branch = shq(&branch),
-                        slug_q = shq(&slug),
-                    );
-                    (cmd, Some(wt_str))
+                    let spec = BootstrapSpec {
+                        plan: bootstrap::Plan {
+                            root: root.clone(),
+                            wt: wt_str.clone(),
+                            branch,
+                            base_branch: base_branch.clone(),
+                            slug: slug.clone(),
+                            has_hook: hooks::hook_path(&self.project_root, "worktree_created").is_some(),
+                        },
+                        launch: bootstrap::Launch { agent_cmd, wt: wt_str.clone(), root, injection },
+                        agent_label: def.name.to_string(),
+                    };
+                    (None, None, Some(wt_str), Some(spec))
                 } else {
-                    (format!("clear; {agent_cmd}"), None)
+                    (Some(format!("clear; {agent_cmd}")), injection, None, None)
                 };
 
                 self.create_window(NewWindowCtx {
+                    bootstrap,
                     prompt: prompt.clone(),
                     display: if total == 1 { base_slug.clone() } else { format!("{base_slug} ({}{i})", def.short) },
                     slug,
                     kind: PaneKind::Worktree,
                     agent: Some(def.id.to_string()),
-                    launch_cmd: Some(launch_cmd),
+                    launch_cmd,
                     injection,
                     worktree_path,
                     cwd: None,
@@ -2319,7 +2399,7 @@ impl App {
         );
     }
 
-    fn finish_new_window(&mut self, ctx: NewWindowCtx, reply: &Reply) {
+    fn finish_new_window(&mut self, mut ctx: NewWindowCtx, reply: &Reply) {
         let line = reply.text_lines().into_iter().next().unwrap_or_default();
         let mut parts = line.split('\u{1}');
         let (Some(_window), Some(pane_str)) = (parts.next(), parts.next()) else {
@@ -2335,6 +2415,33 @@ impl App {
         let _ = self
             .client
             .send(format!("select-pane -t {pane_id} -T {}", dmux_cc::quote_arg(&encoded)));
+
+        if let Some(spec) = ctx.bootstrap.take() {
+            let steps = bootstrap::Ui::step_labels(&spec.agent_label, spec.plan.has_hook);
+            self.bootstraps.insert(
+                ctx.slug.clone(),
+                bootstrap::Ui {
+                    pane: pane_id,
+                    title: ctx.display.clone(),
+                    agent_label: spec.agent_label,
+                    branch: spec.plan.branch.clone(),
+                    steps,
+                    current: 0,
+                    detail: String::new(),
+                    started: Instant::now(),
+                    done_at: None,
+                    failed: None,
+                    launch: Some(spec.launch),
+                },
+            );
+            let slug = ctx.slug.clone();
+            let tx = self.app_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                bootstrap::run_blocking(&spec.plan, &mut |ev| {
+                    let _ = tx.send(AppMsg::Bootstrap { slug: slug.clone(), ev });
+                });
+            });
+        }
 
         if let Some(cmd) = &ctx.launch_cmd {
             let mut bytes = cmd.clone().into_bytes();
@@ -2643,6 +2750,17 @@ impl App {
                 self.last_tracking = now;
             }
         }
+        // Finished bootstrap loaders linger briefly (success: long enough for
+        // the agent to paint under them; failure: long enough to read why).
+        let before = self.bootstraps.len();
+        self.bootstraps.retain(|_, ui| match (ui.done_at, ui.failed.is_some()) {
+            (Some(at), false) => now.duration_since(at) < Duration::from_millis(1500),
+            (Some(at), true) => now.duration_since(at) < Duration::from_secs(6),
+            _ => true,
+        });
+        if self.bootstraps.len() != before {
+            self.dirty = true;
+        }
         if let Some(at) = self.status_clear_at {
             if now >= at {
                 self.status_clear_at = None;
@@ -2722,6 +2840,15 @@ impl App {
             leader_armed: self.leader_armed,
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
+
+        // Bootstrapping panes show the native loader card over their body.
+        if !self.bootstraps.is_empty() {
+            for p in &self.panes {
+                if let (Some(rect), Some(ui)) = (p.rect, self.bootstraps.get(&p.slug)) {
+                    bootstrap::draw(&mut self.back, rect, &self.theme, ui, self.anim);
+                }
+            }
+        }
 
         if self.welcome_active() {
             let content = render::content_area(&self.back, &self.layout);

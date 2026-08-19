@@ -14,7 +14,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Global key scheme that doesn't step on pane apps (leader + config) | ✅ |
 | Kitty keyboard protocol on the host (Super-key globals when able) | ✅ |
 | Settings UI (declarative registry port) + settings persistence (3 scopes) | ✅ |
-| New-pane flow: worktree + agent launch via control mode | ✅ |
+| New-pane flow: worktree + agent launch via control mode | ✅ (native bootstrap loader: dmux runs worktree add + `worktree_created` hook itself, pane body shows a step-checklist card with live output + progress bar, agent launches when setup finishes) |
 | Multi-allocation agent selector (N panes per agent, one prompt) | ✅ (new, beyond TS) |
 | Pane actions: rename / hide-show / close + confirm dialogs | ✅ |
 | Title-bar click affordances (buttons; not possible under tmux) | ✅ (new) |
