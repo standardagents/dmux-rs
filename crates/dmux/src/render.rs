@@ -37,6 +37,8 @@ pub struct Scene<'a> {
     /// Per-pane (accent, soft) from the owning project's color theme;
     /// parallel to `panes`.
     pub pane_accents: &'a [(Color, Color)],
+    /// Active sidebar reorder drag (#26): (source pane index, pointer row).
+    pub reorder: Option<(usize, u16)>,
 }
 
 /// One sidebar project group, precomputed by the app.
@@ -150,6 +152,11 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 area.w.saturating_sub(14 + hidden_tag.len() as u16 + ap_tag.len() as u16) as usize,
             );
             let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
+            // Reorder drag (#26): the row under the pointer is the insertion
+            // target (selection surface + marker below); the dragged source
+            // row dims so the movement reads.
+            let reorder_target = scene.reorder.map(|(_, pr)| pr == row).unwrap_or(false);
+            let reorder_src = scene.reorder.map(|(srci, _)| srci == i).unwrap_or(false);
             let (fg, attrs) = if pane.hidden {
                 (t.text_faint, AttrFlags::empty())
             } else if focused {
@@ -161,9 +168,10 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 (t.text_dim, AttrFlags::empty())
             };
-            let bg = if selected { t.bg_selected } else { sb_bg };
+            let fg = if reorder_src && !reorder_target { t.text_faint } else { fg };
+            let bg = if selected || reorder_target { t.bg_selected } else { sb_bg };
             let row_rect = Rect::new(area.x, row, area.w, 1);
-            if selected {
+            if selected || reorder_target {
                 buf.fill(row_rect, &Cell { bg, ..Cell::default() });
             }
             let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
@@ -172,6 +180,10 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             }
             if selected && scene.sidebar_focused {
                 buf.set(area.x, row, Cell { ch: '▍', fg: group.accent, bg, ..Cell::default() });
+            }
+            // Reorder drag (#26): accent marker on the insertion target row.
+            if reorder_target {
+                buf.set(area.x, row, Cell { ch: '➤', fg: group.accent, bg, ..Cell::default() });
             }
             if let Some(agent) = &pane.agent {
                 let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");

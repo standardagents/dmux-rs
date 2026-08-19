@@ -73,6 +73,35 @@ fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux
     dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
 }
 
+/// Sidebar drag-reorder gesture (#26). A press on a row arms a candidate;
+/// crossing onto a different terminal row enters reorder mode (an ordinary
+/// click never does); release commits over a sidebar row or cancels
+/// anywhere else, leaving the order unchanged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SidebarDrag {
+    Armed { src: usize, start_row: u16 },
+    Reordering { src: usize, pointer_row: u16 },
+}
+
+impl SidebarDrag {
+    fn motion(self, row: u16) -> SidebarDrag {
+        match self {
+            SidebarDrag::Armed { src, start_row } if row != start_row => {
+                SidebarDrag::Reordering { src, pointer_row: row }
+            }
+            SidebarDrag::Armed { .. } => self,
+            SidebarDrag::Reordering { src, .. } => SidebarDrag::Reordering { src, pointer_row: row },
+        }
+    }
+
+    fn reordering(&self) -> Option<(usize, u16)> {
+        match self {
+            SidebarDrag::Reordering { src, pointer_row } => Some((*src, *pointer_row)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct AnimClock {
     next: Option<Instant>,
@@ -440,6 +469,8 @@ struct App {
     pending_restore: Vec<session::RestorePlan>,
     /// Copy-confirmation tooltip (#22).
     tooltip: Option<Tooltip>,
+    /// Sidebar drag-reorder gesture state (#26).
+    sidebar_drag: Option<SidebarDrag>,
     /// Server octal-escapes command-reply payloads (probed at attach, #19).
     /// None until the probe reply lands; no decoding happens before that,
     /// and the probe is the first tagged command so nothing races it.
@@ -610,6 +641,7 @@ async fn run(
         restore_offered: false,
         pending_restore: Vec::new(),
         tooltip: None,
+        sidebar_drag: None,
         replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
@@ -1582,6 +1614,34 @@ impl App {
         }
     }
 
+    /// Commit a sidebar reorder (#26): move the pane in display order,
+    /// keep focus/selection on the same pane identities, persist the order
+    /// through the config, and relayout. tmux order is never touched.
+    fn reorder_pane(&mut self, src: usize, dst: usize) {
+        let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
+        let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
+        if !session::move_pane(&mut self.panes, src, dst) {
+            if src < self.panes.len() && dst < self.panes.len() {
+                self.toast("Panes reorder within their project");
+            }
+            return;
+        }
+        if let Some(id) = focused_id {
+            if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
+                self.focused = i;
+            }
+        }
+        if let Some(id) = selected_id {
+            if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
+                self.selected = i;
+            }
+        }
+        let order: Vec<String> = self.panes.iter().map(|p| p.slug.clone()).collect();
+        session::order_records(&mut self.config.panes, &order);
+        self.save_config();
+        self.relayout();
+    }
+
     /// Pane-scoped menu items (rename, hide, worktree actions, autopilot,
     /// hooks, copy path, editor, close) — shared by the leader-key pane menu
     /// and the sidebar flyout (#14).
@@ -1840,6 +1900,25 @@ impl App {
                 .retain(|r| r.kind() != PaneKind::Shell || live_slugs.contains(&r.slug));
             if self.config.panes.len() != rec_before {
                 self.save_config();
+            }
+        }
+        // Display order follows the persisted record order (#26) — a
+        // reorder must survive restart/reattach. Focus/selection stay on
+        // their pane identities across the shuffle.
+        {
+            let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
+            let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
+            let order: Vec<String> = self.config.panes.iter().map(|r| r.slug.clone()).collect();
+            session::order_panes(&mut self.panes, &order);
+            if let Some(id) = focused_id {
+                if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
+                    self.focused = i;
+                }
+            }
+            if let Some(id) = selected_id {
+                if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
+                    self.selected = i;
+                }
             }
         }
         self.relayout();
@@ -2160,6 +2239,32 @@ impl App {
                 _ => {}
             }
         }
+        // A sidebar reorder drag captures the mouse until release (#26).
+        if let Some(drag) = self.sidebar_drag {
+            match kind {
+                MouseKind::LeftHeld if !is_press => {
+                    self.sidebar_drag = Some(drag.motion(row));
+                    self.dirty = true;
+                    return true;
+                }
+                MouseKind::Release => {
+                    self.sidebar_drag = None;
+                    self.dirty = true;
+                    if let Some((src, _)) = drag.reordering() {
+                        // Commit only over a sidebar row (release coords own
+                        // this event's `target`); anywhere else cancels.
+                        if let Some(ClickTarget::SidebarRow(dst)) = target {
+                            self.reorder_pane(src, dst);
+                        }
+                        return true;
+                    }
+                    // Armed but never crossed a row: the press already did
+                    // click selection; nothing else to do.
+                    return true;
+                }
+                _ => {}
+            }
+        }
         // An app-mouse drag forwards motion until release.
         if let Some(i) = self.mouse_forward {
             if let Some(p) = self.panes.get(i) {
@@ -2280,6 +2385,9 @@ impl App {
                         let anchor_x = self.layout.sidebar.right() + 1;
                         return self.execute_cmd(AppCmd::OpenPaneFlyout { idx: i, x: anchor_x, y: row });
                     }
+                    // Arm the reorder gesture (#26): it only engages if the
+                    // pointer crosses onto another row before release.
+                    self.sidebar_drag = Some(SidebarDrag::Armed { src: i, start_row: row });
                     self.sidebar_focused = true;
                     self.dirty = true;
                     return true;
@@ -3683,6 +3791,7 @@ impl App {
             issues: (self.filed_issues.len(), self.new_issue_count),
             groups: &self.sidebar_groups,
             pane_accents: &self.pane_accents,
+            reorder: self.sidebar_drag.as_ref().and_then(|d| d.reordering()),
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 
@@ -4156,6 +4265,18 @@ mod tests {
         assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
         let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
         assert!(panes_to_break_out(&after).is_empty());
+    }
+
+    #[test]
+    fn sidebar_drag_thresholds_and_follows() {
+        // #26: a press+release on the same row is a click, never a reorder.
+        let armed = SidebarDrag::Armed { src: 2, start_row: 5 };
+        assert_eq!(armed.reordering(), None);
+        assert_eq!(armed.motion(5), armed, "same-row motion stays armed");
+        // Crossing a row enters reorder mode and then follows the pointer.
+        let dragging = armed.motion(6);
+        assert_eq!(dragging.reordering(), Some((2, 6)));
+        assert_eq!(dragging.motion(9).reordering(), Some((2, 9)));
     }
 
     #[test]

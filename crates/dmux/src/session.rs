@@ -5,7 +5,7 @@
 //! synchronous parsing/building.
 
 use dmux_cc::{PaneId, Reply, WindowId};
-use dmux_core::{parse_pane_title, DmuxConfig, PaneKind};
+use dmux_core::{parse_pane_title, DmuxConfig, DmuxPane, PaneKind};
 use dmux_vt::PaneTerm;
 
 pub const PANE_SCROLLBACK: usize = 10_000;
@@ -368,6 +368,36 @@ pub fn plan_session_restore(
     (plans, skipped)
 }
 
+/// Move a pane to `dst`'s position in the display order (#26). Refuses
+/// cross-project moves (reordering must not silently change ownership) and
+/// out-of-range indices; returns whether the order changed. tmux window
+/// order is untouched — display order is an application-level concept.
+pub fn move_pane(panes: &mut Vec<LogicalPane>, src: usize, dst: usize) -> bool {
+    if src == dst || src >= panes.len() || dst >= panes.len() {
+        return false;
+    }
+    if panes[src].project_root != panes[dst].project_root {
+        return false;
+    }
+    let pane = panes.remove(src);
+    panes.insert(dst, pane);
+    true
+}
+
+/// Stable-order config records to match the live display order (#26):
+/// records for live slugs sort into that order, everything else keeps its
+/// relative position after them.
+pub fn order_records(records: &mut [DmuxPane], slug_order: &[String]) {
+    records.sort_by_key(|r| slug_order.iter().position(|s| *s == r.slug).unwrap_or(usize::MAX));
+}
+
+/// Stable-order live panes by the persisted record order (#26): slugs the
+/// config knows sort first in config order; unknown panes keep adoption
+/// order after them.
+pub fn order_panes(panes: &mut [LogicalPane], slug_order: &[String]) {
+    panes.sort_by_key(|p| slug_order.iter().position(|s| *s == p.slug).unwrap_or(usize::MAX));
+}
+
 /// Decide which tmux panes are content panes and pair them with config
 /// entries by slug (via the title contract). Config panes with no live tmux
 /// pane are skipped in Phase 0 (recreation is a Phase 1 concern); live panes
@@ -570,6 +600,57 @@ mod tests {
         assert!(!is_keepalive(&mk("sleep", "sleep 30")));
         // …and neither is an ordinary shell window.
         assert!(!is_keepalive(&mk("zsh", "")));
+    }
+
+    #[test]
+    fn reorder_moves_within_project_and_persists() {
+        // Three panes: two in the main project, one owned by another
+        // project; a hidden pane reorders like any other (#26).
+        let reply = reply_of(&[
+            "%1\u{1}@1\u{1}p__aa__p\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w",
+            "%2\u{1}@2\u{1}p__bb__p\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w",
+            "%3\u{1}@3\u{1}p__cc__p\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w",
+        ]);
+        let mut panes = adopt_panes(None, &parse_pane_list(&reply));
+        assert_eq!(panes.len(), 3);
+        panes[1].hidden = true;
+        panes[2].project_root = Some("/other".into());
+        let slugs = |p: &[LogicalPane]| p.iter().map(|x| x.slug.clone()).collect::<Vec<_>>();
+
+        // Hidden pane moves fine within its project.
+        assert!(move_pane(&mut panes, 1, 0));
+        assert_eq!(slugs(&panes), ["p__bb__p", "p__aa__p", "p__cc__p"]);
+        assert!(panes[0].hidden, "hidden state rides along");
+
+        // Cross-project moves are refused and change nothing.
+        assert!(!move_pane(&mut panes, 2, 0));
+        assert_eq!(slugs(&panes), ["p__bb__p", "p__aa__p", "p__cc__p"]);
+        // Out-of-range and no-op moves are refused.
+        assert!(!move_pane(&mut panes, 0, 9));
+        assert!(!move_pane(&mut panes, 1, 1));
+
+        // Persistence round trip: records follow the live order; unknown
+        // records keep their relative order at the end; adoption ordering
+        // restores the live order from records.
+        let mut records: Vec<dmux_core::DmuxPane> = ["p__aa__p", "p__bb__p", "zz", "p__cc__p"]
+            .iter()
+            .map(|slug| {
+                serde_json::from_value(serde_json::json!({
+                    "id": *slug, "slug": *slug, "prompt": "", "paneId": "%9"
+                }))
+                .unwrap()
+            })
+            .collect();
+        let live_order: Vec<String> = slugs(&panes);
+        order_records(&mut records, &live_order);
+        let rec_slugs: Vec<&str> = records.iter().map(|r| r.slug.as_str()).collect();
+        assert_eq!(rec_slugs, ["p__bb__p", "p__aa__p", "p__cc__p", "zz"]);
+
+        // A fresh adoption (tmux order) re-sorts to the persisted order.
+        let mut readopted = adopt_panes(None, &parse_pane_list(&reply));
+        let record_order: Vec<String> = records.iter().map(|r| r.slug.clone()).collect();
+        order_panes(&mut readopted, &record_order);
+        assert_eq!(slugs(&readopted), ["p__bb__p", "p__aa__p", "p__cc__p"]);
     }
 
     #[test]
