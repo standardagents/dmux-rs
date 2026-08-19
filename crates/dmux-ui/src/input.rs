@@ -163,7 +163,7 @@ impl TextInput {
         if self.cursor >= self.value.len() {
             cursor_screen = Some((x.min(rect.right() - 1), rect.y));
         }
-        focused.then(|| cursor_screen).flatten()
+        focused.then_some(cursor_screen).flatten()
     }
 }
 

@@ -85,8 +85,7 @@ impl View for HooksView {
             inner,
         );
 
-        let mut y = inner.y + 1;
-        for (name, state) in &self.rows {
+        for (y, (name, state)) in (inner.y + 1..).zip(&self.rows) {
             if y >= inner.bottom().saturating_sub(2) {
                 break;
             }
@@ -119,7 +118,6 @@ impl View for HooksView {
                 AttrFlags::empty(),
                 inner,
             );
-            y += 1;
         }
         draw_hint_bar(
             buf,

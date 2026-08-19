@@ -82,7 +82,7 @@ pub fn compare(pane: &LogicalPane, reply: &Reply) -> Vec<String> {
                 && fg_eq
                 && b.bg == Color::Default
                 && a.bg != Color::Default;
-            if !(ch_eq && fg_eq && bg_eq) && !tolerated_bg {
+            if !(tolerated_bg || (ch_eq && fg_eq && bg_eq)) {
                 if diffs.len() < 64 {
                     diffs.push(format!(
                         "({col},{row}) live={:?}/{:?}/{:?} tmux={:?}/{:?}/{:?}",
@@ -145,7 +145,9 @@ pub fn write_incident(
 }
 
 /// Parsed incident bundle: (cols, rows, capture lines, raw stream bytes).
-pub fn parse_incident(text: &str) -> Option<(u16, u16, Vec<Vec<u8>>, Vec<u8>)> {
+pub type ParsedIncident = (u16, u16, Vec<Vec<u8>>, Vec<u8>);
+
+pub fn parse_incident(text: &str) -> Option<ParsedIncident> {
     let dims_line = text.lines().find(|l| l.starts_with("pane: "))?;
     let dims = dims_line.rsplit(' ').next()?;
     let (c, r) = dims.split_once('x')?;
@@ -181,21 +183,19 @@ fn unescape_default(line: &str) -> Vec<u8> {
             Some('\'') => out.push(b'\''),
             Some('"') => out.push(b'"'),
             Some('0') => out.push(0),
-            Some('u') => {
+            Some('u') if chars.next() == Some('{') => {
                 // \u{XXXX}
-                if chars.next() == Some('{') {
-                    let mut hex = String::new();
-                    for h in chars.by_ref() {
-                        if h == '}' {
-                            break;
-                        }
-                        hex.push(h);
+                let mut hex = String::new();
+                for h in chars.by_ref() {
+                    if h == '}' {
+                        break;
                     }
-                    if let Ok(v) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(v) {
-                            let mut buf = [0u8; 4];
-                            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-                        }
+                    hex.push(h);
+                }
+                if let Ok(v) = u32::from_str_radix(&hex, 16) {
+                    if let Some(ch) = char::from_u32(v) {
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     }
                 }
             }
@@ -259,7 +259,7 @@ pub fn replay_incident(text: &str) -> Option<Vec<String>> {
                 && fg_eq
                 && y.bg == Color::Default
                 && x.bg != Color::Default;
-            if !(ch_eq && fg_eq && bg_eq) && !tolerated {
+            if !(tolerated || (ch_eq && fg_eq && bg_eq)) {
                 diffs.push(format!(
                     "({col},{row}) replay={:?} capture={:?}",
                     x.ch, y.ch
@@ -268,6 +268,24 @@ pub fn replay_incident(text: &str) -> Option<Vec<String>> {
         }
     }
     Some(diffs)
+}
+
+/// Whether this pane is in a comparable state right now.
+pub fn eligible(pane: &LogicalPane, now: Instant) -> bool {
+    !pane.hidden
+        && pane.rect.is_some()
+        && !pane.paused
+        && !pane.throttled
+        && pane.reseed_buffer.is_none()
+        && pane.term.display_offset() == 0
+        && pane
+            .last_output
+            .map(|t| now.duration_since(t) >= QUIESCE)
+            .unwrap_or(false)
+        && pane
+            .last_verify
+            .map(|t| now.duration_since(t) >= INTERVAL)
+            .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -345,22 +363,4 @@ mod tests {
         let diffs = compare(&pane, &cap);
         assert!(!diffs.is_empty(), "diverging content must be reported");
     }
-}
-
-/// Whether this pane is in a comparable state right now.
-pub fn eligible(pane: &LogicalPane, now: Instant) -> bool {
-    !pane.hidden
-        && pane.rect.is_some()
-        && !pane.paused
-        && !pane.throttled
-        && pane.reseed_buffer.is_none()
-        && pane.term.display_offset() == 0
-        && pane
-            .last_output
-            .map(|t| now.duration_since(t) >= QUIESCE)
-            .unwrap_or(false)
-        && pane
-            .last_verify
-            .map(|t| now.duration_since(t) >= INTERVAL)
-            .unwrap_or(true)
 }

@@ -18,6 +18,7 @@ pub enum ButtonStyle {
 }
 
 /// Draw `[ label ]`-style button; returns its rect for click registration.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_button(
     buf: &mut CellBuffer,
     x: u16,
