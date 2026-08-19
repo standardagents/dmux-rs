@@ -58,10 +58,15 @@ Loop rules:
 - **Every fixed incident goes into the corpus**
   (`crates/dmux/tests/corpus/<issue-number>.incident`) so it can never
   regress silently.
-- **Releases stay human.** The loop pushes to `main` and closes issues;
-  a person runs `scripts/release.sh` after eyeballing the diffs. (Test-ring
-  heads auto-update within ~1 minute of a release — don't hand that
-  trigger to the loop.)
+- **Release every iteration.** After validation passes and `main` is
+  pushed, run `scripts/release.sh patch` (bug fixes / incidents) or
+  `scripts/release.sh minor` (features). Versions are semver (`vX.Y.Z`),
+  derived from the latest git tag; the script is self-guarding — it
+  refuses dirty or unpushed state and re-runs the full suite plus the
+  fidelity harness before publishing, so a bad build cannot ship even
+  from an unattended loop. Close the issue only after the release
+  succeeds, referencing both the commit sha and the version. Test-ring
+  heads self-update within ~1 minute; the sidebar shows the new version.
 - **Non-reproducing issues** (`replay-deterministic: no`, or the replay is
   clean): comment findings, label `cannot-reproduce`, close. If the replay
   is clean but the live grid diverged, the bug is likely in the emit/host
@@ -85,8 +90,9 @@ For each open issue with label `render-incident`:
 4. Lock: copy the bundle to `crates/dmux/tests/corpus/<issue>.incident` —
    `corpus_incidents_replay_clean` replays every corpus file forever.
 5. Validate: `cargo test` all green and `scripts/fidelity.sh` ALL PASS.
-6. Release: `scripts/release.sh`, then close the issue referencing the
-   commit and tag. Running heads pick the fix up automatically.
+6. Release: `scripts/release.sh patch`, then close the issue referencing
+   the commit and the new `vX.Y.Z`. Running heads pick the fix up
+   automatically within about a minute.
 
 Non-reproducing incidents (`replay-deterministic: no`, or replay clean):
 comment findings and close as `cannot-reproduce`; if replay is clean but
