@@ -279,11 +279,12 @@ fn title_bar_style(
     }
 }
 
-/// The sidebar's base surface: a dark wash of the active theme's accent
-/// while it owns the keyboard — focus stays unmistakable (#15) using only
-/// palette-derived color (#23) — and the terminal default otherwise (#6).
-fn sidebar_surface(theme: &Theme, focused: bool) -> Color {
-    if focused { theme.bg_focus } else { theme.bg }
+/// The sidebar's base surface is ALWAYS the terminal's own background —
+/// transparent, no tint in any focus state (#23, superseding #15's surface
+/// lift; #6). Focus is signaled by accent cues instead: the bracketed
+/// action labels and the selection bar.
+fn sidebar_surface(theme: &Theme, _focused: bool) -> Color {
+    theme.bg
 }
 
 /// Project action labels: bracketed hotkeys only while the sidebar has the
@@ -411,18 +412,13 @@ mod tests {
 
     #[test]
     fn sidebar_focus_states_render_distinctly() {
-        // #15: the whole sidebar surface lifts while it owns the keyboard,
-        // and the action labels advertise hotkeys only then.
+        // #23: NO tint in either state — the terminal background shows
+        // through; focus is carried by the action labels (below) and the
+        // selection bar, not a surface color.
         let theme = Theme::named("violet");
-        assert_ne!(sidebar_surface(&theme, true), sidebar_surface(&theme, false));
-        assert_eq!(sidebar_surface(&theme, true), theme.bg_focus);
-        assert_eq!(sidebar_surface(&theme, false), theme.bg);
-        // #23: the focused surface derives from the ACTIVE theme's accent —
-        // different themes wash differently, never a fixed neutral.
-        let (r, g, b) = theme.accent_rgb;
-        assert_eq!(theme.bg_focus, Color::Rgb(r / 6, g / 6, b / 6));
-        let cyan = Theme::named("cyan");
-        assert_ne!(cyan.bg_focus, theme.bg_focus, "focus wash follows the theme");
+        assert_eq!(sidebar_surface(&theme, true), Color::Default);
+        assert_eq!(sidebar_surface(&theme, false), Color::Default);
+        assert_eq!(theme.canvas, Color::Default, "content area is transparent too");
         assert_eq!(
             action_labels(true, true),
             ("[n]ew agent".to_string(), "[t]erminal".to_string())

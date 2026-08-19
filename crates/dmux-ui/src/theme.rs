@@ -13,10 +13,6 @@ pub struct Theme {
     pub text_dim: Color,
     pub text_faint: Color,
     pub bg: Color,
-    /// Focused-sidebar surface: a dark wash of the ACTIVE theme's accent,
-    /// derived from `accent_rgb` — never a fixed neutral outside the user's
-    /// palette (#23). Distinct enough to keep focus unmistakable (#15).
-    pub bg_focus: Color,
     pub bg_raised: Color,
     pub bg_selected: Color,
     /// Unused content-area background — a hair lighter than the terminal
@@ -30,11 +26,7 @@ pub struct Theme {
 
 impl Theme {
     pub fn with_accent(accent: Color, accent_soft: Color, accent_rgb: (u8, u8, u8)) -> Self {
-        let (r, g, b) = accent_rgb;
-        // ~16% accent wash: dark enough to sit under text, clearly tinted
-        // toward the user's chosen theme.
-        let bg_focus = Color::Rgb(r / 6, g / 6, b / 6);
-        Self { accent, accent_soft, accent_rgb, bg_focus, ..Self::default() }
+        Self { accent, accent_soft, accent_rgb, ..Self::default() }
     }
 
     /// Accent palette by dmux theme name (mirrors `src/theme/colors.ts`
@@ -70,10 +62,11 @@ impl Default for Theme {
             // a fixed indexed base reads as a mismatched slab under custom
             // palettes. Raised/selected surfaces keep their indexed steps.
             bg: Color::Default,
-            bg_focus: Color::Rgb(0xaf / 6, 0x5f / 6, 0xff / 6),
             bg_raised: Color::Indexed(235),
             bg_selected: Color::Indexed(237),
-            canvas: Color::Indexed(234),
+            // Transparent like the sidebar (#23): the user's terminal
+            // background shows through everywhere content isn't painted.
+            canvas: Color::Default,
             border: Color::Indexed(240),
             danger: Color::Indexed(203),
             ok: Color::Indexed(114),
