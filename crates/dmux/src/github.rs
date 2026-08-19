@@ -125,6 +125,10 @@ pub fn refresh_issue_state(
 
 /// Resolve the project root and nested repositories to unique GitHub remotes.
 pub fn repositories_for_project(path: &Path) -> Result<Vec<RepoRef>, String> {
+    if !has_git_marker(path) {
+        return Ok(Vec::new());
+    }
+
     let mut directories = Vec::new();
     discover_nested_repository_dirs(path, &mut directories)?;
 
@@ -146,6 +150,10 @@ pub fn repositories_for_project(path: &Path) -> Result<Vec<RepoRef>, String> {
 
 /// Resolve the GitHub repository represented by a project's origin remote.
 pub fn repository_for_dir(path: &Path) -> Result<RepoRef, String> {
+    if !has_git_marker(path) {
+        return Err("project directory is not a Git repository root".to_owned());
+    }
+
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -523,6 +531,27 @@ mod tests {
             ["standardagents/coordinator", "standardagents/agentbuilder"]
         );
         assert_eq!(repository_label(&repositories), "2 repositories");
+    }
+
+    #[test]
+    fn plain_parent_does_not_inherit_nested_repository_issues() {
+        let tree = TestTree::new();
+        tree.init_repo(
+            "group/agentbuilder",
+            "git@github.com:standardagents/agentbuilder.git",
+        );
+
+        assert_eq!(repositories_for_project(&tree.0), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn nested_directory_does_not_inherit_ancestor_remote() {
+        let tree = TestTree::new();
+        tree.init_repo("", "git@github.com:standardagents/coordinator.git");
+        let nested = tree.0.join("plain-directory");
+        fs::create_dir(&nested).unwrap();
+
+        assert!(repository_for_dir(&nested).is_err());
     }
 
     #[test]
