@@ -54,6 +54,25 @@ const ANIM_INTERVAL: Duration = Duration::from_millis(120);
 /// each event-loop pass let any wakeup arriving inside the interval (pane
 /// output, control messages) postpone the tick forever — spinners visibly
 /// stalled under sustained output.
+/// Transient cursor-anchored tooltip (#22): non-modal, uncapturable, and
+/// self-expiring — "Copied to clipboard" beside the mouse-release point.
+struct Tooltip {
+    text: String,
+    x: u16,
+    y: u16,
+    until: Instant,
+}
+
+/// Clamp a one-row tooltip of width `w` near anchor (x, y): preferred spot
+/// is one row above the release point, nudged left/up so the whole box
+/// stays inside `area` even for releases at the edges.
+fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux_compositor::Rect {
+    let w = w.min(area.w);
+    let ty = if y > area.y { y - 1 } else { y.min(area.bottom().saturating_sub(1)) };
+    let tx = x.min(area.right().saturating_sub(w)).max(area.x);
+    dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
+}
+
 #[derive(Default)]
 struct AnimClock {
     next: Option<Instant>,
@@ -420,6 +439,8 @@ struct App {
     restore_offered: bool,
     /// Plans accepted by the recovery dialog, executed by RestoreSession.
     pending_restore: Vec<session::RestorePlan>,
+    /// Copy-confirmation tooltip (#22).
+    tooltip: Option<Tooltip>,
     /// Server octal-escapes command-reply payloads (probed at attach, #19).
     /// None until the probe reply lands; no decoding happens before that,
     /// and the probe is the first tagged command so nothing races it.
@@ -590,6 +611,7 @@ async fn run(
         session_created,
         restore_offered: false,
         pending_restore: Vec::new(),
+        tooltip: None,
         replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
@@ -718,6 +740,7 @@ async fn run(
             .min()
             .map(tokio::time::Instant::from_std);
         let status_deadline = app.status_clear_at.map(tokio::time::Instant::from_std);
+        let tooltip_deadline = app.tooltip.as_ref().map(|t| tokio::time::Instant::from_std(t.until));
         let tracking_deadline = (!app.tracking_inflight
             && app.panes.iter().any(|p| p.agent.is_some() && p.pane_pid > 0))
         .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking_interval()));
@@ -729,6 +752,7 @@ async fn run(
             anim_deadline,
             injection_deadline,
             status_deadline,
+            tooltip_deadline,
             tracking_deadline,
         ]
         .into_iter()
@@ -2104,9 +2128,21 @@ impl App {
                     if self.drag_moved {
                         let text = self.panes.get(i).and_then(|p| p.term.selection_text());
                         if let Some(text) = text {
-                            let chars = text.chars().count();
                             self.forward_clipboard(&text);
-                            self.toast(format!("Copied {chars} chars"));
+                            // tmux-like copy: highlight clears the moment the
+                            // copy lands, and a small tooltip confirms beside
+                            // the release point (#22).
+                            if let Some(p) = self.panes.get_mut(i) {
+                                p.term.selection_clear();
+                                p.dirty = true;
+                            }
+                            self.tooltip = Some(Tooltip {
+                                text: "Copied to clipboard".into(),
+                                x: col,
+                                y: row,
+                                until: Instant::now() + Duration::from_secs(2),
+                            });
+                            self.dirty = true;
                         }
                     } else if let Some(p) = self.panes.get_mut(i) {
                         // A plain click: no selection, no copy.
@@ -3563,6 +3599,10 @@ impl App {
                 self.dirty = true;
             }
         }
+        if self.tooltip.as_ref().is_some_and(|t| now >= t.until) {
+            self.tooltip = None;
+            self.dirty = true;
+        }
         if self.animating() {
             let interval = if self.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
             if self.anim_clock.fire_if_due(now, interval) {
@@ -3681,6 +3721,20 @@ impl App {
                     self.view_cursor = cursor;
                 }
             }
+        }
+        if let Some(tip) = &self.tooltip {
+            let label = format!(" {} ", tip.text);
+            let rect = tooltip_rect(self.back.area(), (tip.x, tip.y), label.chars().count() as u16);
+            self.back.fill(rect, &dmux_compositor::Cell { bg: self.theme.bg_selected, ..Default::default() });
+            self.back.draw_text(
+                rect.x,
+                rect.y,
+                &label,
+                self.theme.accent,
+                self.theme.bg_selected,
+                dmux_compositor::AttrFlags::BOLD,
+                rect,
+            );
         }
         let composed = Instant::now();
 
@@ -4097,6 +4151,25 @@ mod tests {
         assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
         let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
         assert!(panes_to_break_out(&after).is_empty());
+    }
+
+    #[test]
+    fn tooltip_clamps_to_bounds_and_expires() {
+        let area = dmux_compositor::Rect::new(0, 0, 100, 30);
+        // Interior release: one row above the cursor.
+        assert_eq!(tooltip_rect(area, (40, 10), 22), dmux_compositor::Rect::new(40, 9, 22, 1));
+        // Top edge: stays on screen (no row above to use).
+        assert_eq!(tooltip_rect(area, (40, 0), 22).y, 0);
+        // Right edge: shifted left so the whole box fits.
+        let r = tooltip_rect(area, (95, 10), 22);
+        assert_eq!(r.right(), 100);
+        // Bottom edge: still inside.
+        assert!(tooltip_rect(area, (40, 29), 22).bottom() <= 30);
+        // Wider than the terminal: clamped to it.
+        assert_eq!(tooltip_rect(area, (0, 5), 200).w, 100);
+        // Expiry: a later copy restarts the clock; the deadline decides.
+        let t = Tooltip { text: "Copied to clipboard".into(), x: 1, y: 1, until: Instant::now() };
+        assert!(Instant::now() >= t.until, "an elapsed deadline reads as expired");
     }
 
     #[test]
