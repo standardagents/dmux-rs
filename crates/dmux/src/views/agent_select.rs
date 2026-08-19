@@ -417,6 +417,13 @@ impl View for AgentSelectView {
         ViewResult::Stay
     }
 
+    fn on_paste(&mut self, text: &str) -> ViewResult {
+        if self.focus == 0 {
+            self.prompt.insert_text(text);
+        }
+        ViewResult::Stay
+    }
+
     fn on_click(&mut self, tag: u64) -> ViewResult {
         match tag {
             TAG_LAUNCH => return self.launch(),
@@ -525,5 +532,29 @@ mod tests {
         };
 
         assert!(matches!(view.on_key(&escape), ViewResult::Close));
+    }
+
+    #[test]
+    fn paste_inserts_into_the_focused_prompt_only() {
+        let agent = &AGENTS[0];
+        let installed = std::collections::HashSet::from([agent.id]);
+        let mut view = AgentSelectView::new(
+            &installed,
+            &[agent.id.to_string()],
+            Some(agent.id),
+            "",
+            None,
+        );
+        view.prompt = TextInput::with_value("start end");
+        view.prompt.cursor = 6;
+
+        assert!(matches!(
+            view.on_paste("dictated\nrequest "),
+            ViewResult::Stay
+        ));
+        assert_eq!(view.prompt.value, "start dictated\nrequest end");
+        view.focus = 1;
+        view.on_paste("ignored");
+        assert_eq!(view.prompt.value, "start dictated\nrequest end");
     }
 }

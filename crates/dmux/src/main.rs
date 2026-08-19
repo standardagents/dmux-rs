@@ -2386,12 +2386,10 @@ impl App {
 
     // ------------------------------------------------------------------
     // Input
-
     /// Returns false to quit.
     fn handle_input(&mut self, ev: InputEvent) -> bool {
         match ev {
             InputEvent::Key(key) => {
-                // Overlays swallow all keys.
                 if let Some(top) = self.views.last_mut() {
                     let result = top.on_key(&key);
                     self.dirty = true;
@@ -2423,10 +2421,12 @@ impl App {
                 self.handle_mouse(col, row, kind, shift)
             }
             InputEvent::Paste(text) => {
-                if self.views.is_empty() {
-                    let bytes = input::encode_paste(&text, self.focused_modes());
-                    self.send_pane_bytes(&bytes);
+                if let Some(top) = self.views.last_mut() {
+                    let result = top.on_paste(&text);
+                    self.dirty = true;
+                    return self.apply_view_result(result);
                 }
+                self.send_pane_bytes(&input::encode_paste(&text, self.focused_modes()));
                 true
             }
             InputEvent::Resized { cols, rows } => {

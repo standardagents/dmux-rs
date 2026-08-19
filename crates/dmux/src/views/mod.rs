@@ -199,6 +199,10 @@ pub trait View {
 
     fn on_key(&mut self, key: &KeyEvent) -> ViewResult;
 
+    fn on_paste(&mut self, _text: &str) -> ViewResult {
+        ViewResult::Stay
+    }
+
     fn on_click(&mut self, _tag: u64) -> ViewResult {
         ViewResult::Stay
     }

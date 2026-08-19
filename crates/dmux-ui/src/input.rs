@@ -58,6 +58,11 @@ impl TextInput {
         self
     }
 
+    pub fn insert_text(&mut self, text: &str) {
+        self.value.insert_str(self.cursor, text);
+        self.cursor += text.len();
+    }
+
     pub fn handle(&mut self, key: InputKey) {
         match key {
             InputKey::Char(c) => {
@@ -338,6 +343,15 @@ mod tests {
         t.handle(InputKey::Right);
         t.handle(InputKey::Backspace);
         assert_eq!(t.value, "hllo");
+    }
+
+    #[test]
+    fn pasted_text_inserts_at_the_cursor() {
+        let mut input = TextInput::with_value("start end");
+        input.cursor = 6;
+        input.insert_text("dictated ü\n");
+        assert_eq!(input.value, "start dictated ü\nend");
+        assert_eq!(input.cursor, "start dictated ü\n".len());
     }
 
     #[test]
