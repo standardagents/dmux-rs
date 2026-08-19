@@ -353,16 +353,30 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         }
     }
 
-    // Right-hand sidebar border.
+    // Right-hand sidebar border. The rows alongside a focused pane that
+    // starts at the sidebar are that pane's LEFT edge — they take its
+    // project accent so the active outline is complete (#39); the rest of
+    // the column keeps the neutral border.
     let border_x = area.right();
     if border_x < buf.cols() {
+        let focused_rect = scene.panes.get(scene.focused).and_then(|p| p.rect);
+        let highlight = sidebar_edge_highlight(border_x, focused_rect);
+        let focused_accent = scene
+            .pane_accents
+            .get(scene.focused)
+            .map(|(a, _)| *a)
+            .unwrap_or(t.accent);
         for y in 0..area.bottom() {
+            let fg = match highlight {
+                Some((top, bottom)) if y >= top && y < bottom => focused_accent,
+                _ => t.border,
+            };
             buf.set(
                 border_x,
                 y,
                 Cell {
                     ch: '│',
-                    fg: t.border,
+                    fg,
                     bg: sb_bg,
                     ..Cell::default()
                 },
@@ -514,6 +528,17 @@ fn title_bar_style(
     } else {
         (accent, theme.bg_raised)
     }
+}
+
+/// Rows of the sidebar border column that double as the focused pane's
+/// left edge (#39): Some(top, bottom) — title row included — when the
+/// focused pane sits directly right of the sidebar border column.
+fn sidebar_edge_highlight(border_x: u16, focused_rect: Option<Rect>) -> Option<(u16, u16)> {
+    let fr = focused_rect?;
+    if fr.x != border_x + 1 {
+        return None;
+    }
+    Some((fr.y.saturating_sub(TITLE_ROWS), fr.bottom()))
 }
 
 /// Does the focused pane touch the right-edge border drawn by the pane at
@@ -773,6 +798,22 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_edge_highlights_alongside_adjacent_focused_pane() {
+        // #39: a focused pane starting at the sidebar claims the border rows
+        // spanning its title row through its body; a pane in a farther
+        // column claims nothing, leaving the neutral border everywhere.
+        let border_x = 40;
+        let adjacent = Rect::new(41, 1, 78, 19);
+        assert_eq!(
+            sidebar_edge_highlight(border_x, Some(adjacent)),
+            Some((0, 20))
+        );
+        let far_column = Rect::new(120, 1, 78, 19);
+        assert_eq!(sidebar_edge_highlight(border_x, Some(far_column)), None);
+        assert_eq!(sidebar_edge_highlight(border_x, None), None);
+    }
 
     #[test]
     fn focused_pane_owns_every_touching_border() {
