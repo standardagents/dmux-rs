@@ -65,6 +65,32 @@ impl Parser {
             return Some(CcEvent::Unknown(String::from_utf8_lossy(line).into_owned()));
         }
 
+        // %output / %extended-output payloads are raw pty bytes: tmux (3.4+)
+        // passes valid UTF-8 through unescaped, and a pty read boundary can
+        // split a multi-byte character across two %output lines. Such a line
+        // is not valid UTF-8 on its own, so it must be parsed at the byte
+        // level — a lossy decode would stamp U+FFFD into the pane stream.
+        if let Some(rest) = line.strip_prefix(b"%output ") {
+            let (pane_tok, data) = split_first_space(rest);
+            let pane = parse_pane(std::str::from_utf8(pane_tok).ok()?)?;
+            return Some(CcEvent::Output { pane, data: unescape_output(data) });
+        }
+        if let Some(rest) = line.strip_prefix(b"%extended-output ") {
+            // %extended-output %<pane> <age> [flags...] : <data>
+            let (pane_tok, tail) = split_first_space(rest);
+            let pane = parse_pane(std::str::from_utf8(pane_tok).ok()?)?;
+            let (meta, data) = match find_subslice(tail, b" : ") {
+                Some(i) => (&tail[..i], &tail[i + 3..]),
+                None => (tail.strip_suffix(b" :").unwrap_or(tail), &[][..]),
+            };
+            let age_ms = std::str::from_utf8(meta)
+                .ok()
+                .and_then(|m| m.split(' ').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0);
+            return Some(CcEvent::ExtendedOutput { pane, age_ms, data: unescape_output(data) });
+        }
+
         let text = String::from_utf8_lossy(line);
         let mut parts = text.splitn(2, ' ');
         let verb = parts.next().unwrap_or("");
@@ -79,24 +105,9 @@ impl Parser {
             // %end/%error outside a block is a hard protocol violation; surface
             // as Unknown so the client layer can treat it as desync.
             "%end" | "%error" => Some(CcEvent::Unknown(text.into_owned())),
-            "%output" => {
-                let mut it = rest.splitn(2, ' ');
-                let pane = parse_pane(it.next()?)?;
-                let data = it.next().unwrap_or("");
-                Some(CcEvent::Output { pane, data: unescape_output(data.as_bytes()) })
-            }
-            "%extended-output" => {
-                // %extended-output %<pane> <age> [flags...] : <data>
-                let mut it = rest.splitn(2, ' ');
-                let pane = parse_pane(it.next()?)?;
-                let tail = it.next().unwrap_or("");
-                let (meta, data) = match tail.split_once(" : ") {
-                    Some((m, d)) => (m, d),
-                    None => (tail.strip_suffix(" :").unwrap_or(tail), ""),
-                };
-                let age_ms = meta.split(' ').next().and_then(|t| t.parse().ok()).unwrap_or(0);
-                Some(CcEvent::ExtendedOutput { pane, age_ms, data: unescape_output(data.as_bytes()) })
-            }
+            // Bare "%output"/"%extended-output" with no payload token: same
+            // as before the byte-level fast path — malformed, dropped.
+            "%output" | "%extended-output" => None,
             "%pause" => Some(CcEvent::Pause(parse_pane(rest.trim())?)),
             "%continue" => Some(CcEvent::Continue(parse_pane(rest.trim())?)),
             "%window-add" => Some(CcEvent::WindowAdd(parse_window(rest.trim())?)),
@@ -162,6 +173,17 @@ impl Parser {
     }
 }
 
+fn split_first_space(bytes: &[u8]) -> (&[u8], &[u8]) {
+    match bytes.iter().position(|&b| b == b' ') {
+        Some(i) => (&bytes[..i], &bytes[i + 1..]),
+        None => (bytes, &[][..]),
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 fn parse_reply_end(line: &[u8]) -> Option<CcEvent> {
     let text = std::str::from_utf8(line).ok()?;
     let (verb, rest) = text.split_once(' ')?;
@@ -224,6 +246,32 @@ mod tests {
         assert_eq!(
             events,
             vec![CcEvent::Output { pane: PaneId(7), data: b"hi\x1b[1m there\r\n".to_vec() }]
+        );
+    }
+
+    #[test]
+    fn output_split_utf8_stays_raw() {
+        // tmux 3.4+ passes valid UTF-8 through %output unescaped, and a pty
+        // read boundary can split a multi-byte char across two lines (here
+        // '✻' = e2 9c bb). The partial bytes must reach the emulator
+        // untouched — a lossy decode manufactures U+FFFD cells the real
+        // grid never had (issue #1).
+        let events = feed_all(b"%output %9 x\xe2\x9c\n%output %9 \xbby\n");
+        assert_eq!(
+            events,
+            vec![
+                CcEvent::Output { pane: PaneId(9), data: b"x\xe2\x9c".to_vec() },
+                CcEvent::Output { pane: PaneId(9), data: b"\xbby".to_vec() },
+            ]
+        );
+    }
+
+    #[test]
+    fn extended_output_split_utf8_stays_raw() {
+        let events = feed_all(b"%extended-output %5 250 : a\xe2\x9c\n");
+        assert_eq!(
+            events,
+            vec![CcEvent::ExtendedOutput { pane: PaneId(5), age_ms: 250, data: b"a\xe2\x9c".to_vec() }]
         );
     }
 
