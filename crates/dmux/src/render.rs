@@ -17,6 +17,7 @@ pub struct Scene<'a> {
     pub focused: usize,
     pub selected: usize,
     pub session_name: &'a str,
+    #[allow(dead_code)]
     pub project_name: &'a str,
     pub hud: Option<&'a Metrics>,
     pub status_line: &'a str,
@@ -30,6 +31,24 @@ pub struct Scene<'a> {
     pub version: &'a str,
     /// (total filed issues, filed this session) for the sidebar bottom line.
     pub issues: (usize, usize),
+    /// Project groups in TS order (main first, then config, then
+    /// pane-derived), with their resolved colors.
+    pub groups: &'a [SidebarGroup],
+    /// Per-pane (accent, soft) from the owning project's color theme;
+    /// parallel to `panes`.
+    pub pane_accents: &'a [(Color, Color)],
+}
+
+/// One sidebar project group, precomputed by the app.
+pub struct SidebarGroup {
+    pub name: String,
+    #[allow(dead_code)]
+    pub root: String,
+    pub accent: Color,
+    pub accent_soft: Color,
+    pub pane_indices: Vec<usize>,
+    /// Owns the selected pane (or is the main project when none is).
+    pub active: bool,
 }
 
 pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
@@ -46,10 +65,12 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         pane.term.render_into(buf, rect);
         clicks.add(rect, ClickTarget::PaneBody(i));
         // Right-edge border in the gutter column: separates neighboring panes
-        // and marks the pane's edge against the empty background.
+        // and marks the pane's edge against the empty background, colored by
+        // the pane's project.
         let border_x = rect.right();
         if border_x < buf.cols() {
-            let border_fg = if i == scene.focused { scene.theme.accent_soft } else { scene.theme.border };
+            let (pa, ps) = scene.pane_accents.get(i).copied().unwrap_or((scene.theme.accent, scene.theme.border));
+            let border_fg = if i == scene.focused { pa } else { ps };
             for row in rect.y.saturating_sub(TITLE_ROWS)..rect.bottom() {
                 buf.set(
                     border_x,
@@ -90,89 +111,105 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     }
     buf.draw_text(end, 0, &fill, t.accent, t.bg, AttrFlags::BOLD, area);
 
-    // Pane rows, grouped by project when more than one project is present.
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for (i, p) in scene.panes.iter().enumerate() {
-        let label = p
-            .project_root
-            .as_deref()
-            .map(|r| {
-                std::path::Path::new(r)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| r.to_string())
-            })
-            .unwrap_or_else(|| scene.project_name.to_string());
-        match groups.iter_mut().find(|(l, _)| *l == label) {
-            Some((_, list)) => list.push(i),
-            None => groups.push((label, vec![i])),
-        }
-    }
-    let multi = groups.len() > 1;
+    // Project groups (TS parity: main project first, per-group colors,
+    // per-group creation actions, blank spacing between groups).
+    let multi = scene.groups.len() > 1;
     let mut row = 2u16;
-    let mut render_indices: Vec<(Option<String>, usize)> = Vec::new();
-    for (label, indices) in groups {
-        if multi {
-            render_indices.push((Some(label), usize::MAX));
-        }
-        for i in indices {
-            render_indices.push((None, i));
-        }
-    }
-    for (header, i) in render_indices {
-        if row >= area.bottom().saturating_sub(5) {
+    let bottom_limit = area.bottom().saturating_sub(5);
+    for (gi, group) in scene.groups.iter().enumerate() {
+        if row >= bottom_limit {
             break;
         }
-        if let Some(label) = header {
-            let text = format!("⣿ {} ", truncate(&label, area.w.saturating_sub(8) as usize));
-            let end = buf.draw_text(area.x, row, &text, t.accent_soft, t.bg, AttrFlags::BOLD, area);
+        if multi {
+            let text = format!("⣿ {} ", truncate(&group.name, area.w.saturating_sub(8) as usize));
+            let end = buf.draw_text(area.x, row, &text, group.accent, t.bg, AttrFlags::BOLD, area);
             let mut fill = String::new();
             for _ in end..area.right() {
                 fill.push('⣿');
             }
-            buf.draw_text(end, row, &fill, t.accent_soft, t.bg, AttrFlags::empty(), area);
+            buf.draw_text(end, row, &fill, group.accent_soft, t.bg, AttrFlags::empty(), area);
             row += 1;
-            continue;
         }
-        let pane = &scene.panes[i];
-        let selected = i == scene.selected;
-        let focused = i == scene.focused;
-        let caret = if selected { "▸" } else { " " };
-        let glyph = status_glyph(pane, scene.anim);
-        let attn = if pane.needs_attention { "!" } else { " " };
-        let hidden_tag = if pane.hidden { " (hidden)" } else { "" };
-        let name = truncate(pane.display_title(), area.w.saturating_sub(13 + hidden_tag.len() as u16) as usize);
-        let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
-        let (fg, attrs) = if pane.hidden {
-            (t.text_faint, AttrFlags::empty())
-        } else if focused {
-            (t.accent, AttrFlags::BOLD)
-        } else if pane.status == PaneStatus::Waiting || pane.needs_attention {
-            (t.warn, AttrFlags::BOLD)
-        } else if selected {
-            (t.text, AttrFlags::empty())
-        } else {
-            (t.text_dim, AttrFlags::empty())
-        };
-        let bg = if selected { t.bg_selected } else { t.bg };
-        let row_rect = Rect::new(area.x, row, area.w, 1);
-        if selected {
-            buf.fill(row_rect, &Cell { bg, ..Cell::default() });
-        }
-        let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
-        if selected && scene.sidebar_focused {
-            buf.set(area.x, row, Cell { ch: '▍', fg: t.accent, bg, ..Cell::default() });
-        }
-        if let Some(agent) = &pane.agent {
-            let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
-            let tag = format!("[{short}]");
-            let tag_x = area.right().saturating_sub(tag.len() as u16 + 1);
-            if tag_x > end {
-                buf.draw_text(tag_x, row, &tag, t.text_faint, bg, AttrFlags::empty(), area);
+        for &i in &group.pane_indices {
+            if row >= bottom_limit {
+                break;
             }
+            let pane = &scene.panes[i];
+            let selected = i == scene.selected;
+            let focused = i == scene.focused;
+            let caret = if selected { "▸" } else { " " };
+            let glyph = status_glyph(pane, scene.anim);
+            let attn = if pane.needs_attention { "!" } else { " " };
+            let hidden_tag = if pane.hidden { " (hidden)" } else { "" };
+            let ap_tag = if pane.autopilot { " (ap)" } else { "" };
+            let name = truncate(
+                pane.display_title(),
+                area.w.saturating_sub(14 + hidden_tag.len() as u16 + ap_tag.len() as u16) as usize,
+            );
+            let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
+            let (fg, attrs) = if pane.hidden {
+                (t.text_faint, AttrFlags::empty())
+            } else if focused {
+                (group.accent, AttrFlags::BOLD)
+            } else if pane.status == PaneStatus::Waiting || pane.needs_attention {
+                (t.warn, AttrFlags::empty())
+            } else if group.active {
+                (t.text, AttrFlags::empty())
+            } else {
+                (t.text_dim, AttrFlags::empty())
+            };
+            let bg = if selected { t.bg_selected } else { t.bg };
+            let row_rect = Rect::new(area.x, row, area.w, 1);
+            if selected {
+                buf.fill(row_rect, &Cell { bg, ..Cell::default() });
+            }
+            let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
+            if !ap_tag.is_empty() {
+                buf.draw_text(end, row, ap_tag, group.accent, bg, AttrFlags::empty(), area);
+            }
+            if selected && scene.sidebar_focused {
+                buf.set(area.x, row, Cell { ch: '▍', fg: group.accent, bg, ..Cell::default() });
+            }
+            if let Some(agent) = &pane.agent {
+                let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
+                let tag = format!("[{short}]");
+                let tag_x = area.right().saturating_sub(tag.len() as u16 + 1);
+                if tag_x > end {
+                    buf.draw_text(tag_x, row, &tag, group.accent_soft, bg, AttrFlags::empty(), area);
+                }
+            }
+            clicks.add(row_rect, ClickTarget::SidebarRow(i));
+            row += 1;
         }
-        clicks.add(row_rect, ClickTarget::SidebarRow(i));
-        row += 1;
+        // Per-project creation actions, right-aligned like the TS sidebar;
+        // the active project shows its hotkeys.
+        if row < bottom_limit {
+            let (na, term) = if group.active {
+                ("[n]ew agent".to_string(), "[t]erminal".to_string())
+            } else {
+                ("new agent".to_string(), "terminal".to_string())
+            };
+            let total = na.chars().count() as u16 + term.chars().count() as u16 + 2;
+            let x0 = area.right().saturating_sub(total + 1);
+            let color = if group.active { group.accent } else { t.text_faint };
+            let ax = buf.draw_text(x0, row, &na, color, t.bg, AttrFlags::empty(), area);
+            clicks.add(Rect::new(x0, row, ax - x0, 1), ClickTarget::SidebarGroupNewAgent(gi));
+            let tx = buf.draw_text(ax + 2, row, &term, color, t.bg, AttrFlags::empty(), area);
+            clicks.add(Rect::new(ax + 2, row, tx - ax - 2, 1), ClickTarget::SidebarGroupNewTerminal(gi));
+            row += 1;
+        }
+        // Breathing room between groups.
+        if multi {
+            row += 1;
+        }
+    }
+
+    // Right-hand sidebar border.
+    let border_x = area.right();
+    if border_x < buf.cols() {
+        for y in 0..area.bottom() {
+            buf.set(border_x, y, Cell { ch: '│', fg: t.border, bg: t.bg, ..Cell::default() });
+        }
     }
 
     // Action rows: always-visible click targets so nothing needs a manual.
@@ -238,9 +275,12 @@ fn draw_pane_title(
         return;
     }
     let focused = idx == scene.focused;
+    let (pa, ps) = scene.pane_accents.get(idx).copied().unwrap_or((t.accent, t.accent_soft));
     let bar = Rect::new(body.x, body.y - TITLE_ROWS, body.w, TITLE_ROWS);
-    let bg = if focused { t.accent_soft } else { t.bg_raised };
-    let fg = if focused { Color::Indexed(255) } else { t.text_dim };
+    // Title bar carries the project color: solid soft-accent when focused,
+    // raised bg with accent text otherwise.
+    let bg = if focused { ps } else { t.bg_raised };
+    let fg = if focused { Color::Indexed(255) } else { pa };
     buf.fill(bar, &Cell { bg, ..Cell::default() });
 
     let glyph = status_glyph(pane, scene.anim);

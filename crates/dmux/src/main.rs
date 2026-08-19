@@ -359,6 +359,8 @@ struct App {
     filed_issues: Vec<report::FiledIssue>,
     new_issue_count: usize,
     version_line: String,
+    sidebar_groups: Vec<render::SidebarGroup>,
+    pane_accents: Vec<(dmux_compositor::Color, dmux_compositor::Color)>,
     /// A staged self-update: swap + re-exec after clean shutdown.
     reexec_after: Option<PathBuf>,
     want_exit: bool,
@@ -501,6 +503,8 @@ async fn run(
         filed_issues: report::load_filed(&dirs_home()),
         new_issue_count: 0,
         version_line: updater::version_line(),
+        sidebar_groups: Vec::new(),
+        pane_accents: Vec::new(),
         reexec_after: None,
         want_exit: false,
         own_sizing: false,
@@ -1418,6 +1422,116 @@ impl App {
         }
     }
 
+    /// Rebuild the sidebar project groups + per-pane colors (TS contract:
+    /// main project first, then config `sidebarProjects` order, then
+    /// pane-derived; colors from `colorTheme` with TS auto-assignment for
+    /// entries that lack one, persisted back to the shared config).
+    fn rebuild_sidebar_groups(&mut self) {
+        let norm = |r: &str| r.trim_end_matches('/').to_string();
+        let main_root = norm(&self.project_root.to_string_lossy());
+        let main_name = self
+            .project_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".into());
+
+        // Ordered, deduped project entries.
+        let mut order: Vec<(String, String, Option<String>)> = Vec::new();
+        let push = |root: String, name: Option<String>, theme: Option<String>, order: &mut Vec<(String, String, Option<String>)>| {
+            let root = norm(&root);
+            if let Some(existing) = order.iter_mut().find(|(r, ..)| *r == root) {
+                if existing.2.is_none() {
+                    existing.2 = theme;
+                }
+                return;
+            }
+            let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| {
+                std::path::Path::new(&root)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "project".into())
+            });
+            order.push((root, name, theme));
+        };
+        push(main_root.clone(), Some(main_name), None, &mut order);
+        for e in &self.config.sidebar_projects {
+            let theme = e
+                .color_theme
+                .clone()
+                .filter(|t| dmux_ui::PROJECT_THEME_NAMES.contains(&t.as_str()));
+            push(e.project_root.clone(), e.project_name.clone(), theme, &mut order);
+        }
+        for p in &self.panes {
+            let root = p.project_root.clone().unwrap_or_else(|| main_root.clone());
+            push(root, None, None, &mut order);
+        }
+
+        // Auto-assign missing colors (TS AUTO order: default first).
+        let mut used: std::collections::HashSet<String> =
+            order.iter().filter_map(|(_, _, t)| t.clone()).collect();
+        let mut persisted_change = false;
+        for (root, _, theme) in order.iter_mut() {
+            if theme.is_some() {
+                continue;
+            }
+            let pick = dmux_ui::project_theme_auto_order()
+                .find(|n| !used.contains(*n))
+                .unwrap_or(dmux_ui::DEFAULT_PROJECT_THEME)
+                .to_string();
+            used.insert(pick.clone());
+            // Persist onto a matching config entry so TS resolves the same.
+            if let Some(entry) = self
+                .config
+                .sidebar_projects
+                .iter_mut()
+                .find(|e| norm(&e.project_root) == *root && e.color_theme.is_none())
+            {
+                entry.color_theme = Some(pick.clone());
+                entry.color_theme_source = Some("auto".into());
+                persisted_change = true;
+            }
+            *theme = Some(pick);
+        }
+        if persisted_change {
+            self.save_config();
+        }
+
+        let active_root = norm(&self.active_project_root().unwrap_or_else(|| main_root.clone()));
+        self.sidebar_groups = order
+            .iter()
+            .map(|(root, name, theme)| {
+                let (accent, soft) = dmux_ui::project_theme(theme.as_deref().unwrap_or(dmux_ui::DEFAULT_PROJECT_THEME));
+                let pane_indices: Vec<usize> = self
+                    .panes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| norm(&p.project_root.clone().unwrap_or_else(|| main_root.clone())) == *root)
+                    .map(|(i, _)| i)
+                    .collect();
+                render::SidebarGroup {
+                    name: name.clone(),
+                    root: root.clone(),
+                    accent,
+                    accent_soft: soft,
+                    pane_indices,
+                    active: *root == active_root,
+                }
+            })
+            .collect();
+        self.pane_accents = self
+            .panes
+            .iter()
+            .map(|p| {
+                let root = norm(&p.project_root.clone().unwrap_or_else(|| main_root.clone()));
+                self.sidebar_groups
+                    .iter()
+                    .find(|g| g.root == root)
+                    .map(|g| (g.accent, g.accent_soft))
+                    .unwrap_or((self.theme.accent, self.theme.accent_soft))
+            })
+            .collect();
+    }
+
     /// Project root that new panes should target: the selected pane's
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
@@ -1535,6 +1649,7 @@ impl App {
     }
 
     fn relayout(&mut self) {
+        self.rebuild_sidebar_groups();
         let (min_w, max_w) = self.comfort_band();
         let visible: Vec<usize> = (0..self.panes.len()).filter(|&i| !self.panes[i].hidden).collect();
         self.layout = layout::compute_with_band(self.size.0, self.size.1, visible.len(), min_w, max_w);
@@ -1678,6 +1793,8 @@ impl App {
             }
             KeyCode::Char('h') => return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected))),
             KeyCode::Char('x') => return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected))),
+            KeyCode::Char('n') => return Some(self.execute_cmd(AppCmd::OpenNewAgent)),
+            KeyCode::Char('t') => return Some(self.execute_cmd(AppCmd::NewTerminal)),
             KeyCode::Escape => {
                 self.sidebar_focused = false;
             }
@@ -1877,6 +1994,20 @@ impl App {
                 Some(ClickTarget::SidebarNewProject) => return self.execute_cmd(AppCmd::PromptAddProject),
                 Some(ClickTarget::SidebarSettings) => return self.execute_cmd(AppCmd::OpenSettings),
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
+                Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
+                    if let Some(&i) = self.sidebar_groups.get(gi).and_then(|g| g.pane_indices.first()) {
+                        self.selected = i;
+                    }
+                    self.rebuild_sidebar_groups();
+                    return self.execute_cmd(AppCmd::OpenNewAgent);
+                }
+                Some(ClickTarget::SidebarGroupNewTerminal(gi)) => {
+                    if let Some(&i) = self.sidebar_groups.get(gi).and_then(|g| g.pane_indices.first()) {
+                        self.selected = i;
+                    }
+                    self.rebuild_sidebar_groups();
+                    return self.execute_cmd(AppCmd::NewTerminal);
+                }
                 Some(ClickTarget::SidebarIssues) => {
                     if let Some(issue) = self.filed_issues.last() {
                         let url = issue.url.clone();
@@ -2422,21 +2553,21 @@ impl App {
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| raw.clone());
                     let root = expanded.to_string_lossy().into_owned();
-                    // Register in sidebarProjects (TS-compatible shape).
-                    let entry = serde_json::json!({"projectRoot": root, "projectName": name});
-                    let list = self
+                    // Register in sidebarProjects (typed, TS-compatible).
+                    let exists = self
                         .config
-                        .extra
-                        .entry("sidebarProjects".to_string())
-                        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-                    let mut added = false;
-                    if let Some(arr) = list.as_array_mut() {
-                        if !arr.iter().any(|p| p["projectRoot"].as_str() == Some(root.as_str())) {
-                            arr.push(entry);
-                            added = true;
-                        }
-                    }
-                    if added {
+                        .sidebar_projects
+                        .iter()
+                        .any(|e| e.project_root.trim_end_matches('/') == root.trim_end_matches('/'));
+                    if !exists {
+                        self.config.sidebar_projects.push(dmux_core::SidebarProjectEntry {
+                            project_root: root.clone(),
+                            project_name: Some(name.clone()),
+                            color_theme: None,
+                            color_theme_source: None,
+                            extra: serde_json::Map::new(),
+                        });
+                        self.rebuild_sidebar_groups();
                         self.save_config();
                         self.toast(format!("Added project '{name}'"));
                     }
@@ -3196,6 +3327,8 @@ impl App {
             sidebar_focused: self.sidebar_focused,
             version: &self.version_line,
             issues: (self.filed_issues.len(), self.new_issue_count),
+            groups: &self.sidebar_groups,
+            pane_accents: &self.pane_accents,
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 

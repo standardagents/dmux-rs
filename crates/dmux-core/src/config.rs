@@ -75,10 +75,29 @@ pub struct DmuxConfig {
     pub project_root: String,
     #[serde(default)]
     pub panes: Vec<DmuxPane>,
+    /// Multi-project sidebar entries (order = render order after the main
+    /// project); TS-compatible, unknown fields preserved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_projects: Vec<SidebarProjectEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_pane_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub welcome_pane_id: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarProjectEntry {
+    pub project_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    /// One of the eight TS project theme names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_theme_source: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -118,6 +137,7 @@ impl DmuxConfig {
             project_name,
             project_root,
             panes: Vec::new(),
+            sidebar_projects: Vec::new(),
             control_pane_id: None,
             welcome_pane_id: None,
             extra,

@@ -68,3 +68,32 @@ impl Default for Theme {
         }
     }
 }
+
+/// TS project color themes (`sidebarProjects[].colorTheme` values). Names,
+/// default, and auto-assignment order are the TS `themePalette` contract —
+/// both implementations must pick identical colors for the same config.
+pub const PROJECT_THEME_NAMES: &[&str] =
+    &["red", "blue", "yellow", "orange", "green", "purple", "cyan", "magenta"];
+pub const DEFAULT_PROJECT_THEME: &str = "orange";
+
+/// (accent, soft) for a project color theme; unknown names get the default.
+/// Indexes follow the TS palette's activeBorder / artTail values.
+pub fn project_theme(name: &str) -> (Color, Color) {
+    match name {
+        "red" => (Color::Indexed(203), Color::Indexed(124)),
+        "blue" => (Color::Indexed(75), Color::Indexed(27)),
+        "yellow" => (Color::Indexed(221), Color::Indexed(178)),
+        "green" => (Color::Indexed(77), Color::Indexed(34)),
+        "purple" => (Color::Indexed(141), Color::Indexed(93)),
+        "cyan" => (Color::Indexed(80), Color::Indexed(31)),
+        "magenta" => (Color::Indexed(206), Color::Indexed(127)),
+        _ => (Color::Indexed(214), Color::Indexed(130)),
+    }
+}
+
+/// Auto-assignment order: the default theme first, then the rest (TS
+/// `AUTO_SIDEBAR_THEME_ORDER`).
+pub fn project_theme_auto_order() -> impl Iterator<Item = &'static str> {
+    std::iter::once(DEFAULT_PROJECT_THEME)
+        .chain(PROJECT_THEME_NAMES.iter().copied().filter(|n| *n != DEFAULT_PROJECT_THEME))
+}
