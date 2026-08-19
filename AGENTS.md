@@ -87,10 +87,10 @@ Loop rules:
   (`gh issue edit <n> --add-assignee @me`) before starting work, so humans
   and other agents can see it's taken.
 - **Move the card to "In Progress".** When you claim an issue, move it on
-  the org Project board: `scripts/board.sh <n> "In Progress"`. The script
-  no-ops with a note if the gh token lacks the `project` scope (grant it
-  once with `gh auth refresh -s project`). Closing the issue moves the
-  card to Done via the board's own workflow.
+  the org Project board: `scripts/board.sh <n> "In Progress"`. It uses the
+  issue CLI's GitHub App credentials (no gh scopes needed) and no-ops with
+  a note when they're absent. Closing the issue moves the card to Done via
+  the board's own workflow.
 - **Auto-closing commits.** Include `Fixes #<n>` in the fix commit message
   so GitHub closes the issue automatically when the commit lands on
   `main`.

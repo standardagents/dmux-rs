@@ -156,6 +156,9 @@ enum Tag {
     VerifyCap(PaneId),
     ControllerPid,
     NewWindow(Box<NewWindowCtx>),
+    /// Keepalive window creation round-trip (#10): the reply clears the
+    /// in-flight flag and pins the window's name against automatic-rename.
+    KeepaliveCreated,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -371,6 +374,9 @@ struct App {
     welcome_sel: usize,
     welcome_rain: welcome::MatrixRain,
     keepalive_present: bool,
+    /// A keepalive create command is in flight; never send another until
+    /// its reply lands (#10 — unbounded keepalive spawn).
+    keepalive_pending: bool,
     /// Panes we killed on purpose: never re-adopt while tmux still lists them.
     closing: std::collections::HashSet<PaneId>,
     /// A pane we just created: focus it once adoption lands.
@@ -528,6 +534,7 @@ async fn run(
         welcome_sel: 0,
         welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
         keepalive_present: false,
+        keepalive_pending: false,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
         drag_select: None,
@@ -798,14 +805,23 @@ impl App {
     /// Commands are FIFO on the control stream, so calling this before a
     /// kill-window guarantees the session never hits zero windows.
     fn ensure_keepalive(&mut self) {
-        if self.keepalive_present || !self.own_sizing {
+        if self.keepalive_present || self.keepalive_pending || !self.own_sizing {
             return;
         }
+        // Tagged round-trip: keepalive_pending stays set until tmux confirms,
+        // so overlapping reconciles can never each spawn one (#10 leaked
+        // hundreds of PTYs this way). Detection is by start command
+        // (session::is_keepalive), which survives automatic-rename.
         self.keepalive_present = true;
-        let _ = self.client.send(format!(
-            "new-window -d -n {} 'sleep 2147483647'",
-            session::KEEPALIVE_NAME
-        ));
+        self.keepalive_pending = true;
+        let _ = self.client.send_tagged(
+            format!(
+                "new-window -dP -F '#{{window_id}}' -n {} '{}'",
+                session::KEEPALIVE_NAME,
+                session::KEEPALIVE_CMD
+            ),
+            Tag::KeepaliveCreated,
+        );
     }
 
     fn animating(&self) -> bool {
@@ -1135,6 +1151,24 @@ impl App {
             }
             Tag::NewWindow(ctx) => {
                 self.finish_new_window(*ctx, &reply);
+            }
+            Tag::KeepaliveCreated => {
+                self.keepalive_pending = false;
+                if reply.ok {
+                    // Pin the name so name-based tooling stays readable even
+                    // under automatic-rename configs (identity itself is the
+                    // start command and does not depend on this).
+                    if let Some(win) = reply.text_lines().first().map(|l| l.trim().to_string()) {
+                        if win.starts_with('@') {
+                            let _ = self
+                                .client
+                                .send(format!("set-option -w -t {win} automatic-rename off"));
+                        }
+                    }
+                } else {
+                    // Creation failed; allow a later reconcile to retry.
+                    self.keepalive_present = false;
+                }
             }
         }
     }
@@ -1586,11 +1620,8 @@ impl App {
     fn apply_pane_list(&mut self, reply: &Reply) {
         let infos = session::parse_pane_list(reply);
         // Track (and dedupe) keepalive windows.
-        let keepalives: Vec<_> = infos
-            .iter()
-            .filter(|i| i.window_name == session::KEEPALIVE_NAME)
-            .map(|i| i.window)
-            .collect();
+        let keepalives: Vec<_> =
+            infos.iter().filter(|i| session::is_keepalive(i)).map(|i| i.window).collect();
         self.keepalive_present = !keepalives.is_empty();
         for extra in keepalives.iter().skip(1) {
             let _ = self.client.send(format!("kill-window -t {extra}"));
@@ -3813,6 +3844,7 @@ mod tests {
             current_command: "bash".into(),
             window_name: "w".into(),
             pane_pid: 1,
+            start_command: String::new(),
         };
         // Window 0 has three panes, window 1 has one: only the two extras
         // of window 0 are broken out; a re-run on the result is a no-op.

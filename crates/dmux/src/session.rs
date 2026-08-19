@@ -26,6 +26,21 @@ fn is_infra(title: &str, window_name: &str) -> bool {
 /// session (which would take the renderer down with it).
 pub const KEEPALIVE_NAME: &str = "dmux-keepalive";
 
+/// The keepalive pane's start command — the durable identity. Window NAMES
+/// are not reliable: automatic-rename setups rename the window to "sleep",
+/// after which name-based detection misses it, reconciles re-create it, and
+/// keepalives leak until the system runs out of PTYs (#10).
+pub const KEEPALIVE_CMD: &str = "sleep 2147483647";
+
+/// Keepalive detection by durable identity (start command), with the window
+/// name as fallback for panes created by older builds where
+/// `pane_start_command` may be absent from the listing.
+pub fn is_keepalive(info: &TmuxPaneInfo) -> bool {
+    info.window_name == KEEPALIVE_NAME
+        || info.title == KEEPALIVE_NAME
+        || info.start_command.trim().trim_matches(|c| c == '\'' || c == '"') == KEEPALIVE_CMD
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneStatus {
     Working,
@@ -240,10 +255,12 @@ pub struct TmuxPaneInfo {
     pub current_command: String,
     pub window_name: String,
     pub pane_pid: u32,
+    /// `#{pane_start_command}` — survives window renames (keepalive identity).
+    pub start_command: String,
 }
 
 pub fn list_panes_command() -> String {
-    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}\u{1}#{pane_pid}'".to_string()
+    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}\u{1}#{pane_pid}\u{1}#{pane_start_command}'".to_string()
 }
 
 pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
@@ -270,6 +287,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
             current_command: parts[6].to_string(),
             window_name: parts[7].to_string(),
             pane_pid,
+            start_command: parts.get(9).unwrap_or(&"").to_string(),
         });
     }
     out
@@ -283,7 +301,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
 pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<LogicalPane> {
     let mut adopted = Vec::new();
     for info in infos {
-        if is_infra(&info.title, &info.window_name) {
+        if is_infra(&info.title, &info.window_name) || is_keepalive(info) {
             continue;
         }
         let parsed = parse_pane_title(&info.title);
@@ -425,5 +443,48 @@ mod tests {
         let tail = pane.term.read_tail_text(4);
         assert!(tail.contains("seede live") || tail.contains("seeded"), "tail: {tail:?}");
         assert!(pane.reseed_buffer.is_none());
+    }
+
+    #[test]
+    fn keepalive_detected_after_automatic_rename() {
+        // #10: automatic-rename configs rename the keepalive window to
+        // "sleep"; identity must survive via the start command, or every
+        // reconcile re-creates the keepalive until PTYs run out.
+        let mk = |window_name: &str, start: &str| TmuxPaneInfo {
+            pane: PaneId(1),
+            window: WindowId(1),
+            title: "host".into(),
+            width: 80,
+            height: 24,
+            alternate_on: false,
+            current_command: "sleep".into(),
+            window_name: window_name.into(),
+            pane_pid: 42,
+            start_command: start.into(),
+        };
+        // Renamed by automatic-rename: still a keepalive.
+        assert!(is_keepalive(&mk("sleep", KEEPALIVE_CMD)));
+        // tmux may quote the start command in formats.
+        assert!(is_keepalive(&mk("sleep", "'sleep 2147483647'")));
+        // Legacy builds: name only, no start_command field.
+        assert!(is_keepalive(&mk(KEEPALIVE_NAME, "")));
+        // A user's own sleep is NOT a keepalive (different duration)…
+        assert!(!is_keepalive(&mk("sleep", "sleep 30")));
+        // …and neither is an ordinary shell window.
+        assert!(!is_keepalive(&mk("zsh", "")));
+    }
+
+    #[test]
+    fn pane_list_parses_start_command() {
+        let line = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}sleep\u{1}sleep\u{1}9\u{1}sleep 2147483647";
+        let reply = Reply { lines: vec![line.as_bytes().to_vec()], ok: true, rtt: std::time::Duration::ZERO };
+        let infos = parse_pane_list(&reply);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].start_command, "sleep 2147483647");
+        assert!(is_keepalive(&infos[0]));
+        // Older 9-field listings still parse (start_command empty).
+        let line9 = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w\u{1}9";
+        let reply9 = Reply { lines: vec![line9.as_bytes().to_vec()], ok: true, rtt: std::time::Duration::ZERO };
+        assert_eq!(parse_pane_list(&reply9)[0].start_command, "");
     }
 }
