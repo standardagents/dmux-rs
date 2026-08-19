@@ -160,8 +160,6 @@ pub enum ViewResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickTarget {
     SidebarRow(usize),
-    SidebarNewAgent,
-    SidebarNewTerminal,
     SidebarNewProject,
     SidebarSettings,
     SidebarHelp,

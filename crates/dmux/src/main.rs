@@ -19,6 +19,7 @@ mod report;
 mod session;
 mod sidebar;
 mod sounds;
+mod style;
 mod tracking;
 mod updater;
 mod verify;
@@ -2729,9 +2730,7 @@ impl App {
             MouseKind::WheelUp | MouseKind::WheelDown => {
                 let delta: i32 = if kind == MouseKind::WheelUp { 3 } else { -3 };
                 match target {
-                    Some(ClickTarget::SidebarRow(_))
-                    | Some(ClickTarget::SidebarNewAgent)
-                    | Some(ClickTarget::SidebarNewTerminal) => {
+                    Some(ClickTarget::SidebarRow(_)) => {
                         let len = self.panes.len();
                         if len > 0 {
                             let step = if delta > 0 { -1i32 } else { 1 };
@@ -2817,12 +2816,6 @@ impl App {
                     self.sidebar_focused = true;
                     self.dirty = true;
                     return true;
-                }
-                Some(ClickTarget::SidebarNewAgent) => {
-                    return self.execute_cmd(AppCmd::OpenNewAgent)
-                }
-                Some(ClickTarget::SidebarNewTerminal) => {
-                    return self.execute_cmd(AppCmd::NewTerminal)
                 }
                 Some(ClickTarget::SidebarNewProject) => {
                     return self.execute_cmd(AppCmd::PromptAddProject)
@@ -4467,7 +4460,7 @@ impl App {
                 "tip: ^b 1..9 jumps straight to a pane",
                 "tip: ^b h hides a pane without killing it",
             ];
-            pick_tip(TIPS, timestamp(), self.layout.sidebar.w as usize).to_string()
+            crate::style::pick_tip(TIPS, timestamp(), self.layout.sidebar.w as usize).to_string()
         } else {
             "^b for commands · ^b ? help".to_string()
         };
@@ -4874,31 +4867,6 @@ fn timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-/// Footer tip rotation: one step per 15 seconds of wall clock (`now_ms` is
-/// milliseconds — #5 shipped a /15 that rotated every 15ms).
-fn tip_index(now_ms: u64, len: usize) -> usize {
-    (now_ms / 15_000) as usize % len.max(1)
-}
-
-/// Width-aware tip pick: rotate (15s steps) through only the tips that fit
-/// the footer, so narrow sidebars show complete messages instead of clipped
-/// fragments (#8). Falls back to the shortest tip when nothing fits.
-fn pick_tip<'a>(tips: &[&'a str], now_ms: u64, width: usize) -> &'a str {
-    let fitting: Vec<&'a str> = tips
-        .iter()
-        .copied()
-        .filter(|t| t.chars().count() <= width)
-        .collect();
-    if fitting.is_empty() {
-        return tips
-            .iter()
-            .copied()
-            .min_by_key(|t| t.chars().count())
-            .unwrap_or("");
-    }
-    fitting[tip_index(now_ms, fitting.len())]
-}
-
 /// Every pane after the first in each window: legacy splits that owner mode
 /// breaks out into their own windows (one pane per window is dmux's model).
 fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
@@ -5014,22 +4982,6 @@ mod tests {
         );
         // A title that is ONLY a spinner strips to empty (then ignored).
         assert_eq!(strip_status_glyphs("✳"), "");
-    }
-
-    #[test]
-    fn tips_are_picked_to_fit_the_sidebar() {
-        let tips = &[
-            "short tip",
-            "a much longer tip that only fits wide sidebars",
-        ];
-        // Narrow sidebar: only the fitting tip is ever shown, at any time.
-        assert_eq!(pick_tip(tips, 0, 20), "short tip");
-        assert_eq!(pick_tip(tips, 16_000, 20), "short tip");
-        // Wide sidebar: rotation covers both.
-        assert_eq!(pick_tip(tips, 0, 80), tips[0]);
-        assert_eq!(pick_tip(tips, 15_000, 80), tips[1]);
-        // Nothing fits: shortest tip, never an empty footer.
-        assert_eq!(pick_tip(tips, 0, 3), "short tip");
     }
 
     #[test]
@@ -5202,15 +5154,5 @@ mod tests {
             clock.fire_if_due(t0 + interval, interval),
             "unarmed clock fires immediately"
         );
-    }
-
-    #[test]
-    fn footer_tips_hold_for_fifteen_seconds() {
-        // Stable within a 15s window…
-        assert_eq!(tip_index(0, 7), tip_index(14_999, 7));
-        // …advances by exactly one across the boundary…
-        assert_eq!(tip_index(15_000, 7), 1);
-        // …and wraps around the tip list.
-        assert_eq!(tip_index(7 * 15_000, 7), 0);
     }
 }
