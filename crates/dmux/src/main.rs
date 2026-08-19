@@ -1653,6 +1653,9 @@ impl App {
             match self.panes.iter_mut().find(|p| p.tmux_pane == new_pane.tmux_pane) {
                 Some(existing) => {
                     existing.tmux_window = new_pane.tmux_window;
+                    // Keep the alt-screen flag fresh: begin_reseed seeds
+                    // onto the grid tmux says the pane is on (#12).
+                    existing.alt_screen = new_pane.alt_screen;
                     // tmux still lists the pane: whatever marked it dead was
                     // wrong (or it recovered) — resurrect.
                     if existing.status == PaneStatus::Dead {
@@ -2029,12 +2032,41 @@ impl App {
                         }
                     }
                     _ => {
-                        // Wheel over a pane scrolls that pane's view.
+                        // Wheel over a pane (#12): apps that own the mouse
+                        // get the wheel as SGR events; alt-screen apps
+                        // (Claude Code) get arrow keys — the alt screen has
+                        // no history, so local view-scrolling there only
+                        // shows garbage; everything else scrolls our view.
                         if let Some(ClickTarget::PaneBody(i)) | Some(ClickTarget::PaneTitle(i)) = target {
                             if let Some(p) = self.panes.get_mut(i) {
-                                p.term.scroll_view(delta);
-                                p.dirty = true;
-                                self.dirty = true;
+                                let modes = p.term.input_modes();
+                                let app_mouse = (modes.mouse_click || modes.mouse_drag || modes.mouse_motion)
+                                    && modes.sgr_mouse;
+                                let up = kind == MouseKind::WheelUp;
+                                if app_mouse {
+                                    if let Some(rect) = p.rect {
+                                        let c = col.saturating_sub(rect.x);
+                                        let r = row.saturating_sub(rect.y);
+                                        let seq = input::encode_sgr_mouse(if up { 64 } else { 65 }, true, c, r);
+                                        let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
+                                    }
+                                } else if modes.alt_screen {
+                                    // xterm "alternate scroll" / tmux behavior:
+                                    // three arrow presses per wheel tick,
+                                    // honoring DECCKM application encoding.
+                                    let arrow: &[u8] = match (up, modes.app_cursor) {
+                                        (true, false) => b"\x1b[A",
+                                        (true, true) => b"\x1bOA",
+                                        (false, false) => b"\x1b[B",
+                                        (false, true) => b"\x1bOB",
+                                    };
+                                    let seq = arrow.repeat(3);
+                                    let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
+                                } else {
+                                    p.term.scroll_view(delta);
+                                    p.dirty = true;
+                                    self.dirty = true;
+                                }
                             }
                         }
                     }

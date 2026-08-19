@@ -137,6 +137,14 @@ impl LogicalPane {
     /// reply arrives.
     pub fn begin_reseed(&mut self) {
         self.term = PaneTerm::new(self.cols, self.rows, PANE_SCROLLBACK);
+        // A pane that tmux reports on the alternate screen must seed onto
+        // the alternate grid. Seeding it onto the primary grid left the
+        // emulator with scrollback the real pane doesn't have: every
+        // full-screen repaint scrolled a stale frame into history, and
+        // wheel-scrolling showed overlapping frame fragments (#12).
+        if self.alt_screen {
+            self.term.advance(b"\x1b[?1049h");
+        }
         self.reseed_buffer = Some(Vec::new());
         // A seed resets the stream recording anchor: from here, replaying
         // the recording from an empty grid reproduces the live grid.
@@ -443,6 +451,29 @@ mod tests {
         let tail = pane.term.read_tail_text(4);
         assert!(tail.contains("seede live") || tail.contains("seeded"), "tail: {tail:?}");
         assert!(pane.reseed_buffer.is_none());
+    }
+
+    #[test]
+    fn alt_screen_pane_seeds_onto_alt_grid() {
+        // #12: a pane tmux reports as alternate_on must seed onto the alt
+        // grid. On the primary grid, every full-screen repaint scrolled a
+        // stale frame into scrollback the real pane doesn't have, and
+        // wheel-scrolling rendered overlapping frame fragments.
+        let reply = reply_of(&["%7\u{1}@1\u{1}p__cc__p\u{1}30\u{1}5\u{1}1\u{1}node\u{1}w"]);
+        let infos = parse_pane_list(&reply);
+        assert!(infos[0].alternate_on);
+        let mut pane = adopt_panes(None, &infos).remove(0);
+        assert!(pane.alt_screen);
+        pane.begin_reseed();
+        pane.finish_reseed(&reply_of(&["transcript row"]), None);
+        assert!(pane.term.input_modes().alt_screen, "seed must land on the alt grid");
+        // Repaint churn must not accumulate history…
+        for i in 0..50 {
+            pane.advance_recorded(format!("frame {i}\r\n").as_bytes());
+        }
+        assert_eq!(pane.term.history_len(), 0, "alt grid has no scrollback");
+        // …and the local view can't scroll into stale frames.
+        assert_eq!(pane.term.scroll_view(3), 0);
     }
 
     #[test]
