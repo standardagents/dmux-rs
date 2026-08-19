@@ -300,7 +300,9 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 t.text_faint
             };
             let issue_max = x0.saturating_sub(area.x + 2) as usize;
-            let issue_label = truncate(&group.issue_label, issue_max);
+            let issue_action =
+                issue_action_label(&group.issue_label, group.active, scene.sidebar_focused);
+            let issue_label = truncate(&issue_action, issue_max);
             let ix = area.x + 1;
             let issue_end = buf.draw_text(
                 ix,
@@ -539,6 +541,19 @@ fn action_labels(group_active: bool, sidebar_focused: bool) -> (String, String) 
         ("[n]ew agent".to_string(), "[t]erminal".to_string())
     } else {
         ("new agent".to_string(), "terminal".to_string())
+    }
+}
+
+fn issue_action_label(label: &str, group_active: bool, sidebar_focused: bool) -> String {
+    if !group_active || !sidebar_focused || label.is_empty() {
+        return label.to_owned();
+    }
+    if label == "loading…" {
+        return "[i]ssues loading…".to_owned();
+    }
+    match label.find("issue") {
+        Some(index) => format!("{}[i]{}", &label[..index], &label[index + 1..]),
+        None => label.to_owned(),
     }
 }
 
@@ -783,6 +798,9 @@ mod tests {
             action_labels(false, true),
             ("new agent".to_string(), "terminal".to_string())
         );
+        assert_eq!(issue_action_label("2 issues", true, true), "2 [i]ssues");
+        assert_eq!(issue_action_label("0 issues", true, false), "0 issues");
+        assert_eq!(issue_action_label("", true, true), "");
     }
 
     #[test]

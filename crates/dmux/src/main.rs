@@ -17,6 +17,7 @@ mod notify;
 mod render;
 mod report;
 mod session;
+mod sidebar;
 mod sounds;
 mod tracking;
 mod updater;
@@ -41,6 +42,8 @@ use dmux_ui::{ClickMap, Theme};
 use github::{IssueLoadState, SharedIssueState};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
+use sidebar::{key_action as sidebar_key_action, nav_targets as sidebar_nav_targets};
+use sidebar::{SidebarKeyAction, SidebarNavTarget};
 use views::{
     AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
     MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
@@ -87,74 +90,6 @@ fn verdict_pane_status(v: &dmux_infer::PaneVerdict) -> PaneStatus {
         dmux_infer::PaneVerdict::OptionDialog => PaneStatus::Waiting,
         dmux_infer::PaneVerdict::OpenPrompt => PaneStatus::Idle,
         dmux_infer::PaneVerdict::InProgress => PaneStatus::Working,
-    }
-}
-
-/// What a key does while the sidebar owns the keyboard (#27). Pure so the
-/// routing contract is testable: global bindings pass through, sidebar
-/// commands map to actions, Escape alone leaves focus, and EVERYTHING else
-/// is consumed as a no-op — arbitrary typing must never fall back into a
-/// pane or silently move focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidebarKeyAction {
-    /// A global binding (the leader chord or a user keymap entry): handled
-    /// by normal routing, sidebar focus untouched.
-    PassThrough,
-    /// Unknown key: consumed, nothing happens.
-    Ignore,
-    Up,
-    Down,
-    Activate,
-    Menu,
-    Hide,
-    Close,
-    NewAgent,
-    NewTerminal,
-    LeaveFocus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SidebarNavTarget {
-    Pane(usize),
-    Project(String),
-}
-
-fn sidebar_nav_targets(groups: &[render::SidebarGroup]) -> Vec<SidebarNavTarget> {
-    let mut targets = Vec::new();
-    for group in groups {
-        targets.extend(
-            group
-                .pane_indices
-                .iter()
-                .copied()
-                .map(SidebarNavTarget::Pane),
-        );
-        targets.push(SidebarNavTarget::Project(group.root.clone()));
-    }
-    targets
-}
-
-fn sidebar_key_action(key: &dmux_host::KeyEvent, keymap: &keys::Keymap) -> SidebarKeyAction {
-    use dmux_host::KeyCode;
-    if let Some(chord) = keys::event_chord(key) {
-        if keymap.is_leader(&chord) || keymap.lookup(&chord).is_some() {
-            return SidebarKeyAction::PassThrough;
-        }
-    }
-    if !key.modifiers.is_empty() {
-        return SidebarKeyAction::Ignore;
-    }
-    match key.key {
-        KeyCode::UpArrow | KeyCode::Char('k') => SidebarKeyAction::Up,
-        KeyCode::DownArrow | KeyCode::Char('j') => SidebarKeyAction::Down,
-        KeyCode::Enter => SidebarKeyAction::Activate,
-        KeyCode::Char('m') | KeyCode::Char(' ') => SidebarKeyAction::Menu,
-        KeyCode::Char('h') => SidebarKeyAction::Hide,
-        KeyCode::Char('x') => SidebarKeyAction::Close,
-        KeyCode::Char('n') => SidebarKeyAction::NewAgent,
-        KeyCode::Char('t') => SidebarKeyAction::NewTerminal,
-        KeyCode::Escape => SidebarKeyAction::LeaveFocus,
-        _ => SidebarKeyAction::Ignore,
     }
 }
 
@@ -2123,6 +2058,17 @@ impl App {
         });
     }
 
+    fn open_project_issue_browser(&mut self, project_root: String) -> bool {
+        if let Some(state) = self.project_issues.get(&project_root).cloned() {
+            if !github::issue_state_label(Some(&state)).is_empty() {
+                self.views
+                    .push(Box::new(IssueBrowserView::new(project_root, state)));
+                self.dirty = true;
+            }
+        }
+        true
+    }
+
     /// Project root that new panes should target: the selected pane's
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
@@ -2552,6 +2498,11 @@ impl App {
             SidebarKeyAction::Close => {
                 return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
             }
+            SidebarKeyAction::Issues => {
+                if let Some(project_root) = self.active_project_root() {
+                    return Some(self.open_project_issue_browser(project_root));
+                }
+            }
             SidebarKeyAction::NewAgent => {
                 let cmd = self
                     .sidebar_project_root
@@ -2866,11 +2817,7 @@ impl App {
                 Some(ClickTarget::SidebarGroupIssues(gi)) => {
                     if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
-                        if let Some(state) = self.project_issues.get(&project_root).cloned() {
-                            self.views
-                                .push(Box::new(IssueBrowserView::new(project_root, state)));
-                            self.dirty = true;
-                        }
+                        return self.open_project_issue_browser(project_root);
                     }
                     return true;
                 }
@@ -4505,7 +4452,8 @@ impl App {
             self.status_msg.clone()
         } else if self.sidebar_focused {
             if self.sidebar_project_root.is_some() {
-                "sidebar project: ↑↓ select · n agent · t terminal · esc back".to_string()
+                "sidebar project: ↑↓ select · i issues · n agent · t terminal · esc back"
+                    .to_string()
             } else {
                 "sidebar pane: ↑↓ select · ⏎ open · m menu · h hide · x close · esc back"
                     .to_string()
@@ -5186,6 +5134,10 @@ mod tests {
         assert_eq!(
             sidebar_key_action(&key(KeyCode::Char('j'), Modifiers::NONE), &keymap),
             SidebarKeyAction::Down
+        );
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Char('i'), Modifiers::NONE), &keymap),
+            SidebarKeyAction::Issues
         );
         assert_eq!(
             sidebar_key_action(&key(KeyCode::Enter, Modifiers::NONE), &keymap),

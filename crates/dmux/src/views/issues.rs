@@ -26,8 +26,8 @@ pub struct IssueBrowserView {
     project_root: String,
     state: SharedIssueState,
     list: ListState,
-    selected: BTreeSet<u64>,
-    last_rows: Vec<(u64, String, String)>,
+    selected: BTreeSet<(String, u64)>,
+    last_rows: Vec<(String, u64, String, String)>,
 }
 
 impl IssueBrowserView {
@@ -61,6 +61,7 @@ impl IssueBrowserView {
 
     fn repository(&self, state: &IssueLoadState) -> Option<String> {
         match state {
+            IssueLoadState::Unavailable => None,
             IssueLoadState::Loading { repository } | IssueLoadState::Error { repository, .. } => {
                 repository.clone()
             }
@@ -90,27 +91,30 @@ impl IssueBrowserView {
     }
 
     fn toggle_current(&mut self, state: &IssueLoadState) {
-        let Some(number) = self.current_issue(state).map(|issue| issue.number) else {
+        let Some(key) = self
+            .current_issue(state)
+            .map(|issue| (issue.repository.clone(), issue.number))
+        else {
             return;
         };
-        if !self.selected.remove(&number) {
-            self.selected.insert(number);
+        if !self.selected.remove(&key) {
+            self.selected.insert(key);
         }
     }
 
     /// Build the prompt passed to the chooser and then to the new agent.
     pub fn generated_prompt(&self, state: &IssueLoadState) -> String {
-        let IssueLoadState::Loaded { repository, issues } = state else {
+        let IssueLoadState::Loaded { issues, .. } = state else {
             return String::new();
         };
         let mut prompt = String::from("Work on these assigned issues:\n\n");
-        for issue in issues
-            .iter()
-            .filter(|issue| self.selected.contains(&issue.number))
-        {
+        for issue in issues.iter().filter(|issue| {
+            self.selected
+                .contains(&(issue.repository.clone(), issue.number))
+        }) {
             prompt.push_str(&format!(
                 "- {}#{}: {}\n  {}\n",
-                repository, issue.number, issue.title, issue.url
+                issue.repository, issue.number, issue.title, issue.url
             ));
         }
         prompt.trim_end_matches('\n').to_string()
@@ -148,15 +152,50 @@ fn loaded_issues(state: &IssueLoadState) -> Option<&Vec<GitHubIssue>> {
     }
 }
 
-fn rows_key(state: &IssueLoadState) -> Vec<(u64, String, String)> {
+fn rows_key(state: &IssueLoadState) -> Vec<(String, u64, String, String)> {
     loaded_issues(state)
         .map(|issues| {
             issues
                 .iter()
-                .map(|issue| (issue.number, issue.title.clone(), issue.url.clone()))
+                .map(|issue| {
+                    (
+                        issue.repository.clone(),
+                        issue.number,
+                        issue.title.clone(),
+                        issue.url.clone(),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn grouped_row_count(issues: &[GitHubIssue], start: usize, end: usize) -> usize {
+    if start > end || start >= issues.len() {
+        return 0;
+    }
+    let end = end.min(issues.len() - 1);
+    let mut rows = end - start + 2;
+    for index in start + 1..=end {
+        if issues[index - 1].repository != issues[index].repository {
+            rows += 1;
+        }
+    }
+    rows
+}
+
+fn ensure_grouped_visible(list: &mut ListState, issues: &[GitHubIssue], visible_rows: usize) {
+    if visible_rows == 0 || issues.is_empty() {
+        return;
+    }
+    if list.selected < list.scroll {
+        list.scroll = list.selected;
+    }
+    while list.scroll < list.selected
+        && grouped_row_count(issues, list.scroll, list.selected) > visible_rows
+    {
+        list.scroll += 1;
+    }
 }
 
 fn issue_meta(issue: &GitHubIssue) -> String {
@@ -184,8 +223,17 @@ impl View for IssueBrowserView {
         let state = state_snapshot(&self.state);
         self.sync_rows(&state);
         let issue_count = loaded_issues(&state).map_or(0, Vec::len);
+        let repository_count = loaded_issues(&state).map_or(0, |issues| {
+            issues
+                .iter()
+                .map(|issue| issue.repository.as_str())
+                .collect::<BTreeSet<_>>()
+                .len()
+        });
         let max_h = area.h.saturating_sub(2);
-        let h = (issue_count as u16 + 7).min(max_h).max(max_h.min(8));
+        let h = (issue_count as u16 + repository_count as u16 + 7)
+            .min(max_h)
+            .max(max_h.min(8));
         let rect = centered(area, area.w.min(100), h);
         let title = match self.repository(&state) {
             Some(repository) => format!("Issues · {repository}"),
@@ -199,9 +247,22 @@ impl View for IssueBrowserView {
         let bg = ctx.theme.bg_raised;
         let rows_bottom = inner.bottom().saturating_sub(2);
         let visible = rows_bottom.saturating_sub(inner.y) as usize;
-        self.list.ensure_visible(visible);
+        if let Some(issues) = loaded_issues(&state) {
+            ensure_grouped_visible(&mut self.list, issues, visible);
+        }
 
         match &state {
+            IssueLoadState::Unavailable => {
+                buf.draw_text(
+                    inner.x,
+                    inner.y + 1,
+                    "No GitHub repositories found",
+                    ctx.theme.text_dim,
+                    bg,
+                    AttrFlags::empty(),
+                    inner,
+                );
+            }
             IssueLoadState::Loading { repository } => {
                 let repo = repository.as_deref().unwrap_or("the selected project");
                 buf.draw_text(
@@ -253,17 +314,33 @@ impl View for IssueBrowserView {
                 );
             }
             IssueLoadState::Loaded { issues, .. } => {
-                for (row, (idx, issue)) in issues
-                    .iter()
-                    .enumerate()
-                    .skip(self.list.scroll)
-                    .take(visible)
-                    .enumerate()
-                {
-                    let y = inner.y + row as u16;
+                let mut y = inner.y;
+                let mut previous_repository = None;
+                for (idx, issue) in issues.iter().enumerate().skip(self.list.scroll) {
+                    if y >= rows_bottom {
+                        break;
+                    }
+                    if previous_repository.as_deref() != Some(issue.repository.as_str()) {
+                        buf.draw_text(
+                            inner.x,
+                            y,
+                            &issue.repository,
+                            ctx.theme.accent,
+                            bg,
+                            AttrFlags::BOLD,
+                            inner,
+                        );
+                        previous_repository = Some(issue.repository.clone());
+                        y += 1;
+                        if y >= rows_bottom {
+                            break;
+                        }
+                    }
                     let row_rect = Rect::new(inner.x, y, inner.w, 1);
                     let focused = idx == self.list.selected;
-                    let selected = self.selected.contains(&issue.number);
+                    let selected = self
+                        .selected
+                        .contains(&(issue.repository.clone(), issue.number));
                     let row_bg = if focused { ctx.theme.bg_selected } else { bg };
                     buf.fill(
                         row_rect,
@@ -274,7 +351,7 @@ impl View for IssueBrowserView {
                     );
                     let checkbox = if selected { "◼" } else { "◻" };
                     buf.draw_text(
-                        inner.x,
+                        inner.x + 2,
                         y,
                         checkbox,
                         if selected {
@@ -288,7 +365,7 @@ impl View for IssueBrowserView {
                     );
                     let prefix = format!(" #{:<5} ", issue.number);
                     let x = buf.draw_text(
-                        inner.x + 2,
+                        inner.x + 4,
                         y,
                         &prefix,
                         ctx.theme.accent,
@@ -323,6 +400,7 @@ impl View for IssueBrowserView {
                         row_rect,
                     );
                     clicks.add(row_rect, ClickTarget::Overlay(TAG_ROW + idx as u64));
+                    y += 1;
                 }
             }
         }
@@ -449,10 +527,15 @@ mod tests {
     use dmux_host::Modifiers;
 
     fn issue(number: u64, title: &str) -> GitHubIssue {
+        issue_in("owner/repo", number, title)
+    }
+
+    fn issue_in(repository: &str, number: u64, title: &str) -> GitHubIssue {
         GitHubIssue {
+            repository: repository.into(),
             number,
             title: title.into(),
-            url: format!("https://github.com/owner/repo/issues/{number}"),
+            url: format!("https://github.com/{repository}/issues/{number}"),
             labels: vec!["bug".into()],
             assignees: vec!["andrew".into()],
             updated_at: "2026-08-19".into(),
@@ -504,6 +587,31 @@ mod tests {
     }
 
     #[test]
+    fn selection_distinguishes_matching_numbers_across_repositories() {
+        let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
+            repository: "2 repositories".into(),
+            issues: vec![
+                issue_in("owner/first", 1, "First repository"),
+                issue_in("owner/second", 1, "Second repository"),
+            ],
+        }));
+        let mut view = IssueBrowserView::new("/projects/coordinator".into(), state.clone());
+        view.on_key(&key(KeyCode::Char(' ')));
+        view.on_key(&key(KeyCode::DownArrow));
+        view.on_key(&key(KeyCode::Char(' ')));
+
+        assert_eq!(view.selected_count(), 2);
+        let snapshot = state_snapshot(&state);
+        let prompt = view.generated_prompt(&snapshot);
+        assert!(prompt.contains("owner/first#1: First repository"));
+        assert!(prompt.contains("owner/second#1: Second repository"));
+        assert_eq!(
+            grouped_row_count(loaded_issues(&snapshot).unwrap(), 0, 1),
+            4
+        );
+    }
+
+    #[test]
     fn open_returns_url_command() {
         let (_, mut view) = loaded();
         let result = view.on_key(&key(KeyCode::Char('o')));
@@ -540,6 +648,7 @@ mod tests {
     #[test]
     fn loading_empty_and_error_states_are_safe() {
         for state in [
+            IssueLoadState::Unavailable,
             IssueLoadState::Loading {
                 repository: Some("owner/repo".into()),
             },

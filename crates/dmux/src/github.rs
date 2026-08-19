@@ -4,7 +4,9 @@
 //! remote, asks gh for its open issues, and converts the response into the
 //! small data model needed by the sidebar and issue browser.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +19,7 @@ pub struct RepoRef {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GitHubIssue {
+    pub repository: String,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -27,6 +30,7 @@ pub struct GitHubIssue {
 
 #[derive(Debug, Clone)]
 pub enum IssueLoadState {
+    Unavailable,
     Loading {
         repository: Option<String>,
     },
@@ -50,6 +54,7 @@ pub fn issue_state_label(state: Option<&SharedIssueState>) -> String {
         return "issues unavailable".into();
     };
     match &*state {
+        IssueLoadState::Unavailable => String::new(),
         IssueLoadState::Loading { .. } => "loading…".into(),
         IssueLoadState::Loaded { issues, .. } => issue_count_label(issues.len()),
         IssueLoadState::Error { .. } => "issues unavailable".into(),
@@ -62,6 +67,7 @@ pub fn refresh_issue_state(
     finished: impl FnOnce() + Send + 'static,
 ) {
     let repository = state.lock().ok().and_then(|current| match &*current {
+        IssueLoadState::Unavailable => None,
         IssueLoadState::Loading { repository } | IssueLoadState::Error { repository, .. } => {
             repository.clone()
         }
@@ -71,17 +77,40 @@ pub fn refresh_issue_state(
         *current = IssueLoadState::Loading { repository };
     }
     tokio::task::spawn_blocking(move || {
-        let next = match repository_for_dir(Path::new(&project_root)) {
-            Ok(repository) => match fetch_open_issues(&repository) {
-                Ok(issues) => IssueLoadState::Loaded {
-                    repository: repository.slug,
-                    issues,
-                },
-                Err(message) => IssueLoadState::Error {
-                    repository: Some(repository.slug),
-                    message,
-                },
-            },
+        let next = match repositories_for_project(Path::new(&project_root)) {
+            Ok(repositories) if repositories.is_empty() => IssueLoadState::Unavailable,
+            Ok(repositories) => {
+                let label = repository_label(&repositories);
+                let mut issues = Vec::new();
+                let mut error = None;
+                for repository in &repositories {
+                    match fetch_open_issues(repository) {
+                        Ok(mut repository_issues) => issues.append(&mut repository_issues),
+                        Err(message) => {
+                            error = Some(format!("{}: {message}", repository.slug));
+                            break;
+                        }
+                    }
+                }
+                match error {
+                    Some(message) => IssueLoadState::Error {
+                        repository: Some(label),
+                        message,
+                    },
+                    None => {
+                        issues.sort_by(|left, right| {
+                            left.repository
+                                .cmp(&right.repository)
+                                .then_with(|| right.updated_at.cmp(&left.updated_at))
+                                .then_with(|| left.number.cmp(&right.number))
+                        });
+                        IssueLoadState::Loaded {
+                            repository: label,
+                            issues,
+                        }
+                    }
+                }
+            }
             Err(message) => IssueLoadState::Error {
                 repository: None,
                 message,
@@ -92,6 +121,27 @@ pub fn refresh_issue_state(
         }
         finished();
     });
+}
+
+/// Resolve the project root and nested repositories to unique GitHub remotes.
+pub fn repositories_for_project(path: &Path) -> Result<Vec<RepoRef>, String> {
+    let mut directories = Vec::new();
+    discover_nested_repository_dirs(path, &mut directories)?;
+
+    let mut seen = BTreeSet::new();
+    let mut repositories = Vec::new();
+    if let Ok(repository) = repository_for_dir(path) {
+        seen.insert(repository.slug.clone());
+        repositories.push(repository);
+    }
+    for directory in directories {
+        if let Ok(repository) = repository_for_dir(&directory) {
+            if seen.insert(repository.slug.clone()) {
+                repositories.push(repository);
+            }
+        }
+    }
+    Ok(repositories)
 }
 
 /// Resolve the GitHub repository represented by a project's origin remote.
@@ -159,7 +209,11 @@ pub fn fetch_open_issues(repo: &RepoRef) -> Result<Vec<GitHubIssue>, String> {
         });
     }
 
-    parse_issues_json(&String::from_utf8_lossy(&output.stdout))
+    let mut issues = parse_issues_json(&String::from_utf8_lossy(&output.stdout))?;
+    for issue in &mut issues {
+        issue.repository.clone_from(&repo.slug);
+    }
+    Ok(issues)
 }
 
 /// Parse the sequential JSON arrays returned by gh api --paginate.
@@ -216,6 +270,7 @@ fn parse_issue(value: Value) -> Result<Option<GitHubIssue>, String> {
     let assignees = named_values(object, "assignees", "login")?;
 
     Ok(Some(GitHubIssue {
+        repository: String::new(),
         number,
         title,
         url,
@@ -223,6 +278,54 @@ fn parse_issue(value: Value) -> Result<Option<GitHubIssue>, String> {
         assignees,
         updated_at,
     }))
+}
+
+fn repository_label(repositories: &[RepoRef]) -> String {
+    if repositories.len() == 1 {
+        repositories[0].slug.clone()
+    } else {
+        format!("{} repositories", repositories.len())
+    }
+}
+
+fn discover_nested_repository_dirs(
+    directory: &Path,
+    repositories: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("could not scan {}: {error}", directory.display()))?;
+    let mut children = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("could not scan {}: {error}", directory.display()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("could not inspect {}: {error}", entry.path().display()))?;
+        if file_type.is_dir() && !file_type.is_symlink() && should_scan_directory(&entry.path()) {
+            children.push(entry.path());
+        }
+    }
+    children.sort();
+
+    for child in children {
+        if has_git_marker(&child) {
+            repositories.push(child);
+        } else {
+            discover_nested_repository_dirs(&child, repositories)?;
+        }
+    }
+    Ok(())
+}
+
+fn has_git_marker(path: &Path) -> bool {
+    fs::symlink_metadata(path.join(".git")).is_ok()
+}
+
+fn should_scan_directory(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    !name.starts_with('.') && !matches!(name, "node_modules" | "target")
 }
 
 fn issue_api_command(repo: &RepoRef) -> Command {
@@ -300,7 +403,47 @@ fn strip_prefix_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    struct TestTree(PathBuf);
+
+    impl TestTree {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("dmux-github-test-{nonce}"));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn init_repo(&self, relative: &str, remote: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(&path).unwrap();
+            assert!(Command::new("git")
+                .args(["init", "-q"])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success());
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["remote", "add", "origin", remote])
+                .status()
+                .unwrap()
+                .success());
+        }
+    }
+
+    impl Drop for TestTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn parses_supported_remote_forms() {
@@ -341,6 +484,53 @@ mod tests {
         assert_eq!(issue_count_label(0), "0 issues");
         assert_eq!(issue_count_label(1), "1 issue");
         assert_eq!(issue_count_label(32), "32 issues");
+        let unavailable = Arc::new(Mutex::new(IssueLoadState::Unavailable));
+        assert_eq!(issue_state_label(Some(&unavailable)), "");
+    }
+
+    #[test]
+    fn discovers_nested_repositories_and_deduplicates_remotes() {
+        let tree = TestTree::new();
+        tree.init_repo("", "git@github.com:standardagents/coordinator.git");
+        tree.init_repo(
+            "group/agentbuilder",
+            "git@github.com:standardagents/agentbuilder.git",
+        );
+        tree.init_repo(
+            "agentbuilder-copy",
+            "https://github.com/standardagents/agentbuilder.git",
+        );
+        tree.init_repo(
+            ".dmux/worktrees/agentbuilder",
+            "git@github.com:standardagents/ignored-worktree.git",
+        );
+        tree.init_repo(
+            "node_modules/dependency",
+            "git@github.com:standardagents/ignored-dependency.git",
+        );
+        tree.init_repo(
+            "target/generated",
+            "git@github.com:standardagents/ignored-build.git",
+        );
+
+        let repositories = repositories_for_project(&tree.0).unwrap();
+        let slugs: Vec<_> = repositories
+            .iter()
+            .map(|repository| repository.slug.as_str())
+            .collect();
+        assert_eq!(
+            slugs,
+            ["standardagents/coordinator", "standardagents/agentbuilder"]
+        );
+        assert_eq!(repository_label(&repositories), "2 repositories");
+    }
+
+    #[test]
+    fn unsupported_repository_sources_produce_no_github_repositories() {
+        let tree = TestTree::new();
+        tree.init_repo("", "git@gitlab.com:standardagents/coordinator.git");
+        tree.init_repo("child", "https://example.com/standardagents/child.git");
+        assert_eq!(repositories_for_project(&tree.0), Ok(Vec::new()));
     }
 
     #[test]
@@ -363,6 +553,7 @@ mod tests {
         assert_eq!(
             parse_issues_json(json),
             Ok(vec![GitHubIssue {
+                repository: String::new(),
                 number: 7,
                 title: "Fix rendering".to_owned(),
                 url: "https://github.com/standardagents/dmux-rs/issues/7".to_owned(),
