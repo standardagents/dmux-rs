@@ -40,7 +40,7 @@ use dmux_ui::{ClickMap, Theme};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
 use views::{
-    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView,
+    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView, PathPickerView,
     SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
 };
 
@@ -3385,12 +3385,10 @@ impl App {
             AppCmd::ClosePane(idx) => self.close_pane(idx),
             AppCmd::NewTerminal => self.new_terminal(),
             AppCmd::PromptAddProject => {
-                self.views.push(Box::new(InputView::new(
-                    "Add project",
-                    "",
-                    "path to a project directory (~ ok)",
-                    InputPurpose::AddProjectPath,
-                )));
+                // Filesystem picker rooted at dmux's launch directory (#32);
+                // rename/settings inputs stay simple text fields.
+                let start = std::env::current_dir().unwrap_or_else(|_| self.project_root.clone());
+                self.views.push(Box::new(PathPickerView::new(start)));
                 self.dirty = true;
             }
             AppCmd::OpenProjectAt(raw) => {

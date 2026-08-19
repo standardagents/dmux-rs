@@ -12,7 +12,6 @@ pub enum InputPurpose {
         key: String,
         scope: dmux_core::SettingsScope,
     },
-    AddProjectPath,
     /// Commit message before merging a dirty worktree.
     MergeCommitMessage {
         slug: String,
@@ -58,12 +57,6 @@ impl InputView {
                 value: serde_json::Value::String(value),
                 scope: *scope,
             },
-            InputPurpose::AddProjectPath => {
-                if value.is_empty() {
-                    return ViewResult::Close;
-                }
-                AppCmd::OpenProjectAt(value)
-            }
             InputPurpose::MergeCommitMessage { slug } => AppCmd::MergeExec {
                 slug: slug.clone(),
                 message: Some(if value.is_empty() {
