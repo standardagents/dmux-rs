@@ -83,6 +83,10 @@ pub struct LogicalPane {
     pub resume_at: Option<std::time::Instant>,
     /// Excluded from the layout and output-muted; still alive in tmux.
     pub hidden: bool,
+    /// A confirmed close is in flight (#29): row shows a closing state,
+    /// duplicate close commands are ignored, and the pane is removed only
+    /// when tmux confirms the kill (or restored if it fails).
+    pub closing: bool,
     /// Settled while unfocused — shown as `!` until the user looks.
     pub needs_attention: bool,
     /// Title follows the pane's own title reports (shell panes without a
@@ -438,6 +442,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             rect: None,
             paused: false,
             reseed_buffer: None,
+            closing: false,
             pending_seed: None,
             dirty: true,
             status: PaneStatus::Idle,

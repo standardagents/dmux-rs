@@ -285,6 +285,9 @@ enum Tag {
     /// command-reply payloads (tmux 3.5a) or sends raw bytes (3.7b).
     EscapeProbe,
     NewWindow(Box<NewWindowCtx>),
+    /// kill-window round-trip for a closing pane (#29): ok finalizes the
+    /// close; an error restores the pane and surfaces the failure.
+    KillWindow(PaneId),
     /// Keepalive window creation round-trip (#10): the reply clears the
     /// in-flight flag and pins the window's name against automatic-rename.
     KeepaliveCreated,
@@ -844,6 +847,22 @@ async fn run(
         };
 
         tokio::select! {
+            // Input outranks pane output (#29): under an %output flood the
+            // unbiased select could keep picking the events branch, delaying
+            // a keypress — the reported unacknowledged close Enter. Biased
+            // order makes every loop pass drain pending input first; the
+            // event branch's own 256-message budget already bounds cc work
+            // per pass, so nothing starves.
+            biased;
+            maybe_input = input_rx.recv() => {
+                match maybe_input {
+                    Some(ev) => {
+                        if !app.handle_input(ev) { break; }
+                        app.render_if_due();
+                    }
+                    None => break,
+                }
+            }
             maybe_ev = events.recv() => {
                 match maybe_ev {
                     Some(ev) => {
@@ -858,15 +877,6 @@ async fn run(
                                 Err(_) => break,
                             }
                         }
-                        app.render_if_due();
-                    }
-                    None => break,
-                }
-            }
-            maybe_input = input_rx.recv() => {
-                match maybe_input {
-                    Some(ev) => {
-                        if !app.handle_input(ev) { break; }
                         app.render_if_due();
                     }
                     None => break,
@@ -990,7 +1000,7 @@ impl App {
             || self
                 .panes
                 .iter()
-                .any(|p| p.status == PaneStatus::Working && !p.hidden)
+                .any(|p| (p.status == PaneStatus::Working || p.closing) && !p.hidden)
             || self.views.iter().any(|v| v.animating())
     }
 
@@ -1336,6 +1346,10 @@ impl App {
             }
             Tag::NewWindow(ctx) => {
                 self.finish_new_window(*ctx, &reply);
+            }
+            Tag::KillWindow(pane_id) => {
+                let err = reply.text_lines().first().cloned().unwrap_or_default();
+                self.finish_close(pane_id, reply.ok, err);
             }
             Tag::KeepaliveCreated => {
                 self.keepalive_pending = false;
@@ -2728,6 +2742,9 @@ impl App {
                 }
             }
             AppCmd::ConfirmClose(idx) => {
+                if self.panes.get(idx).map(|p| p.closing).unwrap_or(true) {
+                    return true;
+                }
                 if let Some(p) = self.panes.get(idx) {
                     self.views.push(Box::new(
                         ConfirmView::new(
@@ -3204,14 +3221,55 @@ impl App {
     }
 
     fn close_pane(&mut self, idx: usize) {
-        if idx >= self.panes.len() {
+        let Some(pane) = self.panes.get_mut(idx) else { return };
+        // Idempotent (#29): a pane already closing ignores duplicate close
+        // commands (repeated Enter, repeated ^b x).
+        if pane.closing {
             return;
         }
-        // Closing the last pane must not destroy the session: the keepalive
-        // window is created FIRST (FIFO command order guarantees it exists
-        // before the kill lands).
-        if self.panes.len() == 1 {
+        // Immediate, visible acknowledgement: the row switches to its
+        // closing state on the next frame; removal happens when tmux
+        // confirms the kill (authoritative), and a failed kill restores
+        // the pane (#29).
+        pane.closing = true;
+        pane.dirty = true;
+        let pane_id = pane.tmux_pane;
+        let window = pane.tmux_window;
+        let slug = pane.slug.clone();
+        let title = pane.display_title().to_string();
+        let hook_root = pane
+            .project_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
+        let hook_cwd = pane.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
+        // Closing the last live pane must not destroy the session: the
+        // keepalive window is created FIRST (FIFO command order guarantees
+        // it exists before the kill lands).
+        let live = self.panes.iter().filter(|p| !p.closing).count();
+        if live == 0 {
             self.ensure_keepalive();
+        }
+        let hook_env = [("DMUX_SLUG", slug.clone()), ("DMUX_PANE_ID", pane_id.to_string())];
+        hooks::run_detached(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
+        self.closing.insert(pane_id);
+        let _ = self.client.send_tagged(format!("kill-window -t {window}"), Tag::KillWindow(pane_id));
+        self.toast(format!("Closing '{title}'…"));
+        self.dirty = true;
+    }
+
+    /// tmux answered the kill-window for a closing pane (#29).
+    fn finish_close(&mut self, pane_id: PaneId, ok: bool, err: String) {
+        let Some(idx) = self.panes.iter().position(|p| p.tmux_pane == pane_id) else { return };
+        if !ok {
+            // Restore a usable pane and surface the failure.
+            self.closing.remove(&pane_id);
+            let p = &mut self.panes[idx];
+            p.closing = false;
+            p.dirty = true;
+            self.dirty = true;
+            self.toast(format!("Close failed: {err}"));
+            return;
         }
         let pane = self.panes.remove(idx);
         self.bootstraps.remove(&pane.slug);
@@ -3220,16 +3278,15 @@ impl App {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let hook_cwd = pane.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
         let hook_env = [("DMUX_SLUG", pane.slug.clone()), ("DMUX_PANE_ID", pane.tmux_pane.to_string())];
-        hooks::run_detached(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
-        self.closing.insert(pane.tmux_pane);
-        let _ = self.client.send(format!("kill-window -t {}", pane.tmux_window));
         hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
         self.config.panes.retain(|r| r.slug != pane.slug);
         self.save_config();
         if self.focused >= self.panes.len() {
             self.focused = self.panes.len().saturating_sub(1);
+        }
+        if self.selected >= self.panes.len() {
+            self.selected = self.panes.len().saturating_sub(1);
         }
         self.relayout();
         self.toast(format!("Closed '{}'", pane.display_title()));

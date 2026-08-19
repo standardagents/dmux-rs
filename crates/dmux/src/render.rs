@@ -143,9 +143,13 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             let selected = i == scene.selected;
             let focused = i == scene.focused;
             let caret = if selected { "▸" } else { " " };
-            let glyph = status_glyph(pane, scene.anim);
-            let attn = if pane.needs_attention { "!" } else { " " };
-            let hidden_tag = if pane.hidden { " (hidden)" } else { "" };
+            let glyph = if pane.closing {
+                spinner_frame(scene.anim).to_string()
+            } else {
+                status_glyph(pane, scene.anim)
+            };
+            let attn = if pane.needs_attention && !pane.closing { "!" } else { " " };
+            let hidden_tag = row_tag(pane.closing, pane.hidden);
             let ap_tag = if pane.autopilot { " (ap)" } else { "" };
             let name = truncate(
                 pane.display_title(),
@@ -157,7 +161,9 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             // row dims so the movement reads.
             let reorder_target = scene.reorder.map(|(_, pr)| pr == row).unwrap_or(false);
             let reorder_src = scene.reorder.map(|(srci, _)| srci == i).unwrap_or(false);
-            let (fg, attrs) = if pane.hidden {
+            let (fg, attrs) = if pane.closing {
+                (t.text_faint, AttrFlags::empty())
+            } else if pane.hidden {
                 (t.text_faint, AttrFlags::empty())
             } else if focused {
                 (group.accent, AttrFlags::BOLD)
@@ -288,6 +294,17 @@ fn title_bar_style(
         (accent, theme.bg_selected)
     } else {
         (accent, theme.bg_raised)
+    }
+}
+
+/// Sidebar row annotation: an in-flight close (#29) outranks hidden.
+fn row_tag(closing: bool, hidden: bool) -> &'static str {
+    if closing {
+        " (closing…)"
+    } else if hidden {
+        " (hidden)"
+    } else {
+        ""
     }
 }
 
@@ -434,6 +451,15 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_state_outranks_hidden_in_row_tags() {
+        // #29: a confirmed close shows immediately and wins over (hidden).
+        assert_eq!(row_tag(true, false), " (closing…)");
+        assert_eq!(row_tag(true, true), " (closing…)");
+        assert_eq!(row_tag(false, true), " (hidden)");
+        assert_eq!(row_tag(false, false), "");
+    }
 
     #[test]
     fn right_side_metadata_uses_light_foregrounds() {
