@@ -132,6 +132,34 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_cell_forces_explicit_cup_for_next_cell() {
+        // A host may render ⏺/emoji/box-drawing wider or narrower than our
+        // width table says; the emitter must never rely on implicit advance
+        // after such a glyph. The cell following one must carry its own CUP.
+        let (mut front, mut back) = buffers(20, 1);
+        let mut em = Emitter::new();
+        diff_frame(&mut front, &mut back, &mut em, true);
+        em.take();
+
+        back.draw_text(0, 0, "⏺ hi", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        diff_frame(&mut front, &mut back, &mut em, false);
+        let out = String::from_utf8(em.take()).unwrap();
+        let bullet = out.find('⏺').expect("bullet emitted");
+        let after = &out[bullet + '⏺'.len_utf8()..];
+        // The unchanged space at col 2 is skipped; what matters is that the
+        // next write does NOT rely on implicit advance past the glyph.
+        assert!(
+            after.starts_with("\x1b[1;3H"),
+            "expected explicit CUP after the ambiguous-width glyph, got {out:?}"
+        );
+        // Plain ASCII runs still coalesce without per-cell CUPs.
+        assert!(
+            after.ends_with("hi"),
+            "ascii continuation should be written contiguously, got {after:?}"
+        );
+    }
+
+    #[test]
     fn front_converges_to_back() {
         let (mut front, mut back) = buffers(20, 3);
         let mut em = Emitter::new();

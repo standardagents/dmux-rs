@@ -31,8 +31,11 @@ pub struct HostCaps {
     pub kitty_keyboard: bool,
 }
 
-const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h\x1b[?2004h";
-const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?25h\x1b[?1049l\x1b[0m";
+// ?7l disables autowrap while we own the screen: the compositor addresses
+// every cell explicitly, and wrap-pending state after last-column writes
+// would otherwise let a stray byte scroll the whole host screen.
+const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[?2004h";
+const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[0m";
 
 /// Owns the tty state. Restores the terminal on `Drop` (including panics that
 /// unwind) and via the explicit `restore` on clean shutdown paths.

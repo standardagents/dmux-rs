@@ -38,6 +38,8 @@ pub enum Routed {
     PaneBytes(Vec<u8>),
     /// Scroll the focused pane's local view (positive = into history).
     ScrollView(i32),
+    /// Enter sidebar-focus mode and step the selection by the delta.
+    SidebarNav(i32),
     Ignore,
 }
 
@@ -118,8 +120,11 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
         (KeyCode::Char('?'), _) => Routed::OpenShortcuts,
         (KeyCode::Char('y'), _) => Routed::ToggleHud,
         (KeyCode::Char(c @ '1'..='9'), _) => Routed::FocusIndex(*c as usize - '1' as usize),
-        (KeyCode::RightArrow, _) | (KeyCode::DownArrow, _) => Routed::FocusNext,
-        (KeyCode::LeftArrow, _) | (KeyCode::UpArrow, _) => Routed::FocusPrev,
+        (KeyCode::RightArrow, _) => Routed::FocusNext,
+        (KeyCode::LeftArrow, _) => Routed::FocusPrev,
+        // Leader + vertical arrows hands the keyboard to the sidebar.
+        (KeyCode::UpArrow, _) => Routed::SidebarNav(-1),
+        (KeyCode::DownArrow, _) => Routed::SidebarNav(1),
         (KeyCode::PageUp, _) => Routed::ScrollView(10),
         (KeyCode::PageDown, _) => Routed::ScrollView(-10),
         (KeyCode::Escape, _) => Routed::Ignore,

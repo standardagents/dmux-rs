@@ -306,6 +306,9 @@ struct App {
     status_msg: String,
     status_clear_at: Option<Instant>,
     leader_armed: bool,
+    /// The sidebar owns navigation keys (entered via `^b ↑/↓` or clicking a
+    /// row); Esc or focusing a pane hands the keyboard back.
+    sidebar_focused: bool,
     anim: u64,
     /// Prompts waiting to be typed into send-keys-transport agent panes.
     pending_injections: Vec<(PaneId, String, Instant)>,
@@ -442,6 +445,7 @@ async fn run(
         status_msg: String::new(),
         status_clear_at: None,
         leader_armed: false,
+        sidebar_focused: false,
         anim: 0,
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
@@ -1359,6 +1363,12 @@ impl App {
                         return handled;
                     }
                 }
+                // Then the sidebar, while it holds focus.
+                if !leader_was_armed && self.sidebar_focused {
+                    if let Some(handled) = self.handle_sidebar_key(&key) {
+                        return handled;
+                    }
+                }
                 let routed = input::route_key(&key, self.focused_modes(), leader_was_armed, &self.keymap);
                 self.execute_routed(routed)
             }
@@ -1379,6 +1389,47 @@ impl App {
             }
             _ => true,
         }
+    }
+
+    /// Sidebar-focus navigation. Returns Some(keep_running) when consumed;
+    /// any unhandled key drops sidebar focus and routes normally.
+    fn handle_sidebar_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
+        use dmux_host::KeyCode;
+        if !key.modifiers.is_empty() {
+            self.sidebar_focused = false;
+            return None;
+        }
+        let len = self.panes.len();
+        match key.key {
+            KeyCode::UpArrow | KeyCode::Char('k') if len > 0 => {
+                self.selected = (self.selected + len - 1) % len;
+            }
+            KeyCode::DownArrow | KeyCode::Char('j') if len > 0 => {
+                self.selected = (self.selected + 1) % len;
+            }
+            KeyCode::Enter => {
+                self.sidebar_focused = false;
+                let i = self.selected;
+                if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
+                    return Some(self.execute_cmd(AppCmd::ToggleHidden(i)));
+                }
+                return Some(self.execute_cmd(AppCmd::FocusPane(i)));
+            }
+            KeyCode::Char('m') | KeyCode::Char(' ') => {
+                return Some(self.execute_cmd(AppCmd::OpenPaneMenu));
+            }
+            KeyCode::Char('h') => return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected))),
+            KeyCode::Char('x') => return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected))),
+            KeyCode::Escape => {
+                self.sidebar_focused = false;
+            }
+            _ => {
+                self.sidebar_focused = false;
+                return None;
+            }
+        }
+        self.dirty = true;
+        Some(true)
     }
 
     /// Welcome-screen navigation. Returns Some(keep_running) when consumed.
@@ -1549,11 +1600,19 @@ impl App {
             }
             MouseKind::LeftHeld if is_press => match target {
                 Some(ClickTarget::SidebarRow(i)) => {
+                    // TS semantics: click selects (sidebar keeps the
+                    // keyboard); double-click activates the pane.
                     self.selected = i;
-                    if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
-                        return self.execute_cmd(AppCmd::ToggleHidden(i));
+                    if is_double {
+                        self.sidebar_focused = false;
+                        if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
+                            return self.execute_cmd(AppCmd::ToggleHidden(i));
+                        }
+                        return self.execute_cmd(AppCmd::FocusPane(i));
                     }
-                    return self.execute_cmd(AppCmd::FocusPane(i));
+                    self.sidebar_focused = true;
+                    self.dirty = true;
+                    return true;
                 }
                 Some(ClickTarget::SidebarNewAgent) => return self.execute_cmd(AppCmd::OpenNewAgent),
                 Some(ClickTarget::SidebarNewTerminal) => return self.execute_cmd(AppCmd::NewTerminal),
@@ -1578,6 +1637,7 @@ impl App {
                     }
                 }
                 Some(ClickTarget::PaneBody(i)) => {
+                    self.sidebar_focused = false;
                     let already_focused = self.focused == i;
                     if !already_focused {
                         return self.execute_cmd(AppCmd::FocusPane(i));
@@ -1653,6 +1713,15 @@ impl App {
             Routed::HideFocused => return self.execute_cmd(AppCmd::ToggleHidden(self.focused)),
             Routed::CloseFocused => return self.execute_cmd(AppCmd::ConfirmClose(self.focused)),
             Routed::PaneBytes(bytes) => self.send_pane_bytes(&bytes),
+            Routed::SidebarNav(delta) => {
+                self.sidebar_focused = true;
+                let len = self.panes.len();
+                if len > 0 {
+                    self.selected =
+                        ((self.selected as i32 + delta).rem_euclid(len as i32)) as usize;
+                }
+                self.dirty = true;
+            }
             Routed::ScrollView(delta) => {
                 if let Some(p) = self.panes.get_mut(self.focused) {
                     p.term.scroll_view(delta);
@@ -1705,6 +1774,7 @@ impl App {
         match cmd {
             AppCmd::Quit => return false,
             AppCmd::FocusPane(i) => {
+                self.sidebar_focused = false;
                 if i < self.panes.len() && !self.panes[i].hidden {
                     self.focused = i;
                     self.selected = i;
@@ -2812,10 +2882,12 @@ impl App {
         // status message wins.
         let footer_text = if !self.status_msg.is_empty() {
             self.status_msg.clone()
+        } else if self.sidebar_focused {
+            "sidebar: ↑↓ select · ⏎ open · m menu · h hide · x close · esc back".to_string()
         } else if self.settings.lock().unwrap().get_bool("showFooterTips", true) {
             const TIPS: &[&str] = &[
                 "tip: ^b ? shows every shortcut",
-                "tip: double-click a sidebar row to open its menu",
+                "tip: click a sidebar row to select it, double-click to open",
                 "tip: ^b / searches the focused pane's scrollback",
                 "tip: shift+drag selects text; double-click selects a word",
                 "tip: ^b 1..9 jumps straight to a pane",
@@ -2838,6 +2910,7 @@ impl App {
             theme: &self.theme,
             anim: self.anim,
             leader_armed: self.leader_armed,
+            sidebar_focused: self.sidebar_focused,
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 

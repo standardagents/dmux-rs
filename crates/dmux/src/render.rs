@@ -23,6 +23,9 @@ pub struct Scene<'a> {
     pub theme: &'a Theme,
     pub anim: u64,
     pub leader_armed: bool,
+    /// The sidebar holds keyboard focus: selection renders with the accent
+    /// bar so the active area is unmistakable.
+    pub sidebar_focused: bool,
 }
 
 pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
@@ -153,6 +156,9 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             buf.fill(row_rect, &Cell { bg, ..Cell::default() });
         }
         let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
+        if selected && scene.sidebar_focused {
+            buf.set(area.x, row, Cell { ch: '▍', fg: t.accent, bg, ..Cell::default() });
+        }
         if let Some(agent) = &pane.agent {
             let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
             let tag = format!("[{short}]");

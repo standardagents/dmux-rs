@@ -89,8 +89,22 @@ impl Emitter {
                 self.buf.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
             }
         }
-        if let Some((col, row)) = self.cursor {
-            self.cursor = Some((col.saturating_add(cell.display_width()), row));
+        // Implicit cursor advance is only trusted for plain printable ASCII.
+        // For anything else — ambiguous-width symbols (⏺, ◆), emoji, VS16
+        // zero-width sequences, box drawing — the host's idea of the glyph's
+        // width can disagree with our table (unicode-width vs the host's
+        // wcwidth/emoji handling), and a single disagreement silently shifts
+        // every later implicit write on the row while the front buffer thinks
+        // the screen matches. Dropping the believed position forces an
+        // explicit CUP before the next cell, so a width mismatch can never
+        // displace anything beyond the glyph itself.
+        let ascii = cell.zerowidth.is_none() && matches!(cell.ch, ' '..='~');
+        if ascii {
+            if let Some((col, row)) = self.cursor {
+                self.cursor = Some((col.saturating_add(1), row));
+            }
+        } else {
+            self.cursor = None;
         }
     }
 
