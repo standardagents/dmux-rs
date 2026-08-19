@@ -14,9 +14,11 @@ mod layout;
 mod metrics;
 mod notify;
 mod render;
+mod report;
 mod session;
 mod sounds;
 mod tracking;
+mod updater;
 mod verify;
 mod views;
 mod welcome;
@@ -130,6 +132,10 @@ enum AppMsg {
     NamingDone { pane: PaneId, name: String },
     /// Native worktree bootstrap progress for a pane (keyed by slug).
     Bootstrap { slug: String, ev: bootstrap::Ev },
+    /// Automatic incident report finished (issue filed or failed).
+    IssueFiled(Result<report::FiledIssue, String>),
+    /// A newer release is downloaded and staged; swap + re-exec.
+    UpdateStaged { tag: String, staged: PathBuf },
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
     /// Conflicted merge state re-established; launch the resolution pane.
@@ -349,6 +355,13 @@ struct App {
     /// silently drop the first N pane-output bytes, simulating a
     /// stream-consumption bug the shadow verifier must catch.
     fault_drop: usize,
+    /// Issues this user's dmux-rs has filed (sidebar list; ● = this session).
+    filed_issues: Vec<report::FiledIssue>,
+    new_issue_count: usize,
+    version_line: String,
+    /// A staged self-update: swap + re-exec after clean shutdown.
+    reexec_after: Option<PathBuf>,
+    want_exit: bool,
     own_sizing: bool,
     sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
     /// Welcome-screen state (shown when no panes are visible).
@@ -483,8 +496,13 @@ async fn run(
         anim: 0,
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
-        verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v == "1").unwrap_or(false),
+        verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v != "0").unwrap_or(true),
         fault_drop: std::env::var("DMUX_FAULT_DROP_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+        filed_issues: report::load_filed(&dirs_home()),
+        new_issue_count: 0,
+        version_line: updater::version_line(),
+        reexec_after: None,
+        want_exit: false,
         own_sizing: false,
         sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
@@ -520,6 +538,39 @@ async fn run(
             if let Some(latest) = check_latest_version().await {
                 if is_newer(&latest, env!("CARGO_PKG_VERSION")) {
                     let _ = tx.send(AppMsg::UpdateAvailable(latest));
+                }
+            }
+        });
+    }
+    if std::env::var("DMUX_JUST_UPDATED").map(|v| v == "1").unwrap_or(false) {
+        app.toast(format!("⬆ updated to {}", updater::version_line()));
+    }
+    // First-party self-update loop: poll the dmux-rs repo's latest release
+    // and stage newer builds for an in-place re-exec (HMR for the mux).
+    if updater::enabled() {
+        let tx = app.app_tx.clone();
+        let repo = {
+            let s = app.settings.lock().unwrap();
+            s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
+        };
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                let r = repo.clone();
+                let tag = tokio::task::spawn_blocking(move || updater::latest_tag(&r)).await;
+                let Ok(Ok(tag)) = tag else { continue };
+                if tag == updater::BUILD_TAG || tag.is_empty() {
+                    continue;
+                }
+                let r = repo.clone();
+                let t = tag.clone();
+                match tokio::task::spawn_blocking(move || updater::stage(&r, &t)).await {
+                    Ok(Ok(staged)) => {
+                        let _ = tx.send(AppMsg::UpdateStaged { tag, staged });
+                        break;
+                    }
+                    Ok(Err(err)) => tracing::warn!(%err, "update stage failed"),
+                    Err(err) => tracing::warn!(%err, "update task failed"),
                 }
             }
         });
@@ -621,6 +672,7 @@ async fn run(
             }
             Some(msg) = app_rx.recv() => {
                 app.handle_app_msg(msg);
+                if app.want_exit { break; }
             }
             _ = sigterm.recv() => break,
             _ = sighup.recv() => break,
@@ -630,7 +682,15 @@ async fn run(
         }
     }
 
-    app.shutdown(&mut child).await
+    let reexec = app.reexec_after.take();
+    let result = app.shutdown(&mut child).await;
+    if let Some(exe) = reexec {
+        // Only returns on error; on success the new build takes over this
+        // terminal and reattaches to the same tmux session.
+        let err = updater::reexec(&exe);
+        eprintln!("dmux-rs self-update re-exec failed: {err}");
+    }
+    result
 }
 
 impl App {
@@ -739,6 +799,62 @@ impl App {
         self.status_msg = msg.into();
         self.status_clear_at = Some(Instant::now() + STATUS_LINGER);
         self.dirty = true;
+    }
+
+    /// Auto-file a GitHub issue for a verified render divergence — once per
+    /// pane per process lifetime (a corrupted pane paints many bad frames;
+    /// they are one bug). Reload (= update) clears the latch.
+    fn maybe_file_issue(
+        &mut self,
+        pane_id: PaneId,
+        incident: Option<std::path::PathBuf>,
+        reply: &Reply,
+    ) {
+        if std::env::var("DMUX_NO_REPORT").map(|v| v == "1").unwrap_or(false) {
+            return;
+        }
+        let Some(incident) = incident else { return };
+        let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) else { return };
+        if p.issue_filed {
+            return;
+        }
+        p.issue_filed = true;
+        let repo = {
+            let s = self.settings.lock().unwrap();
+            s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
+        };
+        let diffs = verify::compare(p, reply);
+        let our_grid: String =
+            (0..p.rows).map(|r| p.term.row_text_public(r) + "\n").collect();
+        let tmux_grid: String = reply
+            .lines
+            .iter()
+            .map(|l| String::from_utf8_lossy(l).escape_default().to_string() + "\n")
+            .collect();
+        let (slug, cols, rows, det) = (p.slug.clone(), p.cols, p.rows, !p.ring_truncated);
+        let build = updater::version_line();
+        let home = dirs_home();
+        let dry = std::env::var("DMUX_REPORT_DRY").ok().map(std::path::PathBuf::from);
+        let tx = self.app_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = report::file_issue(
+                &repo,
+                &home,
+                &build,
+                &slug,
+                cols,
+                rows,
+                &diffs,
+                &our_grid,
+                &tmux_grid,
+                &incident,
+                det,
+                dry.as_deref(),
+            )
+            .map(|f| f.issue)
+            .map_err(|e| e);
+            let _ = tx.send(AppMsg::IssueFiled(result));
+        });
     }
 
     /// Attention that should also reach the OS: sidebar toast + native
@@ -942,10 +1058,12 @@ impl App {
                 }
                 if let Some((n, path, title)) = report {
                     let loc = path
+                        .as_ref()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "(incident write failed)".into());
                     tracing::warn!(pane = %pane_id, diffs = n, incident = %loc, "render verify mismatch");
                     self.toast(format!("⚠ render verify: {n} diffs in '{title}' → {loc}"));
+                    self.maybe_file_issue(pane_id, path, &reply);
                 }
             }
             Tag::Cursor(pane_id) => {
@@ -1233,6 +1351,33 @@ impl App {
                 }
                 if let Some(msg) = fail_toast {
                     self.toast(msg);
+                }
+            }
+            AppMsg::IssueFiled(result) => {
+                match result {
+                    Ok(issue) => {
+                        self.toast(format!("🐛 filed issue #{} — {}", issue.number, issue.title));
+                        self.filed_issues.push(issue);
+                        self.new_issue_count += 1;
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "auto-report failed");
+                        self.toast(format!("auto-report failed: {err}"));
+                    }
+                }
+                self.dirty = true;
+            }
+            AppMsg::UpdateStaged { tag, staged } => {
+                match updater::apply(&staged) {
+                    Ok(exe) => {
+                        self.toast(format!("⬆ updating to {tag}…"));
+                        self.reexec_after = Some(exe);
+                        self.want_exit = true;
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "update apply failed");
+                        self.toast(format!("update failed: {err}"));
+                    }
                 }
             }
             AppMsg::NamingDone { pane, name } => {
@@ -1718,6 +1863,17 @@ impl App {
                 Some(ClickTarget::SidebarNewProject) => return self.execute_cmd(AppCmd::PromptAddProject),
                 Some(ClickTarget::SidebarSettings) => return self.execute_cmd(AppCmd::OpenSettings),
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
+                Some(ClickTarget::SidebarIssues) => {
+                    if let Some(issue) = self.filed_issues.last() {
+                        let url = issue.url.clone();
+                        self.new_issue_count = 0;
+                        self.dirty = true;
+                        tokio::task::spawn_blocking(move || {
+                            let _ = std::process::Command::new("open").arg(url).status();
+                        });
+                    }
+                    return true;
+                }
                 Some(ClickTarget::PaneTitle(i)) => {
                     // Double-click the title = rename.
                     if is_double {
@@ -3024,6 +3180,8 @@ impl App {
             anim: self.anim,
             leader_armed: self.leader_armed,
             sidebar_focused: self.sidebar_focused,
+            version: &self.version_line,
+            issues: (self.filed_issues.len(), self.new_issue_count),
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 

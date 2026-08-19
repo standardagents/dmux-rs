@@ -94,6 +94,9 @@ pub struct LogicalPane {
     pub ring_truncated: bool,
     /// Last shadow verification of this pane.
     pub last_verify: Option<std::time::Instant>,
+    /// An issue was auto-filed for this pane; no more reports until the
+    /// process reloads (which is also when a fixed build arrives).
+    pub issue_filed: bool,
     pub worktree_path: Option<String>,
     /// The tmux pane was on the alternate screen at adoption time.
     pub alt_screen: bool,
@@ -334,6 +337,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             recent_output: Vec::new(),
             ring_truncated: false,
             last_verify: None,
+            issue_filed: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,
             pane_pid: info.pane_pid,

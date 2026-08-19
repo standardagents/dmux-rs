@@ -26,6 +26,10 @@ pub struct Scene<'a> {
     /// The sidebar holds keyboard focus: selection renders with the accent
     /// bar so the active area is unmistakable.
     pub sidebar_focused: bool,
+    /// Build identity (sidebar bottom line).
+    pub version: &'a str,
+    /// (total filed issues, filed this session) for the sidebar bottom line.
+    pub issues: (usize, usize),
 }
 
 pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
@@ -185,6 +189,21 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     clicks.add(Rect::new(area.x + 1, tools_row, sx - area.x - 1, 1), ClickTarget::SidebarSettings);
     let hx = buf.draw_text(sx + 2, tools_row, "? shortcuts", t.text_dim, t.bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(sx + 2, tools_row, hx - sx - 2, 1), ClickTarget::SidebarHelp);
+
+    // Build + auto-filed issues (first-party diagnostics ring).
+    let ver_row = area.bottom().saturating_sub(2);
+    let vx = buf.draw_text(area.x + 1, ver_row, scene.version, t.text_faint, t.bg, AttrFlags::empty(), area);
+    let (total, fresh) = scene.issues;
+    if total > 0 {
+        let label = if fresh > 0 {
+            format!(" · 🐛 {total} ({fresh} new)")
+        } else {
+            format!(" · 🐛 {total}")
+        };
+        let color = if fresh > 0 { t.warn } else { t.text_faint };
+        let ix = buf.draw_text(vx, ver_row, &label, color, t.bg, AttrFlags::empty(), area);
+        clicks.add(Rect::new(vx, ver_row, ix.saturating_sub(vx), 1), ClickTarget::SidebarIssues);
+    }
 
     // Footer: leader hint or status.
     let footer_row = area.bottom().saturating_sub(1);

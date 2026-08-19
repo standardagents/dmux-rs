@@ -104,6 +104,8 @@ pub enum ClickTarget {
     SidebarNewProject,
     SidebarSettings,
     SidebarHelp,
+    /// The 🐛 issues chip: opens the newest filed issue in the browser.
+    SidebarIssues,
     PaneBody(usize),
     PaneTitle(usize),
     TitleRename(usize),
