@@ -415,6 +415,17 @@ impl PaneTerm {
         None
     }
 
+    /// Dynamic-palette entry (OSC 4/10/11) for a slot, if the pane set one.
+    /// Slots 0..=255 are indexed colors; 256/257 are default fg/bg.
+    pub fn palette_color(&self, slot: usize) -> Option<(u8, u8, u8)> {
+        self.term.colors()[slot].map(|rgb| (rgb.r, rgb.g, rgb.b))
+    }
+
+    /// Text of a viewport row (verifier incident dumps).
+    pub fn row_text_public(&self, row: u16) -> String {
+        self.row_text(Line(row as i32))
+    }
+
     fn row_text(&self, line: Line) -> String {
         let grid = self.term.grid();
         let row = &grid[line];

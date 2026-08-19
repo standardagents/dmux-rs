@@ -30,21 +30,28 @@ fn main() {
         dmux_compositor::Rect::new(0, 0, cols, rows)
     };
 
+    let raw = std::env::args().any(|a| a == "raw");
     let mut bytes = Vec::new();
     std::io::stdin().read_to_end(&mut bytes).expect("read stdin");
-    // The trailing newline after the LAST row would scroll the grid by one
-    // (same pitfall finish_reseed avoids by not emitting a final CRLF).
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    // Captured text separates rows with \n; the emulator needs CR too.
-    let mut feed = Vec::with_capacity(bytes.len());
-    for b in bytes {
-        if b == b'\n' {
-            feed.push(b'\r');
+    let feed = if raw {
+        // Raw pty stream (verifier incident replay): feed byte-exact.
+        bytes
+    } else {
+        // The trailing newline after the LAST row would scroll the grid by
+        // one (same pitfall finish_reseed avoids with its final CRLF).
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
         }
-        feed.push(b);
-    }
+        // Captured text separates rows with \n; the emulator needs CR too.
+        let mut feed = Vec::with_capacity(bytes.len());
+        for b in bytes {
+            if b == b'\n' {
+                feed.push(b'\r');
+            }
+            feed.push(b);
+        }
+        feed
+    };
 
     let mut term = dmux_vt::PaneTerm::new(cols, rows, 200);
     term.advance(&feed);

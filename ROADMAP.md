@@ -43,6 +43,14 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 
 ## Rendering-fidelity contract
 
+**Shadow verifier** (`DMUX_VERIFY=1`): in any real session, settled panes are
+periodically compared cell-for-cell against tmux's grid; a mismatch toasts
+and writes `~/.dmux/incidents/render-*.txt` with both grids plus the raw
+`%output` ring (base64 — replay with `base64 -d | griddump COLS ROWS raw`).
+Every real-world artifact becomes a reproducible regression test. Run with
+it on when chasing rendering bugs.
+
+
 `scripts/fidelity.sh` proves dmux-rs paints panes **cell-for-cell identical
 (chars + fg + bg) to tmux's grid**, through the full pipeline (control mode →
 VT → compositor → host emission), on both the live-output path and the seed

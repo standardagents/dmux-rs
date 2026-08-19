@@ -83,6 +83,10 @@ pub struct LogicalPane {
     pub analysis_inflight: bool,
     /// Auto-accept option dialogs when the LLM classifies one (TS autopilot).
     pub autopilot: bool,
+    /// Raw %output ring buffer (shadow-verify mode only; empty otherwise).
+    pub recent_output: Vec<u8>,
+    /// Last shadow verification of this pane.
+    pub last_verify: Option<std::time::Instant>,
     pub worktree_path: Option<String>,
     /// The tmux pane was on the alternate screen at adoption time.
     pub alt_screen: bool,
@@ -115,36 +119,8 @@ impl LogicalPane {
     /// Apply the capture-pane reply that seeds this pane, then drain any
     /// output buffered while the capture was in flight.
     pub fn finish_reseed(&mut self, reply: &Reply, cursor: Option<(u16, u16)>) {
-        let mut seed: Vec<u8> = Vec::new();
-        let count = reply.lines.len();
-        for (i, line) in reply.lines.iter().enumerate() {
-            // Rows revealed by scrolling (long history seeds) BCE-fill with
-            // whatever background the previous line's open SGR carried —
-            // residue tmux's grid doesn't have on rows the capture leaves
-            // empty or short. Erase each row under a default pen first,
-            // save/restoring the cursor AND the carried SGR around it
-            // (DECSC/DECRC) so tmux's lazy cross-line SGR continuity — which
-            // the -N capture format relies on — is preserved exactly.
-            seed.extend_from_slice(b"\x1b7\x1b[0m\x1b[2K\x1b8");
-            seed.extend_from_slice(line);
-            // No trailing-cell reconstruction here: the capture itself is
-            // faithful because seed_command uses -N (background-filled blanks
-            // arrive as real spaces under their SGR). Synthesizing an EL from
-            // the open SGR instead would band rows whose trailing cells are
-            // genuinely default.
-            // capture-pane emits one reply line per screen row; rejoin with
-            // CRLF except after the last row so the cursor row stays correct.
-            if i + 1 < count {
-                seed.extend_from_slice(b"\r\n");
-            }
-        }
+        let seed = seed_bytes(reply);
         self.term.advance(&seed);
-        // The replay leaves the pen (current SGR) at whatever the capture
-        // happened to end with — not the app's real pen state. Reset it so
-        // later pen-dependent output (e.g. a BCE 2J clear) doesn't fill with
-        // a stale color; apps that clear with a background set it right
-        // before, so default is the faithful assumption.
-        self.term.advance(b"\x1b[0m");
         if let Some((x, y)) = cursor {
             self.term.advance(format!("\x1b[{};{}H", y + 1, x + 1).as_bytes());
         }
@@ -154,6 +130,12 @@ impl LogicalPane {
             }
         }
         self.dirty = true;
+    }
+
+    pub fn seed_command_visible(&self) -> String {
+        // Visible screen only — the shadow verifier's oracle (history is
+        // irrelevant for grid comparison).
+        format!("capture-pane -epqN -t {}", self.tmux_pane)
     }
 
     pub fn seed_command(&self) -> String {
@@ -178,6 +160,34 @@ impl LogicalPane {
             self.tmux_pane
         )
     }
+}
+
+/// Turn a `capture-pane -epqN` reply into the byte stream that reconstructs
+/// tmux's grid exactly when fed to a fresh emulator. Shared by the reseed
+/// path and the shadow verifier so both replay with identical semantics.
+///
+/// Per line: erase the row under a default pen first (rows revealed by
+/// scrolling in long seeds BCE-fill with the carried SGR background —
+/// residue tmux's grid doesn't have), save/restoring the cursor AND the
+/// carried SGR around it (DECSC/DECRC) so tmux's lazy cross-line SGR
+/// continuity — which the -N capture format relies on — is preserved.
+/// No trailing-cell reconstruction: -N captures are faithful (BCE blanks
+/// arrive as real spaces under their SGR). No CRLF after the last row (it
+/// would scroll the grid), and the pen is reset at the end — the capture's
+/// final SGR is not the app's real pen state, and later pen-dependent
+/// output (BCE 2J) must not fill with a stale color.
+pub fn seed_bytes(reply: &Reply) -> Vec<u8> {
+    let mut seed: Vec<u8> = Vec::new();
+    let count = reply.lines.len();
+    for (i, line) in reply.lines.iter().enumerate() {
+        seed.extend_from_slice(b"\x1b7\x1b[0m\x1b[2K\x1b8");
+        seed.extend_from_slice(line);
+        if i + 1 < count {
+            seed.extend_from_slice(b"\r\n");
+        }
+    }
+    seed.extend_from_slice(b"\x1b[0m");
+    seed
 }
 
 /// Parse the cursor-query reply built by [`LogicalPane::cursor_command`].
@@ -295,6 +305,8 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
             autopilot: config_pane.and_then(|p| p.autopilot).unwrap_or(false),
+            recent_output: Vec::new(),
+            last_verify: None,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,
             pane_pid: info.pane_pid,

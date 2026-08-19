@@ -17,6 +17,7 @@ mod render;
 mod session;
 mod sounds;
 mod tracking;
+mod verify;
 mod views;
 mod welcome;
 
@@ -141,6 +142,8 @@ enum Tag {
     ListPanes,
     Seed(PaneId),
     Cursor(PaneId),
+    /// Shadow-verifier capture for one pane.
+    VerifyCap(PaneId),
     ControllerPid,
     NewWindow(Box<NewWindowCtx>),
 }
@@ -315,6 +318,9 @@ struct App {
     /// Active native worktree bootstraps, keyed by pane slug; the pane body
     /// renders a loader card while one exists.
     bootstraps: std::collections::HashMap<String, bootstrap::Ui>,
+    /// DMUX_VERIFY=1: shadow-compare settled panes against tmux's grid and
+    /// write incident bundles on mismatch.
+    verify_enabled: bool,
     own_sizing: bool,
     sized_windows: std::collections::HashSet<dmux_cc::WindowId>,
     /// Welcome-screen state (shown when no panes are visible).
@@ -449,6 +455,7 @@ async fn run(
         anim: 0,
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
+        verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v == "1").unwrap_or(false),
         own_sizing: false,
         sized_windows: std::collections::HashSet::new(),
         welcome_cards: Vec::new(),
@@ -758,6 +765,13 @@ impl App {
                     }
                     p.window_bytes += data.len() as u64;
 
+                    if self.verify_enabled {
+                        p.recent_output.extend_from_slice(&data);
+                        if p.recent_output.len() > verify::RING_CAP {
+                            let cut = p.recent_output.len() - verify::RING_CAP;
+                            p.recent_output.drain(..cut);
+                        }
+                    }
                     if let Some(buffer) = &mut p.reseed_buffer {
                         buffer.push(data);
                     } else {
@@ -871,6 +885,37 @@ impl App {
                     if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
                         p.pending_seed = Some(reply);
                     }
+                }
+            }
+            Tag::VerifyCap(pane_id) => {
+                if !reply.ok {
+                    return;
+                }
+                let mut report: Option<(usize, Option<std::path::PathBuf>, String)> = None;
+                if let Some(p) = self.panes.iter().find(|p| p.tmux_pane == pane_id) {
+                    // Discard if output arrived since the capture was
+                    // requested — comparison is only valid at quiescence.
+                    let quiet = p
+                        .last_output
+                        .map(|t| t.elapsed() >= std::time::Duration::from_millis(500))
+                        .unwrap_or(true);
+                    if quiet && p.reseed_buffer.is_none() && !p.paused {
+                        let diffs = verify::compare(p, &reply);
+                        if diffs.is_empty() {
+                            tracing::debug!(pane = %pane_id, "render verify clean");
+                        }
+                        if !diffs.is_empty() {
+                            let path = verify::write_incident(&dirs_home(), p, &reply, &diffs).ok();
+                            report = Some((diffs.len(), path, p.display_title().to_string()));
+                        }
+                    }
+                }
+                if let Some((n, path, title)) = report {
+                    let loc = path
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "(incident write failed)".into());
+                    tracing::warn!(pane = %pane_id, diffs = n, incident = %loc, "render verify mismatch");
+                    self.toast(format!("⚠ render verify: {n} diffs in '{title}' → {loc}"));
                 }
             }
             Tag::Cursor(pane_id) => {
@@ -2841,6 +2886,20 @@ impl App {
                 });
             } else {
                 self.last_tracking = now;
+            }
+        }
+        // Shadow verifier: compare one settled pane per tick against tmux's
+        // authoritative grid (bounded to one capture in flight per sweep).
+        if self.verify_enabled {
+            if let Some(p) = self
+                .panes
+                .iter_mut()
+                .find(|p| verify::eligible(p, now))
+            {
+                p.last_verify = Some(now);
+                let _ = self
+                    .client
+                    .send_tagged(p.seed_command_visible(), Tag::VerifyCap(p.tmux_pane));
             }
         }
         // Finished bootstrap loaders linger briefly (success: long enough for
