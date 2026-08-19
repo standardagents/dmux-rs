@@ -5,6 +5,39 @@ This repo is the **first-party ring**: hand-selected users with repo access
 run builds that are diagnostic by default and improve the renderer just by
 using it.
 
+## Code quality
+
+Every component, abstraction, process, check, and document must serve a
+current product, correctness, security, or operational need. Keep the path
+from a requested change to verified behavior direct. Prefer fast feedback,
+low ceremony, shared definitions for shared meaning, explicit dependencies,
+and composition of focused components. Remove duplicated policy and avoid
+infrastructure whose main purpose is maintaining itself.
+
+Tests should assert observable behavior, contracts, state transitions, and
+failure handling. Exact string assertions belong where wording or serialized
+text is the contract. Tests should not depend on source text, private names,
+incidental constants, or mocks that reproduce the implementation.
+
+`AGENTS.md` is the canonical agent-instruction file in each directory that
+contains agent guidance. A sibling `CLAUDE.md` must be a relative symlink to
+that `AGENTS.md`. Preserve narrower instructions in nested directories through
+their own paired files.
+
+Authored Rust files under `crates/*/src/` and `crates/*/tests/` have an
+enforced limit of 1,000 physical lines. Existing oversized modules are listed
+in `oversized-modules.txt` with exact ceilings. Cargo fails when a listed
+module grows, when a new module crosses 1,000 lines, or when a ceiling remains
+stale after the module shrinks. Lower the ceiling after every reduction, and
+remove the ledger entry once a module reaches the standard limit. Extract
+cohesive boundaries such as rendering, input handling, dialogs, protocol
+handling, state transitions, or test support.
+
+Run `scripts/check.sh` before committing. It checks ordinary Rust formatting,
+runs Clippy across the workspace and every target with warnings denied, then
+runs the complete workspace test suite. CI and `scripts/release.sh` use the
+same command.
+
 ## The self-improving loop
 
 1. **Detect** — every build runs the shadow verifier: settled panes are
