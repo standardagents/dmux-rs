@@ -119,6 +119,18 @@ impl LogicalPane {
         let count = reply.lines.len();
         for (i, line) in reply.lines.iter().enumerate() {
             seed.extend_from_slice(line);
+            // tmux trims trailing background-colored blanks from captures and
+            // instead leaves their SGR open at end-of-line. Materialize that
+            // hint with EL: erase-to-end BCE-fills the rest of the row with
+            // the open background, so full-width bands (agent composer rows)
+            // survive the seed instead of dying at the last glyph. Only for
+            // non-empty lines: an entirely empty line is tmux's serialization
+            // of a default-blank row even when a background is still open
+            // (its lazy format never resets on rows it paints nothing on),
+            // so an EL there would band rows tmux means to be blank.
+            if !line.is_empty() {
+                seed.extend_from_slice(b"\x1b[K");
+            }
             // capture-pane emits one reply line per screen row; rejoin with
             // CRLF except after the last row so the cursor row stays correct.
             if i + 1 < count {
@@ -308,6 +320,31 @@ mod tests {
         assert_eq!(adopted[0].slug, "fix-auth");
         assert_eq!(adopted[0].title, "Fix auth");
         assert_eq!(adopted[1].slug, "shell-1");
+    }
+
+    #[test]
+    fn seed_restores_trailing_background_bands() {
+        // tmux capture trims trailing bg-colored blanks, leaving the SGR open
+        // at end-of-line; the seed must BCE-fill the rest of the row (agent
+        // composer bands) instead of letting the band die at the last glyph.
+        let reply = reply_of(&["%5\u{1}@0\u{1}p__dmux__p\u{1}30\u{1}4\u{1}0\u{1}zsh\u{1}w"]);
+        let infos = parse_pane_list(&reply);
+        let mut pane = adopt_panes(None, &infos).remove(0);
+        pane.begin_reseed();
+        let seed = reply_of(&["\u{1b}[48;5;236m> say hello to me", "", "\u{1b}[49mplain row"]);
+        pane.finish_reseed(&seed, None);
+
+        let mut buf = dmux_compositor::CellBuffer::new(30, 4);
+        pane.term.render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 30, 4));
+        // Band row: last column still carries the open background.
+        assert_eq!(buf.get(29, 0).bg, dmux_compositor::Color::Indexed(236), "band must span the full row");
+        assert_eq!(buf.get(5, 0).bg, dmux_compositor::Color::Indexed(236));
+        // The empty capture line is a default-blank row despite the still-open
+        // background (tmux's lazy serialization): it must NOT get banded.
+        assert_eq!(buf.get(0, 1).bg, dmux_compositor::Color::Default, "blank row must not be banded");
+        assert_eq!(buf.get(29, 1).bg, dmux_compositor::Color::Default);
+        // Reset row stays default too.
+        assert_eq!(buf.get(29, 2).bg, dmux_compositor::Color::Default, "band must not bleed past its row");
     }
 
     #[test]
