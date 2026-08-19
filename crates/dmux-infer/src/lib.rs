@@ -43,19 +43,88 @@ struct ProviderDef {
 /// Port of INFERENCE_PROVIDERS (the HTTP-key providers; subscription
 /// providers are handled elsewhere or unsupported).
 const PROVIDERS: &[ProviderDef] = &[
-    ProviderDef { id: "openrouter", env_keys: &["OPENROUTER_API_KEY"], base_url: "https://openrouter.ai/api/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "openai", env_keys: &["OPENAI_API_KEY"], base_url: "https://api.openai.com/v1", protocol: Protocol::OpenAiResponses },
-    ProviderDef { id: "anthropic", env_keys: &["ANTHROPIC_API_KEY"], base_url: "https://api.anthropic.com/v1", protocol: Protocol::Anthropic },
-    ProviderDef { id: "google", env_keys: &["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"], base_url: "https://generativelanguage.googleapis.com/v1beta/openai", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "xai", env_keys: &["XAI_API_KEY"], base_url: "https://api.x.ai/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "groq", env_keys: &["GROQ_API_KEY"], base_url: "https://api.groq.com/openai/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "cerebras", env_keys: &["CEREBRAS_API_KEY"], base_url: "https://api.cerebras.ai/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "deepseek", env_keys: &["DEEPSEEK_API_KEY"], base_url: "https://api.deepseek.com", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "mistral", env_keys: &["MISTRAL_API_KEY"], base_url: "https://api.mistral.ai/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "together", env_keys: &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"], base_url: "https://api.together.xyz/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "fireworks", env_keys: &["FIREWORKS_API_KEY"], base_url: "https://api.fireworks.ai/inference/v1", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "perplexity", env_keys: &["PERPLEXITY_API_KEY"], base_url: "https://api.perplexity.ai", protocol: Protocol::OpenAiCompatible },
-    ProviderDef { id: "cohere", env_keys: &["COHERE_API_KEY", "CO_API_KEY"], base_url: "https://api.cohere.ai/v1", protocol: Protocol::Cohere },
+    ProviderDef {
+        id: "openrouter",
+        env_keys: &["OPENROUTER_API_KEY"],
+        base_url: "https://openrouter.ai/api/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "openai",
+        env_keys: &["OPENAI_API_KEY"],
+        base_url: "https://api.openai.com/v1",
+        protocol: Protocol::OpenAiResponses,
+    },
+    ProviderDef {
+        id: "anthropic",
+        env_keys: &["ANTHROPIC_API_KEY"],
+        base_url: "https://api.anthropic.com/v1",
+        protocol: Protocol::Anthropic,
+    },
+    ProviderDef {
+        id: "google",
+        env_keys: &[
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        ],
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "xai",
+        env_keys: &["XAI_API_KEY"],
+        base_url: "https://api.x.ai/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "groq",
+        env_keys: &["GROQ_API_KEY"],
+        base_url: "https://api.groq.com/openai/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "cerebras",
+        env_keys: &["CEREBRAS_API_KEY"],
+        base_url: "https://api.cerebras.ai/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "deepseek",
+        env_keys: &["DEEPSEEK_API_KEY"],
+        base_url: "https://api.deepseek.com",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "mistral",
+        env_keys: &["MISTRAL_API_KEY"],
+        base_url: "https://api.mistral.ai/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "together",
+        env_keys: &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
+        base_url: "https://api.together.xyz/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "fireworks",
+        env_keys: &["FIREWORKS_API_KEY"],
+        base_url: "https://api.fireworks.ai/inference/v1",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "perplexity",
+        env_keys: &["PERPLEXITY_API_KEY"],
+        base_url: "https://api.perplexity.ai",
+        protocol: Protocol::OpenAiCompatible,
+    },
+    ProviderDef {
+        id: "cohere",
+        env_keys: &["COHERE_API_KEY", "CO_API_KEY"],
+        base_url: "https://api.cohere.ai/v1",
+        protocol: Protocol::Cohere,
+    },
 ];
 
 /// Settings-shaped inference target (`inferencePrimary` / `inferenceBackup`).
@@ -105,16 +174,26 @@ fn lookup_key(home: &std::path::Path, provider_id: &str, env_keys: &[String]) ->
             return Some(v.to_string());
         }
     }
-    stored.get(provider_id).and_then(|v| v.as_str()).map(String::from)
+    stored
+        .get(provider_id)
+        .and_then(|v| v.as_str())
+        .map(String::from)
 }
 
 fn resolve(home: &std::path::Path, target: &Target) -> Result<Resolved, InferError> {
     if target.provider_id == "custom" {
-        let base = target.base_url.clone().ok_or_else(|| InferError::Unsupported("custom (no baseUrl)".into()))?;
+        let base = target
+            .base_url
+            .clone()
+            .ok_or_else(|| InferError::Unsupported("custom (no baseUrl)".into()))?;
         let env_key = target.env_key.clone().unwrap_or_default();
         let key = lookup_key(home, "custom", &[env_key.clone()])
             .ok_or_else(|| InferError::NoKey("custom".into(), env_key))?;
-        return Ok(Resolved { base_url: base.trim_end_matches('/').to_string(), protocol: Protocol::OpenAiCompatible, api_key: key });
+        return Ok(Resolved {
+            base_url: base.trim_end_matches('/').to_string(),
+            protocol: Protocol::OpenAiCompatible,
+            api_key: key,
+        });
     }
     let def = PROVIDERS
         .iter()
@@ -123,7 +202,11 @@ fn resolve(home: &std::path::Path, target: &Target) -> Result<Resolved, InferErr
     let env_keys: Vec<String> = def.env_keys.iter().map(|s| s.to_string()).collect();
     let key = lookup_key(home, def.id, &env_keys)
         .ok_or_else(|| InferError::NoKey(def.id.into(), def.env_keys.join("/")))?;
-    Ok(Resolved { base_url: def.base_url.into(), protocol: def.protocol, api_key: key })
+    Ok(Resolved {
+        base_url: def.base_url.into(),
+        protocol: def.protocol,
+        api_key: key,
+    })
 }
 
 async fn generate_one(
@@ -155,7 +238,10 @@ async fn generate_one(
                 "max_tokens": max_tokens,
                 "temperature": 0,
             }),
-            vec![("authorization".into(), format!("Bearer {}", resolved.api_key))],
+            vec![(
+                "authorization".into(),
+                format!("Bearer {}", resolved.api_key),
+            )],
         ),
         Protocol::OpenAiResponses => (
             format!("{}/responses", resolved.base_url),
@@ -165,7 +251,10 @@ async fn generate_one(
                 "input": user,
                 "max_output_tokens": max_tokens.max(16),
             }),
-            vec![("authorization".into(), format!("Bearer {}", resolved.api_key))],
+            vec![(
+                "authorization".into(),
+                format!("Bearer {}", resolved.api_key),
+            )],
         ),
         Protocol::Anthropic => (
             format!("{}/messages", resolved.base_url),
@@ -188,7 +277,10 @@ async fn generate_one(
                 "message": user,
                 "max_tokens": max_tokens,
             }),
-            vec![("authorization".into(), format!("Bearer {}", resolved.api_key))],
+            vec![(
+                "authorization".into(),
+                format!("Bearer {}", resolved.api_key),
+            )],
         ),
     };
 
@@ -196,22 +288,34 @@ async fn generate_one(
     for (name, value) in headers {
         req = req.header(name, value);
     }
-    let resp = req.send().await.map_err(|e| InferError::Request(e.to_string()))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| InferError::Request(e.to_string()))?;
     let status = resp.status();
-    let payload: Value = resp.json().await.map_err(|e| InferError::BadResponse(e.to_string()))?;
+    let payload: Value = resp
+        .json()
+        .await
+        .map_err(|e| InferError::BadResponse(e.to_string()))?;
     if !status.is_success() {
-        let msg = payload["error"]["message"].as_str().unwrap_or("unknown error");
+        let msg = payload["error"]["message"]
+            .as_str()
+            .unwrap_or("unknown error");
         return Err(InferError::Request(format!("{status}: {msg}")));
     }
 
     let text = match resolved.protocol {
-        Protocol::OpenAiCompatible => payload["choices"][0]["message"]["content"].as_str().map(String::from),
+        Protocol::OpenAiCompatible => payload["choices"][0]["message"]["content"]
+            .as_str()
+            .map(String::from),
         Protocol::OpenAiResponses => payload["output"]
             .as_array()
             .and_then(|items| {
                 items.iter().find_map(|item| {
                     item["content"].as_array().and_then(|parts| {
-                        parts.iter().find_map(|p| p["text"].as_str().map(String::from))
+                        parts
+                            .iter()
+                            .find_map(|p| p["text"].as_str().map(String::from))
                     })
                 })
             })
@@ -236,7 +340,11 @@ pub fn provider_statuses(home: &std::path::Path) -> Vec<ProviderStatus> {
         .iter()
         .map(|d| {
             let keys: Vec<String> = d.env_keys.iter().map(|k| k.to_string()).collect();
-            ProviderStatus { id: d.id, env_key: d.env_keys[0], has_key: lookup_key(home, d.id, &keys).is_some() }
+            ProviderStatus {
+                id: d.id,
+                env_key: d.env_keys[0],
+                has_key: lookup_key(home, d.id, &keys).is_some(),
+            }
         })
         .collect()
 }
@@ -304,14 +412,21 @@ CRITICAL:
 
 /// Parse the model's state JSON (tolerates code fences and prose).
 pub fn parse_state(text: &str) -> PaneVerdict {
-    let cleaned = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```");
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```");
     let value: Option<Value> = serde_json::from_str(cleaned.trim()).ok().or_else(|| {
         // Find the first {...} block.
         let start = cleaned.find('{')?;
         let end = cleaned.rfind('}')?;
         serde_json::from_str(&cleaned[start..=end]).ok()
     });
-    match value.and_then(|v| v["state"].as_str().map(String::from)).as_deref() {
+    match value
+        .and_then(|v| v["state"].as_str().map(String::from))
+        .as_deref()
+    {
         Some("option_dialog") => PaneVerdict::OptionDialog,
         Some("in_progress") => PaneVerdict::InProgress,
         Some("open_prompt") => PaneVerdict::OpenPrompt,
@@ -334,15 +449,29 @@ mod tests {
 
     #[test]
     fn state_parsing_variants() {
-        assert_eq!(parse_state(r#"{"state":"option_dialog"}"#), PaneVerdict::OptionDialog);
-        assert_eq!(parse_state("```json\n{\"state\": \"open_prompt\"}\n```"), PaneVerdict::OpenPrompt);
-        assert_eq!(parse_state("The state is {\"state\":\"in_progress\"} here"), PaneVerdict::InProgress);
+        assert_eq!(
+            parse_state(r#"{"state":"option_dialog"}"#),
+            PaneVerdict::OptionDialog
+        );
+        assert_eq!(
+            parse_state("```json\n{\"state\": \"open_prompt\"}\n```"),
+            PaneVerdict::OpenPrompt
+        );
+        assert_eq!(
+            parse_state("The state is {\"state\":\"in_progress\"} here"),
+            PaneVerdict::InProgress
+        );
         assert_eq!(parse_state("garbage"), PaneVerdict::InProgress);
     }
 
     #[test]
     fn unknown_provider_unsupported() {
-        let t = Target { provider_id: "chatgpt".into(), model_id: "x".into(), base_url: None, env_key: None };
+        let t = Target {
+            provider_id: "chatgpt".into(),
+            model_id: "x".into(),
+            base_url: None,
+            env_key: None,
+        };
         let err = resolve(std::path::Path::new("/nonexistent"), &t).unwrap_err();
         assert!(matches!(err, InferError::Unsupported(_)));
     }

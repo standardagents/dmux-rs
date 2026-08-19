@@ -8,10 +8,15 @@ use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 #[derive(Debug, Clone)]
 pub enum InputPurpose {
     RenamePane(usize),
-    SetTextSetting { key: String, scope: dmux_core::SettingsScope },
+    SetTextSetting {
+        key: String,
+        scope: dmux_core::SettingsScope,
+    },
     AddProjectPath,
     /// Commit message before merging a dirty worktree.
-    MergeCommitMessage { slug: String },
+    MergeCommitMessage {
+        slug: String,
+    },
     /// Scrollback search in the focused pane.
     SearchScrollback,
 }
@@ -23,7 +28,12 @@ pub struct InputView {
 }
 
 impl InputView {
-    pub fn new(title: impl Into<String>, initial: &str, placeholder: &str, purpose: InputPurpose) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        initial: &str,
+        placeholder: &str,
+        purpose: InputPurpose,
+    ) -> Self {
         Self {
             title: title.into(),
             input: TextInput::with_value(initial).placeholder(placeholder),
@@ -38,7 +48,10 @@ impl InputView {
                 if value.is_empty() {
                     return ViewResult::Close;
                 }
-                AppCmd::RenamePane { idx: *idx, name: value }
+                AppCmd::RenamePane {
+                    idx: *idx,
+                    name: value,
+                }
             }
             InputPurpose::SetTextSetting { key, scope } => AppCmd::SetSetting {
                 key: key.clone(),
@@ -53,7 +66,11 @@ impl InputView {
             }
             InputPurpose::MergeCommitMessage { slug } => AppCmd::MergeExec {
                 slug: slug.clone(),
-                message: Some(if value.is_empty() { "dmux: worktree changes".into() } else { value }),
+                message: Some(if value.is_empty() {
+                    "dmux: worktree changes".into()
+                } else {
+                    value
+                }),
             },
             InputPurpose::SearchScrollback => {
                 if value.is_empty() {
@@ -76,7 +93,12 @@ impl View for InputView {
     ) -> Option<(u16, u16)> {
         let rect = centered(area, area.w.min(56), 6);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
-        let cursor = self.input.draw(buf, Rect::new(inner.x, inner.y + 1, inner.w, 1), ctx.theme, true);
+        let cursor = self.input.draw(
+            buf,
+            Rect::new(inner.x, inner.y + 1, inner.w, 1),
+            ctx.theme,
+            true,
+        );
         draw_hint_bar(
             buf,
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),

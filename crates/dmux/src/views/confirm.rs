@@ -18,7 +18,13 @@ pub struct ConfirmView {
 }
 
 impl ConfirmView {
-    pub fn new(title: impl Into<String>, message: impl Into<String>, yes_label: impl Into<String>, danger: bool, cmd: AppCmd) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        message: impl Into<String>,
+        yes_label: impl Into<String>,
+        danger: bool,
+        cmd: AppCmd,
+    ) -> Self {
         Self {
             title: title.into(),
             message: message.into(),
@@ -50,13 +56,43 @@ impl View for ConfirmView {
         let w = (self.message.chars().count() as u16 + 6).clamp(34, area.w.min(70));
         let rect = centered(area, w, 7);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
-        buf.draw_text(inner.x + 1, inner.y + 1, &self.message, ctx.theme.text, ctx.theme.bg_raised, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y + 1,
+            &self.message,
+            ctx.theme.text,
+            ctx.theme.bg_raised,
+            AttrFlags::empty(),
+            inner,
+        );
 
         let y = inner.bottom().saturating_sub(1);
-        let style = if self.danger { ButtonStyle::Danger } else { ButtonStyle::Primary };
-        let yes = draw_button(buf, inner.x + 2, y, &self.yes_label, ctx.theme, style, self.yes_focused, inner);
+        let style = if self.danger {
+            ButtonStyle::Danger
+        } else {
+            ButtonStyle::Primary
+        };
+        let yes = draw_button(
+            buf,
+            inner.x + 2,
+            y,
+            &self.yes_label,
+            ctx.theme,
+            style,
+            self.yes_focused,
+            inner,
+        );
         clicks.add(yes, ClickTarget::Overlay(TAG_YES));
-        let no = draw_button(buf, yes.right() + 3, y, "Cancel", ctx.theme, ButtonStyle::Quiet, !self.yes_focused, inner);
+        let no = draw_button(
+            buf,
+            yes.right() + 3,
+            y,
+            "Cancel",
+            ctx.theme,
+            ButtonStyle::Quiet,
+            !self.yes_focused,
+            inner,
+        );
         clicks.add(no, ClickTarget::Overlay(TAG_NO));
         None
     }
@@ -96,7 +132,10 @@ mod tests {
     use dmux_host::Modifiers;
 
     fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent { key: code, modifiers: Modifiers::NONE }
+        KeyEvent {
+            key: code,
+            modifiers: Modifiers::NONE,
+        }
     }
 
     fn close_dialog() -> ConfirmView {
@@ -107,7 +146,10 @@ mod tests {
     fn close_dialog_confirms_on_enter() {
         // #11: the user already asked to close — Enter is the fast path.
         let mut v = close_dialog();
-        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::CloseAnd(_)));
+        assert!(matches!(
+            v.on_key(&key(KeyCode::Enter)),
+            ViewResult::CloseAnd(_)
+        ));
     }
 
     #[test]
@@ -116,7 +158,10 @@ mod tests {
         let mut v = close_dialog();
         assert!(matches!(v.on_key(&key(KeyCode::Escape)), ViewResult::Close));
         let mut v = close_dialog();
-        assert!(matches!(v.on_key(&key(KeyCode::Char('n'))), ViewResult::Close));
+        assert!(matches!(
+            v.on_key(&key(KeyCode::Char('n'))),
+            ViewResult::Close
+        ));
         // Tab moves focus to Cancel; Enter then cancels.
         let mut v = close_dialog();
         assert!(matches!(v.on_key(&key(KeyCode::Tab)), ViewResult::Stay));

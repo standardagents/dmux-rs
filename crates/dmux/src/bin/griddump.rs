@@ -32,7 +32,9 @@ fn main() {
 
     let raw = std::env::args().any(|a| a == "raw");
     let mut bytes = Vec::new();
-    std::io::stdin().read_to_end(&mut bytes).expect("read stdin");
+    std::io::stdin()
+        .read_to_end(&mut bytes)
+        .expect("read stdin");
     let feed = if raw {
         // Raw pty stream (verifier incident replay): feed byte-exact.
         bytes
@@ -64,7 +66,12 @@ fn main() {
             let cell = buf.get(col, row);
             let ch = if cell.wide_spacer() { '_' } else { cell.ch };
             // Tab-separated: space CELLS would break a space-separated format.
-            line.push_str(&format!("{}·{}·{}\t", ch, color_code(cell.fg), color_code(cell.bg)));
+            line.push_str(&format!(
+                "{}·{}·{}\t",
+                ch,
+                color_code(cell.fg),
+                color_code(cell.bg)
+            ));
         }
         println!("{}", line.trim_end_matches('\t'));
     }

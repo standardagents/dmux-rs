@@ -83,7 +83,9 @@ pub const AGENTS: &[AgentDef] = &[
         short: "gb",
         command: "grok",
         bare_command: "grok",
-        transport: Transport::SendKeys { ready_delay_ms: 2500 },
+        transport: Transport::SendKeys {
+            ready_delay_ms: 2500,
+        },
         flags_plan: None,
         flags_accept: None,
         flags_bypass: None,
@@ -97,7 +99,9 @@ pub const AGENTS: &[AgentDef] = &[
         short: "cl",
         command: "cline",
         bare_command: "cline",
-        transport: Transport::SendKeys { ready_delay_ms: 2500 },
+        transport: Transport::SendKeys {
+            ready_delay_ms: 2500,
+        },
         flags_plan: None,
         flags_accept: None,
         flags_bypass: None,
@@ -195,7 +199,9 @@ pub const AGENTS: &[AgentDef] = &[
         short: "cs",
         command: "crush run",
         bare_command: "crush",
-        transport: Transport::SendKeys { ready_delay_ms: 2500 },
+        transport: Transport::SendKeys {
+            ready_delay_ms: 2500,
+        },
         flags_plan: None,
         flags_accept: None,
         flags_bypass: None,
@@ -242,16 +248,28 @@ pub fn permission_flags(def: &AgentDef, mode: &str) -> Option<&'static str> {
 /// launch.
 pub fn compose_resume(def: &AgentDef, mode: &str) -> Option<String> {
     let template = def.resume_template?;
-    let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
+    let flags = permission_flags(def, mode)
+        .map(|f| format!(" {f}"))
+        .unwrap_or_default();
     Some(template.replace("{permissions}", &flags))
 }
 
 /// Resume an exact captured session (TS `resumeSessionCommandTemplate`),
 /// falling back to resume-latest when unsupported.
-pub fn compose_resume_session(def: &AgentDef, session_id: Option<&str>, mode: &str) -> Option<String> {
+pub fn compose_resume_session(
+    def: &AgentDef,
+    session_id: Option<&str>,
+    mode: &str,
+) -> Option<String> {
     if let (Some(template), Some(id)) = (def.resume_session_template, session_id) {
-        let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
-        return Some(template.replace("{sessionId}", id).replace("{permissions}", &flags));
+        let flags = permission_flags(def, mode)
+            .map(|f| format!(" {f}"))
+            .unwrap_or_default();
+        return Some(
+            template
+                .replace("{sessionId}", id)
+                .replace("{permissions}", &flags),
+        );
     }
     compose_resume(def, mode)
 }
@@ -262,7 +280,9 @@ pub fn compose_resume_session(def: &AgentDef, session_id: Option<&str>, mode: &s
 /// returned command launches the bare TUI; the caller schedules the prompt
 /// injection afterwards.
 pub fn compose_launch(def: &AgentDef, prompt_file: Option<&str>, mode: &str) -> String {
-    let flags = permission_flags(def, mode).map(|f| format!(" {f}")).unwrap_or_default();
+    let flags = permission_flags(def, mode)
+        .map(|f| format!(" {f}"))
+        .unwrap_or_default();
     let Some(pf) = prompt_file else {
         return format!("{}{}", def.bare_command, flags);
     };
@@ -270,7 +290,10 @@ pub fn compose_launch(def: &AgentDef, prompt_file: Option<&str>, mode: &str) -> 
     match def.transport {
         Transport::Positional => format!("{read}{} \"$DMUX_PROMPT\"{flags}", def.command),
         Transport::Option(opt) => format!("{read}{} {opt} \"$DMUX_PROMPT\"{flags}", def.command),
-        Transport::Stdin => format!("{read}printf '%s\\n' \"$DMUX_PROMPT\" | {}{flags}", def.command),
+        Transport::Stdin => format!(
+            "{read}printf '%s\\n' \"$DMUX_PROMPT\" | {}{flags}",
+            def.command
+        ),
         Transport::SendKeys { .. } => format!("{}{}", def.bare_command, flags),
     }
 }
@@ -283,7 +306,12 @@ mod tests {
     fn short_labels_unique_and_two_chars() {
         let mut seen = std::collections::HashSet::new();
         for a in AGENTS {
-            assert_eq!(a.short.chars().count(), 2, "{} shortLabel must be 2 chars", a.id);
+            assert_eq!(
+                a.short.chars().count(),
+                2,
+                "{} shortLabel must be 2 chars",
+                a.id
+            );
             assert!(seen.insert(a.short), "duplicate shortLabel {}", a.short);
         }
         assert_eq!(AGENTS.len(), 12);
@@ -302,6 +330,9 @@ mod tests {
         assert!(cmd.contains("printf '%s\\n' \"$DMUX_PROMPT\" | amp"));
         let grok = agent("grok").unwrap();
         assert_eq!(compose_launch(grok, Some("/tmp/p.txt"), ""), "grok");
-        assert_eq!(compose_launch(claude, None, "plan"), "claude --permission-mode plan");
+        assert_eq!(
+            compose_launch(claude, None, "plan"),
+            "claude --permission-mode plan"
+        );
     }
 }

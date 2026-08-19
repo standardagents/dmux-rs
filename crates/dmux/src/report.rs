@@ -168,8 +168,22 @@ pub fn file_issue(
 
     if let Some(dir) = dry_run_dir {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        write_evidence_files(&dir.join("evidence"), incident_path, our_grid, tmux_grid_escaped, diffs)?;
-        let body = issue_body(build, slug, cols, rows, diffs, "dry-run://gist", deterministic);
+        write_evidence_files(
+            &dir.join("evidence"),
+            incident_path,
+            our_grid,
+            tmux_grid_escaped,
+            diffs,
+        )?;
+        let body = issue_body(
+            build,
+            slug,
+            cols,
+            rows,
+            diffs,
+            "dry-run://gist",
+            deterministic,
+        );
         std::fs::write(dir.join("issue-title.txt"), &title).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("issue-body.md"), &body).map_err(|e| e.to_string())?;
         let issue = FiledIssue {
@@ -195,9 +209,13 @@ pub fn file_issue(
         std::process::id(),
         EVIDENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let evidence = write_evidence_files(&staging, incident_path, our_grid, tmux_grid_escaped, diffs)?;
+    let evidence =
+        write_evidence_files(&staging, incident_path, our_grid, tmux_grid_escaped, diffs)?;
     let desc = format!("dmux-rs render incident: {slug} ({build})");
-    let file_args: Vec<String> = evidence.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let file_args: Vec<String> = evidence
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
     let mut gist_args: Vec<&str> = vec!["gist", "create", "--desc", &desc];
     gist_args.extend(file_args.iter().map(|s| s.as_str()));
     let gist_result = run_gh(&gist_args, None);
@@ -212,7 +230,15 @@ pub fn file_issue(
             // Label best-effort; `issue new` has no label flag.
             if n > 0 {
                 let _ = run_gh(
-                    &["issue", "edit", &n.to_string(), "-R", repo, "--add-label", "render-incident"],
+                    &[
+                        "issue",
+                        "edit",
+                        &n.to_string(),
+                        "-R",
+                        repo,
+                        "--add-label",
+                        "render-incident",
+                    ],
                     None,
                 );
             }
@@ -239,7 +265,11 @@ pub fn file_issue(
 
 /// File through the team `issue` CLI. `None` = CLI not installed/configured
 /// (caller falls back to gh); `Some(Err)` = tried and failed.
-fn file_via_issue_cli(repo: &str, title: &str, body: &str) -> Option<Result<(u64, String), String>> {
+fn file_via_issue_cli(
+    repo: &str,
+    title: &str,
+    body: &str,
+) -> Option<Result<(u64, String), String>> {
     let creds = std::env::var_os("HOME")
         .map(PathBuf::from)?
         .join(".standardagents")
@@ -285,11 +315,26 @@ fn file_via_issue_cli(repo: &str, title: &str, body: &str) -> Option<Result<(u64
 
 fn file_via_gh(repo: &str, title: &str, body: &str) -> Result<(u64, String), String> {
     let issue_url = run_gh(
-        &["issue", "create", "-R", repo, "--title", title, "--label", "render-incident", "--body", body],
+        &[
+            "issue",
+            "create",
+            "-R",
+            repo,
+            "--title",
+            title,
+            "--label",
+            "render-incident",
+            "--body",
+            body,
+        ],
         None,
     )?;
     let issue_url = issue_url.lines().last().unwrap_or("").trim().to_string();
-    let number = issue_url.rsplit('/').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let number = issue_url
+        .rsplit('/')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
     Ok((number, issue_url))
 }
 
@@ -330,17 +375,39 @@ mod tests {
         let diffs = vec!["(1,2) a b".to_string(), "(3,4) c d".to_string()];
         let dry = dir.join("out");
         file_issue(
-            "org/repo", &home, "build-y", "slug-z", 10, 5,
-            &diffs, "our grid\n", "tmux grid\n", &incident, false, Some(&dry),
+            "org/repo",
+            &home,
+            "build-y",
+            "slug-z",
+            10,
+            5,
+            &diffs,
+            "our grid\n",
+            "tmux grid\n",
+            &incident,
+            false,
+            Some(&dry),
         )
         .unwrap();
         let ev = dry.join("evidence");
         assert_eq!(std::fs::read(ev.join("incident.txt")).unwrap(), raw);
-        assert_eq!(std::fs::read_to_string(ev.join("our-grid.txt")).unwrap(), "our grid\n");
-        assert_eq!(std::fs::read_to_string(ev.join("tmux-capture.txt")).unwrap(), "tmux grid\n");
-        assert_eq!(std::fs::read_to_string(ev.join("first-diffs.txt")).unwrap(), "(1,2) a b\n(3,4) c d");
+        assert_eq!(
+            std::fs::read_to_string(ev.join("our-grid.txt")).unwrap(),
+            "our grid\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ev.join("tmux-capture.txt")).unwrap(),
+            "tmux grid\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ev.join("first-diffs.txt")).unwrap(),
+            "(1,2) a b\n(3,4) c d"
+        );
         let body = std::fs::read_to_string(dry.join("issue-body.md")).unwrap();
-        assert!(!body.contains("our grid"), "grid content must not leak into the body");
+        assert!(
+            !body.contains("our grid"),
+            "grid content must not leak into the body"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -46,30 +46,80 @@ impl View for ShortcutsView {
         // Two columns: leader table left, direct chords right.
         let rows = LEADER_ROWS.len().max(self.direct.len() + 2) as u16 + 4;
         let rect = centered(area, area.w.min(96), rows.min(area.h));
-        let inner = draw_panel(buf, rect, "Keyboard Shortcuts", ctx.theme, PanelStyle::Modal);
+        let inner = draw_panel(
+            buf,
+            rect,
+            "Keyboard Shortcuts",
+            ctx.theme,
+            PanelStyle::Modal,
+        );
         let bg = ctx.theme.bg_raised;
         let col2 = inner.x + inner.w / 2 + 2;
 
-        buf.draw_text(inner.x + 1, inner.y, "Leader", ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y,
+            "Leader",
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::BOLD,
+            inner,
+        );
         let mut y = inner.y + 1;
         for (key, desc) in LEADER_ROWS {
             if y >= inner.bottom().saturating_sub(1) {
                 break;
             }
-            buf.draw_text(inner.x + 1, y, key, ctx.theme.accent, bg, AttrFlags::BOLD, inner);
-            buf.draw_text(inner.x + 12, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+            buf.draw_text(
+                inner.x + 1,
+                y,
+                key,
+                ctx.theme.accent,
+                bg,
+                AttrFlags::BOLD,
+                inner,
+            );
+            buf.draw_text(
+                inner.x + 12,
+                y,
+                desc,
+                ctx.theme.text_dim,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
             y += 1;
         }
 
-        let title = if self.kitty { "Direct (kitty host: ⌘ works)" } else { "Direct" };
-        buf.draw_text(col2, inner.y, title, ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
+        let title = if self.kitty {
+            "Direct (kitty host: ⌘ works)"
+        } else {
+            "Direct"
+        };
+        buf.draw_text(
+            col2,
+            inner.y,
+            title,
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::BOLD,
+            inner,
+        );
         let mut y = inner.y + 1;
         for (key, desc) in &self.direct {
             if y >= inner.bottom().saturating_sub(2) {
                 break;
             }
             buf.draw_text(col2, y, key, ctx.theme.ok, bg, AttrFlags::BOLD, inner);
-            buf.draw_text(col2 + 10, y, desc, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+            buf.draw_text(
+                col2 + 10,
+                y,
+                desc,
+                ctx.theme.text_dim,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
             y += 1;
         }
         buf.draw_text(

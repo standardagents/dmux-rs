@@ -50,13 +50,21 @@ impl AgentSelectView {
         let mut rows: Vec<AgentRow> = AGENTS
             .iter()
             .filter(|def| enabled.iter().any(|id| id == def.id))
-            .map(|def| AgentRow { def, installed: installed.contains(def.id), count: 0 })
+            .map(|def| AgentRow {
+                def,
+                installed: installed.contains(def.id),
+                count: 0,
+            })
             .collect();
         if rows.is_empty() {
             rows = AGENTS
                 .iter()
                 .filter(|d| d.default_enabled)
-                .map(|def| AgentRow { def, installed: installed.contains(def.id), count: 0 })
+                .map(|def| AgentRow {
+                    def,
+                    installed: installed.contains(def.id),
+                    count: 0,
+                })
                 .collect();
         }
         // Installed first, then default-enabled, stable within groups.
@@ -74,7 +82,12 @@ impl AgentSelectView {
             .iter()
             .position(|(v, _)| *v == default_mode)
             .unwrap_or(0);
-        Self { prompt: TextInput::default().placeholder("What should the agents do?"), rows, focus: 0, permission_idx }
+        Self {
+            prompt: TextInput::default().placeholder("What should the agents do?"),
+            rows,
+            focus: 0,
+            permission_idx,
+        }
     }
 
     fn total(&self) -> u32 {
@@ -125,12 +138,30 @@ impl View for AgentSelectView {
         let inner = draw_panel(buf, rect, t("agent.title"), ctx.theme, PanelStyle::Modal);
         let bg = ctx.theme.bg_raised;
 
-        buf.draw_text(inner.x + 1, inner.y, t("agent.prompt_label"), ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y,
+            t("agent.prompt_label"),
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
         let prompt_rect = Rect::new(inner.x, inner.y + 1, inner.w, 1);
-        let cursor = self.prompt.draw(buf, prompt_rect, ctx.theme, self.focus == 0);
+        let cursor = self
+            .prompt
+            .draw(buf, prompt_rect, ctx.theme, self.focus == 0);
         clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
 
-        buf.draw_text(inner.x + 1, inner.y + 3, t("agent.allocate"), ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y + 3,
+            t("agent.allocate"),
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
         let rows_y = inner.y + 4;
         for (i, row) in self.rows.iter().enumerate() {
             let y = rows_y + i as u16;
@@ -140,9 +171,23 @@ impl View for AgentSelectView {
             let selected = self.focus == i + 1;
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
             let row_bg = if selected { ctx.theme.bg_selected } else { bg };
-            buf.fill(row_rect, &Cell { bg: row_bg, ..Cell::default() });
+            buf.fill(
+                row_rect,
+                &Cell {
+                    bg: row_bg,
+                    ..Cell::default()
+                },
+            );
             let caret = if selected { "▸ " } else { "  " };
-            buf.draw_text(inner.x, y, caret, ctx.theme.accent, row_bg, AttrFlags::BOLD, row_rect);
+            buf.draw_text(
+                inner.x,
+                y,
+                caret,
+                ctx.theme.accent,
+                row_bg,
+                AttrFlags::BOLD,
+                row_rect,
+            );
             let name_fg = if !row.installed {
                 ctx.theme.text_faint
             } else if row.count > 0 {
@@ -150,28 +195,95 @@ impl View for AgentSelectView {
             } else {
                 ctx.theme.text_dim
             };
-            let x = buf.draw_text(inner.x + 2, y, row.def.name, name_fg, row_bg, if row.count > 0 { AttrFlags::BOLD } else { AttrFlags::empty() }, row_rect);
-            buf.draw_text(x + 1, y, &format!("[{}]", row.def.short), ctx.theme.text_faint, row_bg, AttrFlags::empty(), row_rect);
+            let x = buf.draw_text(
+                inner.x + 2,
+                y,
+                row.def.name,
+                name_fg,
+                row_bg,
+                if row.count > 0 {
+                    AttrFlags::BOLD
+                } else {
+                    AttrFlags::empty()
+                },
+                row_rect,
+            );
+            buf.draw_text(
+                x + 1,
+                y,
+                &format!("[{}]", row.def.short),
+                ctx.theme.text_faint,
+                row_bg,
+                AttrFlags::empty(),
+                row_rect,
+            );
             if row.installed {
-                let (minus, plus) = draw_counter(buf, inner.right().saturating_sub(9), y, row.count, ctx.theme, selected, row_rect);
+                let (minus, plus) = draw_counter(
+                    buf,
+                    inner.right().saturating_sub(9),
+                    y,
+                    row.count,
+                    ctx.theme,
+                    selected,
+                    row_rect,
+                );
                 clicks.add(minus, ClickTarget::Overlay(TAG_MINUS + i as u64));
                 clicks.add(plus, ClickTarget::Overlay(TAG_PLUS + i as u64));
             } else {
                 let label = "not installed";
-                buf.draw_text(inner.right().saturating_sub(label.len() as u16 + 1), y, label, ctx.theme.text_faint, row_bg, AttrFlags::ITALIC, row_rect);
+                buf.draw_text(
+                    inner.right().saturating_sub(label.len() as u16 + 1),
+                    y,
+                    label,
+                    ctx.theme.text_faint,
+                    row_bg,
+                    AttrFlags::ITALIC,
+                    row_rect,
+                );
             }
-            clicks.add(Rect::new(row_rect.x, y, row_rect.w.saturating_sub(10), 1), ClickTarget::Overlay(TAG_ROW + i as u64));
+            clicks.add(
+                Rect::new(row_rect.x, y, row_rect.w.saturating_sub(10), 1),
+                ClickTarget::Overlay(TAG_ROW + i as u64),
+            );
         }
 
         // Permission mode row.
         let perm_y = inner.bottom().saturating_sub(3);
         let perm_selected = self.focus == self.rows.len() + 1;
         let perm_rect = Rect::new(inner.x, perm_y, inner.w, 1);
-        let perm_bg = if perm_selected { ctx.theme.bg_selected } else { bg };
-        buf.fill(perm_rect, &Cell { bg: perm_bg, ..Cell::default() });
-        buf.draw_text(inner.x + 1, perm_y, t("agent.permissions"), ctx.theme.text_dim, perm_bg, AttrFlags::empty(), perm_rect);
+        let perm_bg = if perm_selected {
+            ctx.theme.bg_selected
+        } else {
+            bg
+        };
+        buf.fill(
+            perm_rect,
+            &Cell {
+                bg: perm_bg,
+                ..Cell::default()
+            },
+        );
+        buf.draw_text(
+            inner.x + 1,
+            perm_y,
+            t("agent.permissions"),
+            ctx.theme.text_dim,
+            perm_bg,
+            AttrFlags::empty(),
+            perm_rect,
+        );
         let value = draw_select_value(PERMISSION_MODES[self.permission_idx].1);
-        buf.draw_text(inner.right().saturating_sub(value.chars().count() as u16 + 1), perm_y, &value, ctx.theme.accent, perm_bg, AttrFlags::empty(), perm_rect);
+        buf.draw_text(
+            inner
+                .right()
+                .saturating_sub(value.chars().count() as u16 + 1),
+            perm_y,
+            &value,
+            ctx.theme.accent,
+            perm_bg,
+            AttrFlags::empty(),
+            perm_rect,
+        );
         clicks.add(perm_rect, ClickTarget::Overlay(TAG_PERMISSION));
 
         // Launch button.
@@ -198,7 +310,12 @@ impl View for AgentSelectView {
         draw_hint_bar(
             buf,
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
-            &[("↑↓", "field"), ("←→", "count"), ("⏎", "launch"), ("esc", "close")],
+            &[
+                ("↑↓", "field"),
+                ("←→", "count"),
+                ("⏎", "launch"),
+                ("esc", "close"),
+            ],
             ctx.theme,
         );
         if self.focus == 0 {
@@ -213,7 +330,9 @@ impl View for AgentSelectView {
             return ViewResult::Close;
         }
         let zones = self.zones();
-        if matches!(key.key, KeyCode::UpArrow) || (vkeys::is_tab(key) && key.modifiers.contains(dmux_host::Modifiers::SHIFT)) {
+        if matches!(key.key, KeyCode::UpArrow)
+            || (vkeys::is_tab(key) && key.modifiers.contains(dmux_host::Modifiers::SHIFT))
+        {
             self.focus = (self.focus + zones - 1) % zones;
             return ViewResult::Stay;
         }
@@ -235,7 +354,9 @@ impl View for AgentSelectView {
             let idx = self.focus - 1;
             match key.key {
                 KeyCode::LeftArrow | KeyCode::Char('-') => self.adjust_row(idx, -1),
-                KeyCode::RightArrow | KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_row(idx, 1),
+                KeyCode::RightArrow | KeyCode::Char('+') | KeyCode::Char('=') => {
+                    self.adjust_row(idx, 1)
+                }
                 KeyCode::Char(c @ '0'..='9') => {
                     if let Some(row) = self.rows.get_mut(idx) {
                         if row.installed {
@@ -251,7 +372,9 @@ impl View for AgentSelectView {
             let n = PERMISSION_MODES.len();
             match key.key {
                 KeyCode::LeftArrow => self.permission_idx = (self.permission_idx + n - 1) % n,
-                KeyCode::RightArrow | KeyCode::Char(' ') => self.permission_idx = (self.permission_idx + 1) % n,
+                KeyCode::RightArrow | KeyCode::Char(' ') => {
+                    self.permission_idx = (self.permission_idx + 1) % n
+                }
                 _ => {}
             }
         }

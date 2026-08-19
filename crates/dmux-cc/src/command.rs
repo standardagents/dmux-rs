@@ -15,9 +15,13 @@ pub fn command_is_line_safe(cmd: &str) -> bool {
 
 pub fn quote_arg(arg: &str) -> String {
     if !arg.is_empty()
-        && arg
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' | b':' | b'@' | b'%' | b'=' | b','))
+        && arg.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'_' | b'-' | b'.' | b'/' | b':' | b'@' | b'%' | b'=' | b','
+                )
+        })
     {
         return arg.to_string();
     }
@@ -57,7 +61,10 @@ mod tests {
 
     #[test]
     fn format_strings() {
-        assert_eq!(quote_arg("#{pane_id}|#{pane_title}"), "'#{pane_id}|#{pane_title}'");
+        assert_eq!(
+            quote_arg("#{pane_id}|#{pane_title}"),
+            "'#{pane_id}|#{pane_title}'"
+        );
     }
 
     #[test]
@@ -77,6 +84,8 @@ mod line_safety_tests {
         let cmd = format!("set-buffer -b dmux {}", quote_arg("line one\nline two"));
         assert!(!command_is_line_safe(&cmd));
         assert!(!command_is_line_safe("a\rb"));
-        assert!(command_is_line_safe("set-buffer -b dmux 'plain text with spaces'"));
+        assert!(command_is_line_safe(
+            "set-buffer -b dmux 'plain text with spaces'"
+        ));
     }
 }

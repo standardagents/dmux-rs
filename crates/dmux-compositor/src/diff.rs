@@ -105,11 +105,22 @@ mod tests {
         diff_frame(&mut front, &mut back, &mut em, true);
         em.take();
 
-        back.draw_text(3, 1, "x", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        back.draw_text(
+            3,
+            1,
+            "x",
+            Color::Default,
+            Color::Default,
+            AttrFlags::empty(),
+            back.area(),
+        );
         let stats = diff_frame(&mut front, &mut back, &mut em, false);
         assert_eq!(stats.cells_emitted, 1);
         let out = String::from_utf8(em.take()).unwrap();
-        assert!(out.contains("\x1b[2;4H"), "expected CUP to row 2 col 4, got {out:?}");
+        assert!(
+            out.contains("\x1b[2;4H"),
+            "expected CUP to row 2 col 4, got {out:?}"
+        );
         assert!(out.ends_with('x'));
     }
 
@@ -117,14 +128,38 @@ mod tests {
     fn wide_char_reemitted_when_either_column_changes() {
         let (mut front, mut back) = buffers(10, 1);
         let mut em = Emitter::new();
-        back.draw_text(0, 0, "漢", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        back.draw_text(
+            0,
+            0,
+            "漢",
+            Color::Default,
+            Color::Default,
+            AttrFlags::empty(),
+            back.area(),
+        );
         diff_frame(&mut front, &mut back, &mut em, false);
         em.take();
 
         // Overwrite only the spacer column with a narrow char.
-        back.draw_text(1, 0, "a", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        back.draw_text(
+            1,
+            0,
+            "a",
+            Color::Default,
+            Color::Default,
+            AttrFlags::empty(),
+            back.area(),
+        );
         // Column 0 must also be repainted (the wide char no longer fits).
-        back.draw_text(0, 0, " ", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        back.draw_text(
+            0,
+            0,
+            " ",
+            Color::Default,
+            Color::Default,
+            AttrFlags::empty(),
+            back.area(),
+        );
         let stats = diff_frame(&mut front, &mut back, &mut em, false);
         assert!(stats.cells_emitted >= 2);
         let out = String::from_utf8(em.take()).unwrap();
@@ -141,7 +176,15 @@ mod tests {
         diff_frame(&mut front, &mut back, &mut em, true);
         em.take();
 
-        back.draw_text(0, 0, "⏺ hi", Color::Default, Color::Default, AttrFlags::empty(), back.area());
+        back.draw_text(
+            0,
+            0,
+            "⏺ hi",
+            Color::Default,
+            Color::Default,
+            AttrFlags::empty(),
+            back.area(),
+        );
         diff_frame(&mut front, &mut back, &mut em, false);
         let out = String::from_utf8(em.take()).unwrap();
         let bullet = out.find('⏺').expect("bullet emitted");
@@ -163,10 +206,21 @@ mod tests {
     fn front_converges_to_back() {
         let (mut front, mut back) = buffers(20, 3);
         let mut em = Emitter::new();
-        back.draw_text(0, 0, "hello", Color::Indexed(2), Color::Default, AttrFlags::BOLD, back.area());
+        back.draw_text(
+            0,
+            0,
+            "hello",
+            Color::Indexed(2),
+            Color::Default,
+            AttrFlags::BOLD,
+            back.area(),
+        );
         back.fill(
             Rect::new(0, 2, 20, 1),
-            &Cell { bg: Color::Rgb(10, 20, 30), ..Cell::default() },
+            &Cell {
+                bg: Color::Rgb(10, 20, 30),
+                ..Cell::default()
+            },
         );
         diff_frame(&mut front, &mut back, &mut em, false);
         for row in 0..3 {

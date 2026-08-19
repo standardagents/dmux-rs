@@ -29,14 +29,23 @@ impl InferProvidersView {
     pub fn new(settings: Arc<Mutex<SettingsStore>>) -> Self {
         let (primary, backup) = {
             let store = settings.lock().unwrap();
-            (target_line(&store, "inferencePrimary"), target_line(&store, "inferenceBackup"))
+            (
+                target_line(&store, "inferencePrimary"),
+                target_line(&store, "inferenceBackup"),
+            )
         };
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
         let providers = dmux_infer::provider_statuses(&home)
             .into_iter()
             .map(|p| (p.id.to_string(), p.env_key.to_string(), p.has_key))
             .collect();
-        Self { primary, backup, providers }
+        Self {
+            primary,
+            backup,
+            providers,
+        }
     }
 }
 
@@ -50,24 +59,90 @@ impl View for InferProvidersView {
     ) -> Option<(u16, u16)> {
         let h = (self.providers.len() as u16 + 9).min(area.h.saturating_sub(2));
         let rect = centered(area, area.w.min(64), h);
-        let inner = draw_panel(buf, rect, "Inference Providers", ctx.theme, PanelStyle::Modal);
+        let inner = draw_panel(
+            buf,
+            rect,
+            "Inference Providers",
+            ctx.theme,
+            PanelStyle::Modal,
+        );
         let bg = ctx.theme.bg_raised;
 
-        buf.draw_text(inner.x + 1, inner.y, "Primary", ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
-        buf.draw_text(inner.x + 11, inner.y, &self.primary, ctx.theme.accent, bg, AttrFlags::empty(), inner);
-        buf.draw_text(inner.x + 1, inner.y + 1, "Backup", ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
-        buf.draw_text(inner.x + 11, inner.y + 1, &self.backup, ctx.theme.text_dim, bg, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y,
+            "Primary",
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::BOLD,
+            inner,
+        );
+        buf.draw_text(
+            inner.x + 11,
+            inner.y,
+            &self.primary,
+            ctx.theme.accent,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
+        buf.draw_text(
+            inner.x + 1,
+            inner.y + 1,
+            "Backup",
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::BOLD,
+            inner,
+        );
+        buf.draw_text(
+            inner.x + 11,
+            inner.y + 1,
+            &self.backup,
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
 
-        buf.draw_text(inner.x + 1, inner.y + 3, "Detected credentials", ctx.theme.text_dim, bg, AttrFlags::BOLD, inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y + 3,
+            "Detected credentials",
+            ctx.theme.text_dim,
+            bg,
+            AttrFlags::BOLD,
+            inner,
+        );
         let mut y = inner.y + 4;
         for (id, env_key, has_key) in &self.providers {
             if y >= inner.bottom().saturating_sub(2) {
                 break;
             }
-            let (mark, color) = if *has_key { ("✓", ctx.theme.ok) } else { ("–", ctx.theme.text_faint) };
+            let (mark, color) = if *has_key {
+                ("✓", ctx.theme.ok)
+            } else {
+                ("–", ctx.theme.text_faint)
+            };
             buf.draw_text(inner.x + 1, y, mark, color, bg, AttrFlags::BOLD, inner);
-            buf.draw_text(inner.x + 3, y, id, ctx.theme.text, bg, AttrFlags::empty(), inner);
-            buf.draw_text(inner.x + 16, y, env_key, ctx.theme.text_faint, bg, AttrFlags::empty(), inner);
+            buf.draw_text(
+                inner.x + 3,
+                y,
+                id,
+                ctx.theme.text,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
+            buf.draw_text(
+                inner.x + 16,
+                y,
+                env_key,
+                ctx.theme.text_faint,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
             y += 1;
         }
         buf.draw_text(

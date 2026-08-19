@@ -12,7 +12,9 @@ pub fn hook_path(root: &Path, name: &str) -> Option<PathBuf> {
 /// Spawn the hook detached with the standard env; never blocks the UI and
 /// never fails visibly (missing/broken hooks are the project's business).
 pub fn run_detached(root: &Path, name: &str, cwd: &Path, envs: &[(&str, String)]) {
-    let Some(path) = hook_path(root, name) else { return };
+    let Some(path) = hook_path(root, name) else {
+        return;
+    };
     // The preferred cwd may not exist yet (pane_created fires while the
     // pane's own bootstrap is still creating the worktree) — fall back to
     // the project root rather than failing to spawn.

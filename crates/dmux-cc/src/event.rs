@@ -36,37 +36,87 @@ impl std::fmt::Display for SessionId {
 /// octal-escaped, unlike `%output` data).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CcEvent {
-    ReplyBegin { time: u64, num: u64, flags: u64 },
+    ReplyBegin {
+        time: u64,
+        num: u64,
+        flags: u64,
+    },
     ReplyLine(Vec<u8>),
-    ReplyEnd { time: u64, num: u64, flags: u64, ok: bool },
+    ReplyEnd {
+        time: u64,
+        num: u64,
+        flags: u64,
+        ok: bool,
+    },
 
     /// Unescaped output bytes for a pane.
-    Output { pane: PaneId, data: Vec<u8> },
+    Output {
+        pane: PaneId,
+        data: Vec<u8>,
+    },
     /// Output with an age (ms the data spent buffered server-side); emitted
     /// instead of `%output` once `pause-after` flow control is enabled.
-    ExtendedOutput { pane: PaneId, age_ms: u64, data: Vec<u8> },
+    ExtendedOutput {
+        pane: PaneId,
+        age_ms: u64,
+        data: Vec<u8>,
+    },
     Pause(PaneId),
     Continue(PaneId),
 
     WindowAdd(WindowId),
     WindowClose(WindowId),
     UnlinkedWindowClose(WindowId),
-    WindowRenamed { window: WindowId, name: String },
-    UnlinkedWindowRenamed { window: WindowId, name: String },
-    WindowPaneChanged { window: WindowId, pane: PaneId },
-    LayoutChange { window: WindowId, layout: String, visible_layout: Option<String>, raw_flags: Option<String> },
+    WindowRenamed {
+        window: WindowId,
+        name: String,
+    },
+    UnlinkedWindowRenamed {
+        window: WindowId,
+        name: String,
+    },
+    WindowPaneChanged {
+        window: WindowId,
+        pane: PaneId,
+    },
+    LayoutChange {
+        window: WindowId,
+        layout: String,
+        visible_layout: Option<String>,
+        raw_flags: Option<String>,
+    },
 
-    SessionChanged { session: SessionId, name: String },
-    SessionRenamed { name: String },
+    SessionChanged {
+        session: SessionId,
+        name: String,
+    },
+    SessionRenamed {
+        name: String,
+    },
     SessionsChanged,
-    SessionWindowChanged { session: SessionId, window: WindowId },
-    ClientSessionChanged { client: String, session: SessionId, name: String },
-    ClientDetached { client: String },
+    SessionWindowChanged {
+        session: SessionId,
+        window: WindowId,
+    },
+    ClientSessionChanged {
+        client: String,
+        session: SessionId,
+        name: String,
+    },
+    ClientDetached {
+        client: String,
+    },
 
     PaneModeChanged(PaneId),
-    PasteBufferChanged { name: String },
-    PasteBufferDeleted { name: String },
-    SubscriptionChanged { raw: String },
+    PasteBufferChanged {
+        name: String,
+    },
+    PasteBufferDeleted {
+        name: String,
+    },
+    SubscriptionChanged {
+        raw: String,
+    },
     ConfigError(String),
     Message(String),
     /// Server is closing the control connection. Reason is present on newer tmux.

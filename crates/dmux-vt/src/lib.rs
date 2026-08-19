@@ -109,7 +109,10 @@ impl PaneTerm {
     pub fn new(cols: u16, rows: u16, scrollback_lines: usize) -> Self {
         let proxy = EventProxy::default();
         let sink = proxy.0.clone();
-        let config = Config { scrolling_history: scrollback_lines, ..Config::default() };
+        let config = Config {
+            scrolling_history: scrollback_lines,
+            ..Config::default()
+        };
         let size = TermSize::new(cols.max(1) as usize, rows.max(1) as usize);
         let term = Term::new(config, &size, proxy);
         Self {
@@ -222,7 +225,9 @@ impl PaneTerm {
                     let fg = NamedColor::Foreground as usize;
                     let bg = NamedColor::Background as usize;
                     if index != fg && index != bg {
-                        out.push(TermSideEffect::PtyResponse(formatter(palette::color_for(index)).into_bytes()));
+                        out.push(TermSideEffect::PtyResponse(
+                            formatter(palette::color_for(index)).into_bytes(),
+                        ));
                     }
                 }
                 Event::TextAreaSizeRequest(formatter) => {
@@ -254,7 +259,8 @@ impl PaneTerm {
         }
         self.cols = cols;
         self.rows = rows;
-        self.term.resize(TermSize::new(cols as usize, rows as usize));
+        self.term
+            .resize(TermSize::new(cols as usize, rows as usize));
     }
 
     /// Take and reset accumulated damage, in viewport row indices.
@@ -312,7 +318,8 @@ impl PaneTerm {
 
     pub fn cursor(&self) -> CursorState {
         let content = self.term.renderable_content();
-        let visible = self.term.mode().contains(TermMode::SHOW_CURSOR) && content.display_offset == 0;
+        let visible =
+            self.term.mode().contains(TermMode::SHOW_CURSOR) && content.display_offset == 0;
         let shape = match content.cursor.shape {
             CursorShape::Block => 2,
             CursorShape::Underline => 4,
@@ -346,7 +353,11 @@ impl PaneTerm {
         buf.fill(clip, &blank);
 
         let display_offset = self.term.grid().display_offset() as i32;
-        let selection = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
+        let selection = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
         let grid = self.term.grid();
         let colors = self.term.colors();
         let max_rows = clip.h.min(self.rows);
@@ -372,13 +383,20 @@ impl PaneTerm {
 
     fn viewport_point(&self, col: u16, row: u16) -> Point {
         let offset = self.term.grid().display_offset() as i32;
-        Point::new(Line(row as i32 - offset), Column((col as usize).min(self.cols as usize - 1)))
+        Point::new(
+            Line(row as i32 - offset),
+            Column((col as usize).min(self.cols as usize - 1)),
+        )
     }
 
     /// Begin a text selection at viewport (col, row). Double-click semantics
     /// (word select) use `SelectionType::Semantic`.
     pub fn selection_start(&mut self, col: u16, row: u16, word: bool) {
-        let ty = if word { SelectionType::Semantic } else { SelectionType::Simple };
+        let ty = if word {
+            SelectionType::Semantic
+        } else {
+            SelectionType::Simple
+        };
         let point = self.viewport_point(col, row);
         self.term.selection = Some(Selection::new(ty, point, Side::Left));
     }
@@ -393,7 +411,9 @@ impl PaneTerm {
 
     /// Selected text, if any (empty selections yield None).
     pub fn selection_text(&self) -> Option<String> {
-        self.term.selection_to_string().filter(|s| !s.trim().is_empty())
+        self.term
+            .selection_to_string()
+            .filter(|s| !s.trim().is_empty())
     }
 
     pub fn selection_clear(&mut self) -> bool {
@@ -443,7 +463,10 @@ impl PaneTerm {
         let mut text = String::new();
         for col in 0..self.cols {
             let cell = &row[Column(col as usize)];
-            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 continue;
             }
             text.push(cell.c);
@@ -462,7 +485,10 @@ impl PaneTerm {
             let mut line_text = String::new();
             for col in 0..self.cols {
                 let cell = &row[Column(col as usize)];
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
                     continue;
                 }
                 line_text.push(cell.c);
@@ -473,7 +499,11 @@ impl PaneTerm {
             lines.push(line_text.trim_end().to_string());
         }
         // Trim trailing blank rows, then keep the last `n` lines.
-        let content_end = lines.iter().rposition(|l| !l.is_empty()).map(|i| i + 1).unwrap_or(0);
+        let content_end = lines
+            .iter()
+            .rposition(|l| !l.is_empty())
+            .map(|i| i + 1)
+            .unwrap_or(0);
         lines.truncate(content_end);
         let skip = lines.len().saturating_sub(n as usize);
         let mut out = lines[skip..].join("\n");
@@ -546,10 +576,19 @@ fn convert_cell(cell: &alacritty_terminal::term::cell::Cell, colors: &Colors) ->
     attrs.set(AttrFlags::DIM, f.contains(Flags::DIM));
     attrs.set(AttrFlags::ITALIC, f.contains(Flags::ITALIC));
     attrs.set(AttrFlags::UNDERLINE, f.contains(Flags::UNDERLINE));
-    attrs.set(AttrFlags::DOUBLE_UNDERLINE, f.contains(Flags::DOUBLE_UNDERLINE));
+    attrs.set(
+        AttrFlags::DOUBLE_UNDERLINE,
+        f.contains(Flags::DOUBLE_UNDERLINE),
+    );
     attrs.set(AttrFlags::UNDERCURL, f.contains(Flags::UNDERCURL));
-    attrs.set(AttrFlags::DOTTED_UNDERLINE, f.contains(Flags::DOTTED_UNDERLINE));
-    attrs.set(AttrFlags::DASHED_UNDERLINE, f.contains(Flags::DASHED_UNDERLINE));
+    attrs.set(
+        AttrFlags::DOTTED_UNDERLINE,
+        f.contains(Flags::DOTTED_UNDERLINE),
+    );
+    attrs.set(
+        AttrFlags::DASHED_UNDERLINE,
+        f.contains(Flags::DASHED_UNDERLINE),
+    );
     attrs.set(AttrFlags::STRIKEOUT, f.contains(Flags::STRIKEOUT));
     attrs.set(AttrFlags::INVERSE, f.contains(Flags::INVERSE));
     attrs.set(AttrFlags::HIDDEN, f.contains(Flags::HIDDEN));
@@ -595,7 +634,8 @@ mod tests {
         // DA1 query must produce a PtyResponse.
         let fx = t.advance(b"\x1b[c");
         assert!(
-            fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
+            fx.iter()
+                .any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "expected DA1 response, got {fx:?}"
         );
     }
@@ -607,13 +647,15 @@ mod tests {
         let mut t = PaneTerm::new(10, 3, 0);
         let fx = t.advance(b"\x1b]10;?\x07\x1b]11;?\x07");
         assert!(
-            !fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
+            !fx.iter()
+                .any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "OSC 10/11 must not be answered by dmux, got {fx:?}"
         );
         // OSC 4 (indexed palette) tmux stays silent on — we must answer.
         let fx = t.advance(b"\x1b]4;1;?\x07");
         assert!(
-            fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
+            fx.iter()
+                .any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "OSC 4 query must be answered, got {fx:?}"
         );
     }
@@ -671,8 +713,14 @@ mod tests {
         let fx = t.advance(b"before \x1bkecho\x1b\\AFTER");
         let tail = t.read_tail_text(3);
         assert!(tail.contains("before AFTER"), "tail: {tail:?}");
-        assert!(!tail.contains("echo"), "title payload leaked into grid: {tail:?}");
-        assert!(fx.contains(&TermSideEffect::Title("echo".into())), "effects: {fx:?}");
+        assert!(
+            !tail.contains("echo"),
+            "title payload leaked into grid: {tail:?}"
+        );
+        assert!(
+            fx.contains(&TermSideEffect::Title("echo".into())),
+            "effects: {fx:?}"
+        );
     }
 
     #[test]
@@ -693,7 +741,10 @@ mod tests {
         let fx = t.advance(b"\x1bktitle\x07ok \x1b[1mBOLD");
         assert!(fx.contains(&TermSideEffect::Title("title".into())));
         let tail = t.read_tail_text(3);
-        assert!(tail.contains("ok BOLD"), "CSI after title must still work: {tail:?}");
+        assert!(
+            tail.contains("ok BOLD"),
+            "CSI after title must still work: {tail:?}"
+        );
     }
 
     #[test]
@@ -729,7 +780,7 @@ mod selection_safety_tests {
         // Scrolled view: points still clamp inside history bounds.
         t.scroll_view(3);
         t.selection_start(0, 0, false);
-        t.selection_update(9, 4, );
+        t.selection_update(9, 4);
         let _ = t.selection_text();
         // Word-select (semantic) at an out-of-grid point.
         t.selection_clear();

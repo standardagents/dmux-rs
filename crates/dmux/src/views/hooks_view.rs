@@ -75,7 +75,15 @@ impl View for HooksView {
         let bg = ctx.theme.bg_raised;
 
         let dir_line = self.dir.to_string_lossy();
-        buf.draw_text(inner.x + 1, inner.y, &dir_line, ctx.theme.text_faint, bg, AttrFlags::ITALIC, inner);
+        buf.draw_text(
+            inner.x + 1,
+            inner.y,
+            &dir_line,
+            ctx.theme.text_faint,
+            bg,
+            AttrFlags::ITALIC,
+            inner,
+        );
 
         let mut y = inner.y + 1;
         for (name, state) in &self.rows {
@@ -88,9 +96,29 @@ impl View for HooksView {
                 HookState::Missing => ("–", ctx.theme.text_faint, ""),
             };
             buf.draw_text(inner.x + 1, y, mark, color, bg, AttrFlags::BOLD, inner);
-            let name_color = if matches!(state, HookState::Missing) { ctx.theme.text_faint } else { ctx.theme.text };
-            buf.draw_text(inner.x + 3, y, name, name_color, bg, AttrFlags::empty(), inner);
-            buf.draw_text(inner.x + 27, y, note, ctx.theme.warn, bg, AttrFlags::empty(), inner);
+            let name_color = if matches!(state, HookState::Missing) {
+                ctx.theme.text_faint
+            } else {
+                ctx.theme.text
+            };
+            buf.draw_text(
+                inner.x + 3,
+                y,
+                name,
+                name_color,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
+            buf.draw_text(
+                inner.x + 27,
+                y,
+                note,
+                ctx.theme.warn,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
             y += 1;
         }
         draw_hint_bar(

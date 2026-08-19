@@ -29,7 +29,10 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
     let sidebar = Rect::new(0, 0, SIDEBAR_WIDTH.min(cols), rows);
     let content_x = sidebar.w + GUTTER;
     let content_w = cols.saturating_sub(content_x);
-    let mut layout = Layout { sidebar, panes: Vec::new() };
+    let mut layout = Layout {
+        sidebar,
+        panes: Vec::new(),
+    };
     if n == 0 || content_w < 20 || rows < TITLE_ROWS + 3 {
         return layout;
     }
@@ -75,10 +78,19 @@ pub fn compute_with_band(cols: u16, rows: u16, n: usize, min_w: u16, max_w: u16)
         let x = x0 + gc * cell_w;
         let y = gr * pane_h;
         // Last row absorbs the vertical remainder.
-        let h = if gr == grid_rows - 1 { rows - gr * pane_h } else { pane_h };
+        let h = if gr == grid_rows - 1 {
+            rows - gr * pane_h
+        } else {
+            pane_h
+        };
         // Reserve the title bar; body starts below it. One column of spacing
         // between horizontally adjacent panes.
-        let body = Rect::new(x, y + TITLE_ROWS, cell_w.saturating_sub(GUTTER), h.saturating_sub(TITLE_ROWS));
+        let body = Rect::new(
+            x,
+            y + TITLE_ROWS,
+            cell_w.saturating_sub(GUTTER),
+            h.saturating_sub(TITLE_ROWS),
+        );
         layout.panes.push(body);
     }
     layout

@@ -20,11 +20,18 @@ pub fn version_line() -> String {
 }
 
 pub fn enabled() -> bool {
-    !BUILD_TAG.is_empty() && std::env::var("DMUX_NO_UPDATE").map(|v| v != "1").unwrap_or(true)
+    !BUILD_TAG.is_empty()
+        && std::env::var("DMUX_NO_UPDATE")
+            .map(|v| v != "1")
+            .unwrap_or(true)
 }
 
 fn asset_name() -> String {
-    format!("dmux-rs-{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    format!(
+        "dmux-rs-{}-{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
 }
 
 fn gh(args: &[&str]) -> Result<String, String> {

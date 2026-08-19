@@ -13,7 +13,11 @@ pub struct LogsView {
 
 impl LogsView {
     pub fn new(path: std::path::PathBuf) -> Self {
-        let mut view = Self { lines: Vec::new(), scroll: 0, path };
+        let mut view = Self {
+            lines: Vec::new(),
+            scroll: 0,
+            path,
+        };
         view.reload();
         view
     }
@@ -34,7 +38,11 @@ impl View for LogsView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = centered(area, area.w.saturating_sub(8).min(140), area.h.saturating_sub(4));
+        let rect = centered(
+            area,
+            area.w.saturating_sub(8).min(140),
+            area.h.saturating_sub(4),
+        );
         let inner = draw_panel(buf, rect, "Logs", ctx.theme, PanelStyle::Modal);
         let visible = inner.h.saturating_sub(1) as usize;
         let max_scroll = self.lines.len().saturating_sub(visible);
@@ -42,7 +50,13 @@ impl View for LogsView {
             self.scroll = max_scroll;
         }
         let bg = ctx.theme.bg_raised;
-        for (row, line) in self.lines.iter().skip(self.scroll).take(visible).enumerate() {
+        for (row, line) in self
+            .lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible)
+            .enumerate()
+        {
             let fg = if line.contains("ERROR") {
                 ctx.theme.danger
             } else if line.contains("WARN") {
@@ -54,7 +68,15 @@ impl View for LogsView {
             };
             let max = inner.w as usize;
             let clipped: String = line.chars().take(max).collect();
-            buf.draw_text(inner.x, inner.y + row as u16, &clipped, fg, bg, AttrFlags::empty(), inner);
+            buf.draw_text(
+                inner.x,
+                inner.y + row as u16,
+                &clipped,
+                fg,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
         }
         draw_hint_bar(
             buf,

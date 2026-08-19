@@ -15,12 +15,26 @@ fn tmux_37b_attach_transcript() {
     }
 
     // 1. The stream starts with the hello block: %begin immediately followed by %end.
-    assert!(matches!(events[0], CcEvent::ReplyBegin { .. }), "first event: {:?}", events[0]);
-    assert!(matches!(events[1], CcEvent::ReplyEnd { ok: true, .. }), "second event: {:?}", events[1]);
+    assert!(
+        matches!(events[0], CcEvent::ReplyBegin { .. }),
+        "first event: {:?}",
+        events[0]
+    );
+    assert!(
+        matches!(events[1], CcEvent::ReplyEnd { ok: true, .. }),
+        "second event: {:?}",
+        events[1]
+    );
 
     // 2. Reply blocks are balanced and FIFO: every %begin has a matching %end/%error.
-    let begins = events.iter().filter(|e| matches!(e, CcEvent::ReplyBegin { .. })).count();
-    let ends = events.iter().filter(|e| matches!(e, CcEvent::ReplyEnd { .. })).count();
+    let begins = events
+        .iter()
+        .filter(|e| matches!(e, CcEvent::ReplyBegin { .. }))
+        .count();
+    let ends = events
+        .iter()
+        .filter(|e| matches!(e, CcEvent::ReplyEnd { .. }))
+        .count();
     assert_eq!(begins, ends);
     assert_eq!(begins, 6, "attach hello + 5 commands");
 
@@ -36,7 +50,10 @@ fn tmux_37b_attach_transcript() {
     );
 
     // 4. send-keys "hi\n" round-tripped as octal-escaped %output for pane %0.
-    let outputs: Vec<&CcEvent> = events.iter().filter(|e| matches!(e, CcEvent::Output { .. })).collect();
+    let outputs: Vec<&CcEvent> = events
+        .iter()
+        .filter(|e| matches!(e, CcEvent::Output { .. }))
+        .collect();
     assert!(!outputs.is_empty());
     let all_output: Vec<u8> = events
         .iter()
@@ -55,11 +72,18 @@ fn tmux_37b_attach_transcript() {
     // 5. Layout-change carries visible layout and flags on 3.7.
     assert!(events.iter().any(|e| matches!(
         e,
-        CcEvent::LayoutChange { visible_layout: Some(_), raw_flags: Some(_), .. }
+        CcEvent::LayoutChange {
+            visible_layout: Some(_),
+            raw_flags: Some(_),
+            ..
+        }
     )));
 
     // 6. The stream ends with %exit and nothing is misparsed as Unknown.
     assert!(matches!(events.last(), Some(CcEvent::Exit(_))));
-    let unknown: Vec<&CcEvent> = events.iter().filter(|e| matches!(e, CcEvent::Unknown(_))).collect();
+    let unknown: Vec<&CcEvent> = events
+        .iter()
+        .filter(|e| matches!(e, CcEvent::Unknown(_)))
+        .collect();
     assert!(unknown.is_empty(), "unexpected Unknown events: {unknown:?}");
 }

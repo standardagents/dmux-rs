@@ -16,10 +16,34 @@ pub enum Activity {
 }
 
 const GENERIC_PROGRESS_WORDS: &[&str] = &[
-    "working", "thinking", "planning", "pondering", "crunching", "analyzing", "building",
-    "testing", "running", "searching", "reviewing", "understanding", "loading", "processing",
-    "writing", "reading", "editing", "patching", "generating", "reasoning", "compiling",
-    "indexing", "summarizing", "executing", "refactoring", "fixing", "checking", "scanning",
+    "working",
+    "thinking",
+    "planning",
+    "pondering",
+    "crunching",
+    "analyzing",
+    "building",
+    "testing",
+    "running",
+    "searching",
+    "reviewing",
+    "understanding",
+    "loading",
+    "processing",
+    "writing",
+    "reading",
+    "editing",
+    "patching",
+    "generating",
+    "reasoning",
+    "compiling",
+    "indexing",
+    "summarizing",
+    "executing",
+    "refactoring",
+    "fixing",
+    "checking",
+    "scanning",
 ];
 
 const SPINNER_PREFIX: &str = "[⠁-⣿◐◓◑◒◴◷◶◵●○◦•·⋯⋮✦✧✶✻✽⏳⌛]";
@@ -34,22 +58,36 @@ fn re(cell: &'static OnceLock<Regex>, build: impl FnOnce() -> String) -> &'stati
 
 fn esc_to_interrupt() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || r"(?i)\besc\s+to\s+(interrupt|cancel|stop|abort)\b".into())
+    re(&C, || {
+        r"(?i)\besc\s+to\s+(interrupt|cancel|stop|abort)\b".into()
+    })
 }
 
 fn spinner_line() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || format!(r"(?i)^{SPINNER_PREFIX}\s*(?:{})(?:\b|\.\.\.|…|\s)", progress_alt()))
+    re(&C, || {
+        format!(
+            r"(?i)^{SPINNER_PREFIX}\s*(?:{})(?:\b|\.\.\.|…|\s)",
+            progress_alt()
+        )
+    })
 }
 
 fn progress_suffix() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || format!(r"(?i)\b(?:{})\b.*(?:\.\.\.|…|\d{{1,3}}%|/\d+)", progress_alt()))
+    re(&C, || {
+        format!(
+            r"(?i)\b(?:{})\b.*(?:\.\.\.|…|\d{{1,3}}%|/\d+)",
+            progress_alt()
+        )
+    })
 }
 
 fn progress_word() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || format!(r"(?i)(?:{})(?:\b|\.\.\.|…|\s)", progress_alt()))
+    re(&C, || {
+        format!(r"(?i)(?:{})(?:\b|\.\.\.|…|\s)", progress_alt())
+    })
 }
 
 fn claude_working() -> &'static Regex {
@@ -59,7 +97,9 @@ fn claude_working() -> &'static Regex {
 
 fn claude_gerund_tail() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || r"(?i)(?:germinating|thinking|planning|writing|reading|analyzing|building|testing|running|searching|reviewing|understanding)[.…]*$".into())
+    re(&C, || {
+        r"(?i)(?:germinating|thinking|planning|writing|reading|analyzing|building|testing|running|searching|reviewing|understanding)[.…]*$".into()
+    })
 }
 
 fn prompt_line() -> &'static Regex {
@@ -126,12 +166,17 @@ pub fn has_working_indicators(content: &str, agent: Option<&str>) -> bool {
     if esc_to_interrupt().is_match(&recent) {
         return true;
     }
-    if lines.iter().any(|l| spinner_line().is_match(l) || progress_suffix().is_match(l)) {
+    if lines
+        .iter()
+        .any(|l| spinner_line().is_match(l) || progress_suffix().is_match(l))
+    {
         return true;
     }
     match agent {
         Some("claude") => lines.iter().any(|l| {
-            claude_working().is_match(l) || claude_gerund_tail().is_match(l) || progress_word().is_match(l)
+            claude_working().is_match(l)
+                || claude_gerund_tail().is_match(l)
+                || progress_word().is_match(l)
         }),
         _ => lines.iter().any(|l| progress_word().is_match(l)),
     }
@@ -144,17 +189,30 @@ pub fn is_likely_user_typing(previous: &str, current: &str) -> bool {
     }
 
     {
-        let (prev_block, cur_block) = (extract_prompt_block(previous), extract_prompt_block(current));
+        let (prev_block, cur_block) = (
+            extract_prompt_block(previous),
+            extract_prompt_block(current),
+        );
         if prev_block.is_some() || cur_block.is_some() {
             let prev_prefix = normalize_for_comparison(
-                prev_block.as_ref().map(|b| b.0.clone()).unwrap_or_else(|| previous.lines().map(String::from).collect()),
+                prev_block
+                    .as_ref()
+                    .map(|b| b.0.clone())
+                    .unwrap_or_else(|| previous.lines().map(String::from).collect()),
             );
             let cur_prefix = normalize_for_comparison(
-                cur_block.as_ref().map(|b| b.0.clone()).unwrap_or_else(|| current.lines().map(String::from).collect()),
+                cur_block
+                    .as_ref()
+                    .map(|b| b.0.clone())
+                    .unwrap_or_else(|| current.lines().map(String::from).collect()),
             );
             if prev_prefix == cur_prefix {
-                let prev_prompt = normalize_prompt_block(prev_block.as_ref().map(|b| b.1.as_slice()).unwrap_or(&[]));
-                let cur_prompt = normalize_prompt_block(cur_block.as_ref().map(|b| b.1.as_slice()).unwrap_or(&[]));
+                let prev_prompt = normalize_prompt_block(
+                    prev_block.as_ref().map(|b| b.1.as_slice()).unwrap_or(&[]),
+                );
+                let cur_prompt = normalize_prompt_block(
+                    cur_block.as_ref().map(|b| b.1.as_slice()).unwrap_or(&[]),
+                );
                 if prev_prompt != cur_prompt {
                     return true;
                 }
@@ -169,7 +227,9 @@ pub fn is_likely_user_typing(previous: &str, current: &str) -> bool {
     }
     let max_len = prev_lines.len().max(cur_lines.len());
     let changed: Vec<usize> = (0..max_len)
-        .filter(|&i| prev_lines.get(i).copied().unwrap_or("") != cur_lines.get(i).copied().unwrap_or(""))
+        .filter(|&i| {
+            prev_lines.get(i).copied().unwrap_or("") != cur_lines.get(i).copied().unwrap_or("")
+        })
         .collect();
     if changed.is_empty() || changed.len() > 6 {
         return false;
@@ -181,12 +241,17 @@ pub fn is_likely_user_typing(previous: &str, current: &str) -> bool {
     changed.iter().any(|&i| {
         let prev = prev_lines.get(i).copied().unwrap_or("");
         let cur = cur_lines.get(i).copied().unwrap_or("");
-        let prefix = prev.bytes().zip(cur.bytes()).take_while(|(a, b)| a == b).count();
+        let prefix = prev
+            .bytes()
+            .zip(cur.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
         let line_max = prev.len().max(cur.len());
         let mostly_shared = line_max > 0 && prefix as f32 / line_max as f32 >= 0.7;
         let probe = if cur.is_empty() { prev } else { cur };
         let prompt_like = prompt_line().is_match(probe) || prompt_continuation().is_match(probe);
-        ((cur.starts_with(prev) || prev.starts_with(cur)) && prompt_like) || (mostly_shared && prompt_like)
+        ((cur.starts_with(prev) || prev.starts_with(cur)) && prompt_like)
+            || (mostly_shared && prompt_like)
     })
 }
 
@@ -323,15 +388,24 @@ mod tests {
         assert!(is_likely_user_typing("❯ ", "❯ gi"));
         let _ = (before, after);
         // …while new output above the prompt is not.
-        assert!(!is_likely_user_typing("a\nb\n❯ ", "a\nb\nc\nd\ne\nf\ng\nh\n❯ "));
+        assert!(!is_likely_user_typing(
+            "a\nb\n❯ ",
+            "a\nb\nc\nd\ne\nf\ng\nh\n❯ "
+        ));
     }
 
     #[test]
     fn engine_flow() {
         let mut e = PaneStatusEngine::new();
-        assert_eq!(e.on_settle("✻ Thinking…", Some("claude")), Activity::Working);
+        assert_eq!(
+            e.on_settle("✻ Thinking…", Some("claude")),
+            Activity::Working
+        );
         e.on_output();
-        assert_eq!(e.on_settle("Do you want to proceed? (y/n)", Some("claude")), Activity::Waiting);
+        assert_eq!(
+            e.on_settle("Do you want to proceed? (y/n)", Some("claude")),
+            Activity::Waiting
+        );
         e.on_output();
         assert_eq!(e.on_settle("All done.\n❯ ", Some("claude")), Activity::Idle);
         // Same fingerprint returns cached verdict without reclassifying.

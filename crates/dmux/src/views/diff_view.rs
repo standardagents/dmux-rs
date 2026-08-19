@@ -15,8 +15,15 @@ pub struct DiffView {
 }
 
 fn git_out(dir: &PathBuf, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 impl DiffView {
@@ -24,7 +31,8 @@ impl DiffView {
         // Uncommitted work is what you usually want to peek at; a clean tree
         // falls back to the branch's committed delta against HEAD's upstream
         // merge base (best effort — plain `HEAD` diff when there is none).
-        let mut text = git_out(&worktree, &["diff", "HEAD", "--stat", "--patch"]).unwrap_or_default();
+        let mut text =
+            git_out(&worktree, &["diff", "HEAD", "--stat", "--patch"]).unwrap_or_default();
         // `diff HEAD` misses brand-new files; surface them explicitly.
         let untracked = git_out(&worktree, &["ls-files", "--others", "--exclude-standard"])
             .unwrap_or_default()
@@ -43,7 +51,8 @@ impl DiffView {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
             if let Some(base) = base {
-                text = git_out(&worktree, &["diff", &base, "--stat", "--patch"]).unwrap_or_default();
+                text =
+                    git_out(&worktree, &["diff", &base, "--stat", "--patch"]).unwrap_or_default();
             }
         }
         let mut lines: Vec<String> = vec![format!("· {heading}"), String::new()];
@@ -52,7 +61,11 @@ impl DiffView {
         } else {
             lines.extend(text.lines().take(5000).map(String::from));
         }
-        Self { title, lines, scroll: 0 }
+        Self {
+            title,
+            lines,
+            scroll: 0,
+        }
     }
 }
 
@@ -64,7 +77,11 @@ impl View for DiffView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = centered(area, area.w.saturating_sub(8).min(140), area.h.saturating_sub(4));
+        let rect = centered(
+            area,
+            area.w.saturating_sub(8).min(140),
+            area.h.saturating_sub(4),
+        );
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
         let visible = inner.h.saturating_sub(1) as usize;
         let max_scroll = self.lines.len().saturating_sub(visible);
@@ -72,7 +89,13 @@ impl View for DiffView {
             self.scroll = max_scroll;
         }
         let bg = ctx.theme.bg_raised;
-        for (row, line) in self.lines.iter().skip(self.scroll).take(visible).enumerate() {
+        for (row, line) in self
+            .lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible)
+            .enumerate()
+        {
             let fg = if line.starts_with('+') && !line.starts_with("+++") {
                 ctx.theme.ok
             } else if line.starts_with('-') && !line.starts_with("---") {
@@ -85,7 +108,15 @@ impl View for DiffView {
                 ctx.theme.text_dim
             };
             let clipped: String = line.chars().take(inner.w as usize).collect();
-            buf.draw_text(inner.x, inner.y + row as u16, &clipped, fg, bg, AttrFlags::empty(), inner);
+            buf.draw_text(
+                inner.x,
+                inner.y + row as u16,
+                &clipped,
+                fg,
+                bg,
+                AttrFlags::empty(),
+                inner,
+            );
         }
         draw_hint_bar(
             buf,

@@ -39,7 +39,13 @@ pub fn draw_scrim_except(buf: &mut CellBuffer, area: Rect, except: Option<Rect>)
 
 /// Draw a rounded panel with a title in the top border and return the inner
 /// content rect. The consistent chrome for every dmux overlay.
-pub fn draw_panel(buf: &mut CellBuffer, rect: Rect, title: &str, theme: &Theme, style: PanelStyle) -> Rect {
+pub fn draw_panel(
+    buf: &mut CellBuffer,
+    rect: Rect,
+    title: &str,
+    theme: &Theme,
+    style: PanelStyle,
+) -> Rect {
     let rect = rect.intersect(&buf.area());
     if rect.w < 4 || rect.h < 3 {
         return Rect::default();
@@ -50,30 +56,87 @@ pub fn draw_panel(buf: &mut CellBuffer, rect: Rect, title: &str, theme: &Theme, 
     };
     let bg = theme.bg_raised;
 
-    buf.fill(rect, &Cell { bg, ..Cell::default() });
+    buf.fill(
+        rect,
+        &Cell {
+            bg,
+            ..Cell::default()
+        },
+    );
 
     let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right() - 1, rect.bottom() - 1);
-    let horiz = Cell { ch: '─', fg: border_fg, bg, ..Cell::default() };
+    let horiz = Cell {
+        ch: '─',
+        fg: border_fg,
+        bg,
+        ..Cell::default()
+    };
     for col in x0 + 1..x1 {
         buf.set(col, y0, horiz.clone());
         buf.set(col, y1, horiz.clone());
     }
-    let vert = Cell { ch: '│', fg: border_fg, bg, ..Cell::default() };
+    let vert = Cell {
+        ch: '│',
+        fg: border_fg,
+        bg,
+        ..Cell::default()
+    };
     for row in y0 + 1..y1 {
         buf.set(x0, row, vert.clone());
         buf.set(x1, row, vert.clone());
     }
-    buf.set(x0, y0, Cell { ch: '╭', fg: border_fg, bg, ..Cell::default() });
-    buf.set(x1, y0, Cell { ch: '╮', fg: border_fg, bg, ..Cell::default() });
-    buf.set(x0, y1, Cell { ch: '╰', fg: border_fg, bg, ..Cell::default() });
-    buf.set(x1, y1, Cell { ch: '╯', fg: border_fg, bg, ..Cell::default() });
+    buf.set(
+        x0,
+        y0,
+        Cell {
+            ch: '╭',
+            fg: border_fg,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x1,
+        y0,
+        Cell {
+            ch: '╮',
+            fg: border_fg,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x0,
+        y1,
+        Cell {
+            ch: '╰',
+            fg: border_fg,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x1,
+        y1,
+        Cell {
+            ch: '╯',
+            fg: border_fg,
+            bg,
+            ..Cell::default()
+        },
+    );
 
     if !title.is_empty() {
         let label = format!(" {title} ");
         buf.draw_text(x0 + 2, y0, &label, theme.accent, bg, AttrFlags::BOLD, rect);
     }
 
-    Rect::new(rect.x + 2, rect.y + 1, rect.w.saturating_sub(4), rect.h.saturating_sub(2))
+    Rect::new(
+        rect.x + 2,
+        rect.y + 1,
+        rect.w.saturating_sub(4),
+        rect.h.saturating_sub(2),
+    )
 }
 
 /// Center a `w`×`h` panel within `area` (clamped).
@@ -92,7 +155,14 @@ mod scrim_tests {
         // #16: the flyout's originating sidebar row stays undimmed.
         let mut buf = CellBuffer::new(20, 5);
         let styled = crate::theme::Theme::named("violet");
-        buf.fill(buf.area(), &dmux_compositor::Cell { fg: styled.text, bg: styled.bg_selected, ..Default::default() });
+        buf.fill(
+            buf.area(),
+            &dmux_compositor::Cell {
+                fg: styled.text,
+                bg: styled.bg_selected,
+                ..Default::default()
+            },
+        );
         let keep = Rect::new(0, 2, 20, 1);
         let area = buf.area();
         draw_scrim_except(&mut buf, area, Some(keep));
@@ -105,7 +175,13 @@ mod scrim_tests {
         // No exception: everything dims (existing behavior unchanged).
         let mut buf2 = CellBuffer::new(4, 2);
         let area2 = buf2.area();
-        buf2.fill(area2, &dmux_compositor::Cell { bg: styled.bg_selected, ..Default::default() });
+        buf2.fill(
+            area2,
+            &dmux_compositor::Cell {
+                bg: styled.bg_selected,
+                ..Default::default()
+            },
+        );
         draw_scrim(&mut buf2, area2);
         assert_eq!(buf2.get(0, 0).bg, Color::Indexed(232));
     }

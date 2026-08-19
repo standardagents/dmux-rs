@@ -73,7 +73,10 @@ impl Parser {
         if let Some(rest) = line.strip_prefix(b"%output ") {
             let (pane_tok, data) = split_first_space(rest);
             let pane = parse_pane(std::str::from_utf8(pane_tok).ok()?)?;
-            return Some(CcEvent::Output { pane, data: unescape_output(data) });
+            return Some(CcEvent::Output {
+                pane,
+                data: unescape_output(data),
+            });
         }
         if let Some(rest) = line.strip_prefix(b"%extended-output ") {
             // %extended-output %<pane> <age> [flags...] : <data>
@@ -88,7 +91,11 @@ impl Parser {
                 .and_then(|m| m.split(' ').next())
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0);
-            return Some(CcEvent::ExtendedOutput { pane, age_ms, data: unescape_output(data) });
+            return Some(CcEvent::ExtendedOutput {
+                pane,
+                age_ms,
+                data: unescape_output(data),
+            });
         }
 
         let text = String::from_utf8_lossy(line);
@@ -112,16 +119,24 @@ impl Parser {
             "%continue" => Some(CcEvent::Continue(parse_pane(rest.trim())?)),
             "%window-add" => Some(CcEvent::WindowAdd(parse_window(rest.trim())?)),
             "%window-close" => Some(CcEvent::WindowClose(parse_window(rest.trim())?)),
-            "%unlinked-window-close" => Some(CcEvent::UnlinkedWindowClose(parse_window(rest.trim())?)),
+            "%unlinked-window-close" => {
+                Some(CcEvent::UnlinkedWindowClose(parse_window(rest.trim())?))
+            }
             "%window-renamed" => {
                 let mut it = rest.splitn(2, ' ');
                 let window = parse_window(it.next()?)?;
-                Some(CcEvent::WindowRenamed { window, name: it.next().unwrap_or("").to_string() })
+                Some(CcEvent::WindowRenamed {
+                    window,
+                    name: it.next().unwrap_or("").to_string(),
+                })
             }
             "%unlinked-window-renamed" => {
                 let mut it = rest.splitn(2, ' ');
                 let window = parse_window(it.next()?)?;
-                Some(CcEvent::UnlinkedWindowRenamed { window, name: it.next().unwrap_or("").to_string() })
+                Some(CcEvent::UnlinkedWindowRenamed {
+                    window,
+                    name: it.next().unwrap_or("").to_string(),
+                })
             }
             "%window-pane-changed" => {
                 let mut it = rest.split(' ');
@@ -136,14 +151,24 @@ impl Parser {
                 let layout = it.next().unwrap_or("").to_string();
                 let visible_layout = it.next().map(|s| s.to_string());
                 let raw_flags = it.next().map(|s| s.to_string());
-                Some(CcEvent::LayoutChange { window, layout, visible_layout, raw_flags })
+                Some(CcEvent::LayoutChange {
+                    window,
+                    layout,
+                    visible_layout,
+                    raw_flags,
+                })
             }
             "%session-changed" => {
                 let mut it = rest.splitn(2, ' ');
                 let session = parse_session(it.next()?)?;
-                Some(CcEvent::SessionChanged { session, name: it.next().unwrap_or("").to_string() })
+                Some(CcEvent::SessionChanged {
+                    session,
+                    name: it.next().unwrap_or("").to_string(),
+                })
             }
-            "%session-renamed" => Some(CcEvent::SessionRenamed { name: rest.to_string() }),
+            "%session-renamed" => Some(CcEvent::SessionRenamed {
+                name: rest.to_string(),
+            }),
             "%sessions-changed" => Some(CcEvent::SessionsChanged),
             "%session-window-changed" => {
                 let mut it = rest.split(' ');
@@ -155,18 +180,34 @@ impl Parser {
                 let mut it = rest.splitn(3, ' ');
                 let client = it.next().unwrap_or("").to_string();
                 let session = parse_session(it.next()?)?;
-                Some(CcEvent::ClientSessionChanged { client, session, name: it.next().unwrap_or("").to_string() })
+                Some(CcEvent::ClientSessionChanged {
+                    client,
+                    session,
+                    name: it.next().unwrap_or("").to_string(),
+                })
             }
-            "%client-detached" => Some(CcEvent::ClientDetached { client: rest.trim().to_string() }),
+            "%client-detached" => Some(CcEvent::ClientDetached {
+                client: rest.trim().to_string(),
+            }),
             "%pane-mode-changed" => Some(CcEvent::PaneModeChanged(parse_pane(rest.trim())?)),
-            "%paste-buffer-changed" => Some(CcEvent::PasteBufferChanged { name: rest.to_string() }),
-            "%paste-buffer-deleted" => Some(CcEvent::PasteBufferDeleted { name: rest.to_string() }),
-            "%subscription-changed" => Some(CcEvent::SubscriptionChanged { raw: rest.to_string() }),
+            "%paste-buffer-changed" => Some(CcEvent::PasteBufferChanged {
+                name: rest.to_string(),
+            }),
+            "%paste-buffer-deleted" => Some(CcEvent::PasteBufferDeleted {
+                name: rest.to_string(),
+            }),
+            "%subscription-changed" => Some(CcEvent::SubscriptionChanged {
+                raw: rest.to_string(),
+            }),
             "%config-error" => Some(CcEvent::ConfigError(rest.to_string())),
             "%message" => Some(CcEvent::Message(rest.to_string())),
             "%exit" => {
                 let reason = rest.trim();
-                Some(CcEvent::Exit(if reason.is_empty() { None } else { Some(reason.to_string()) }))
+                Some(CcEvent::Exit(if reason.is_empty() {
+                    None
+                } else {
+                    Some(reason.to_string())
+                }))
             }
             _ => Some(CcEvent::Unknown(text.into_owned())),
         }
@@ -193,7 +234,12 @@ fn parse_reply_end(line: &[u8]) -> Option<CcEvent> {
         _ => return None,
     };
     let (time, num, flags) = parse_triple(rest)?;
-    Some(CcEvent::ReplyEnd { time, num, flags, ok })
+    Some(CcEvent::ReplyEnd {
+        time,
+        num,
+        flags,
+        ok,
+    })
 }
 
 fn parse_triple(rest: &str) -> Option<(u64, u64, u64)> {
@@ -229,13 +275,27 @@ mod tests {
 
     #[test]
     fn hello_block_and_notification() {
-        let events = feed_all(b"%begin 1618000000 0 0\r\n%end 1618000000 0 0\r\n%session-changed $3 dmux-proj\r\n");
+        let events = feed_all(
+            b"%begin 1618000000 0 0\r\n%end 1618000000 0 0\r\n%session-changed $3 dmux-proj\r\n",
+        );
         assert_eq!(
             events,
             vec![
-                CcEvent::ReplyBegin { time: 1618000000, num: 0, flags: 0 },
-                CcEvent::ReplyEnd { time: 1618000000, num: 0, flags: 0, ok: true },
-                CcEvent::SessionChanged { session: SessionId(3), name: "dmux-proj".into() },
+                CcEvent::ReplyBegin {
+                    time: 1618000000,
+                    num: 0,
+                    flags: 0
+                },
+                CcEvent::ReplyEnd {
+                    time: 1618000000,
+                    num: 0,
+                    flags: 0,
+                    ok: true
+                },
+                CcEvent::SessionChanged {
+                    session: SessionId(3),
+                    name: "dmux-proj".into()
+                },
             ]
         );
     }
@@ -245,7 +305,10 @@ mod tests {
         let events = feed_all(b"%output %7 hi\\033[1m there\\015\\012\n");
         assert_eq!(
             events,
-            vec![CcEvent::Output { pane: PaneId(7), data: b"hi\x1b[1m there\r\n".to_vec() }]
+            vec![CcEvent::Output {
+                pane: PaneId(7),
+                data: b"hi\x1b[1m there\r\n".to_vec()
+            }]
         );
     }
 
@@ -260,8 +323,14 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                CcEvent::Output { pane: PaneId(9), data: b"x\xe2\x9c".to_vec() },
-                CcEvent::Output { pane: PaneId(9), data: b"\xbby".to_vec() },
+                CcEvent::Output {
+                    pane: PaneId(9),
+                    data: b"x\xe2\x9c".to_vec()
+                },
+                CcEvent::Output {
+                    pane: PaneId(9),
+                    data: b"\xbby".to_vec()
+                },
             ]
         );
     }
@@ -271,7 +340,11 @@ mod tests {
         let events = feed_all(b"%extended-output %5 250 : a\xe2\x9c\n");
         assert_eq!(
             events,
-            vec![CcEvent::ExtendedOutput { pane: PaneId(5), age_ms: 250, data: b"a\xe2\x9c".to_vec() }]
+            vec![CcEvent::ExtendedOutput {
+                pane: PaneId(5),
+                age_ms: 250,
+                data: b"a\xe2\x9c".to_vec()
+            }]
         );
     }
 
@@ -282,13 +355,25 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                CcEvent::ReplyBegin { time: 100, num: 5, flags: 1 },
+                CcEvent::ReplyBegin {
+                    time: 100,
+                    num: 5,
+                    flags: 1
+                },
                 CcEvent::ReplyLine(b"%output %1 fake".to_vec()),
                 CcEvent::ReplyLine(b"real line".to_vec()),
                 // %end with wrong num is payload, not a terminator
                 CcEvent::ReplyLine(b"%end 99 4 0".to_vec()),
-                CcEvent::ReplyEnd { time: 100, num: 5, flags: 1, ok: true },
-                CcEvent::Output { pane: PaneId(2), data: b"x".to_vec() },
+                CcEvent::ReplyEnd {
+                    time: 100,
+                    num: 5,
+                    flags: 1,
+                    ok: true
+                },
+                CcEvent::Output {
+                    pane: PaneId(2),
+                    data: b"x".to_vec()
+                },
             ]
         );
     }
@@ -296,7 +381,15 @@ mod tests {
     #[test]
     fn error_reply_terminates_block() {
         let events = feed_all(b"%begin 100 9 1\nbad command\n%error 100 9 1\n");
-        assert_eq!(events[2], CcEvent::ReplyEnd { time: 100, num: 9, flags: 1, ok: false });
+        assert_eq!(
+            events[2],
+            CcEvent::ReplyEnd {
+                time: 100,
+                num: 9,
+                flags: 1,
+                ok: false
+            }
+        );
     }
 
     #[test]
@@ -308,17 +401,28 @@ mod tests {
         p.feed(b"c\\04", &mut out);
         assert!(out.is_empty());
         p.feed(b"1\n", &mut out);
-        assert_eq!(out, vec![CcEvent::Output { pane: PaneId(3), data: b"abc!".to_vec() }]);
+        assert_eq!(
+            out,
+            vec![CcEvent::Output {
+                pane: PaneId(3),
+                data: b"abc!".to_vec()
+            }]
+        );
     }
 
     #[test]
     fn pause_continue_and_extended_output() {
-        let events = feed_all(b"%pause %5\n%extended-output %5 250 : data\\040here\n%continue %5\n");
+        let events =
+            feed_all(b"%pause %5\n%extended-output %5 250 : data\\040here\n%continue %5\n");
         assert_eq!(
             events,
             vec![
                 CcEvent::Pause(PaneId(5)),
-                CcEvent::ExtendedOutput { pane: PaneId(5), age_ms: 250, data: b"data here".to_vec() },
+                CcEvent::ExtendedOutput {
+                    pane: PaneId(5),
+                    age_ms: 250,
+                    data: b"data here".to_vec()
+                },
                 CcEvent::Continue(PaneId(5)),
             ]
         );
@@ -326,12 +430,16 @@ mod tests {
 
     #[test]
     fn window_lifecycle() {
-        let events = feed_all(b"%window-add @12\n%window-renamed @12 my window name\n%window-close @12\n");
+        let events =
+            feed_all(b"%window-add @12\n%window-renamed @12 my window name\n%window-close @12\n");
         assert_eq!(
             events,
             vec![
                 CcEvent::WindowAdd(WindowId(12)),
-                CcEvent::WindowRenamed { window: WindowId(12), name: "my window name".into() },
+                CcEvent::WindowRenamed {
+                    window: WindowId(12),
+                    name: "my window name".into()
+                },
                 CcEvent::WindowClose(WindowId(12)),
             ]
         );
@@ -342,7 +450,12 @@ mod tests {
         let events = feed_all(b"%layout-change @1 b25d,80x24,0,0,1\n%layout-change @2 abcd,10x5,0,0,2 efgh,10x5,0,0,2 *\n");
         assert_eq!(
             events[0],
-            CcEvent::LayoutChange { window: WindowId(1), layout: "b25d,80x24,0,0,1".into(), visible_layout: None, raw_flags: None }
+            CcEvent::LayoutChange {
+                window: WindowId(1),
+                layout: "b25d,80x24,0,0,1".into(),
+                visible_layout: None,
+                raw_flags: None
+            }
         );
         assert_eq!(
             events[1],
@@ -364,6 +477,9 @@ mod tests {
     #[test]
     fn exit_with_and_without_reason() {
         assert_eq!(feed_all(b"%exit\n"), vec![CcEvent::Exit(None)]);
-        assert_eq!(feed_all(b"%exit detached\n"), vec![CcEvent::Exit(Some("detached".into()))]);
+        assert_eq!(
+            feed_all(b"%exit detached\n"),
+            vec![CcEvent::Exit(Some("detached".into()))]
+        );
     }
 }

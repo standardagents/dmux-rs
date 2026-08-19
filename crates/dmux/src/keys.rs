@@ -216,7 +216,10 @@ impl Keymap {
     /// chord spec; an override REPLACES every default chord for that action
     /// ("" or "none" unbinds it). A "leader" entry rebinds the leader.
     pub fn from_overrides(overrides: &serde_json::Map<String, serde_json::Value>) -> Self {
-        let mut leader = Chord { key: ChordKey::Char('b'), mods: MOD_CTRL };
+        let mut leader = Chord {
+            key: ChordKey::Char('b'),
+            mods: MOD_CTRL,
+        };
         if let Some(spec) = overrides.get("leader").and_then(|v| v.as_str()) {
             if let Some(c) = parse_chord(spec) {
                 leader = c;
@@ -226,7 +229,10 @@ impl Keymap {
             .iter()
             .filter(|(name, _)| name.as_str() != "leader")
             .filter_map(|(name, v)| {
-                let action = ACTION_NAMES.iter().find(|(n, _)| n == name).map(|(_, a)| *a)?;
+                let action = ACTION_NAMES
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, a)| *a)?;
                 let spec = v.as_str()?;
                 if spec.is_empty() || spec.eq_ignore_ascii_case("none") {
                     Some((action, None))
@@ -302,11 +308,41 @@ mod tests {
 
     #[test]
     fn parse_specs() {
-        assert_eq!(parse_chord("ctrl+,"), Some(Chord { key: ChordKey::Char(','), mods: MOD_CTRL }));
-        assert_eq!(parse_chord("alt+s"), Some(Chord { key: ChordKey::Char('s'), mods: MOD_ALT }));
-        assert_eq!(parse_chord("super+N"), Some(Chord { key: ChordKey::Char('N'), mods: MOD_SUPER }));
-        assert_eq!(parse_chord("f10"), Some(Chord { key: ChordKey::F(10), mods: 0 }));
-        assert_eq!(parse_chord("ctrl+alt+pageup"), Some(Chord { key: ChordKey::PageUp, mods: MOD_CTRL | MOD_ALT }));
+        assert_eq!(
+            parse_chord("ctrl+,"),
+            Some(Chord {
+                key: ChordKey::Char(','),
+                mods: MOD_CTRL
+            })
+        );
+        assert_eq!(
+            parse_chord("alt+s"),
+            Some(Chord {
+                key: ChordKey::Char('s'),
+                mods: MOD_ALT
+            })
+        );
+        assert_eq!(
+            parse_chord("super+N"),
+            Some(Chord {
+                key: ChordKey::Char('N'),
+                mods: MOD_SUPER
+            })
+        );
+        assert_eq!(
+            parse_chord("f10"),
+            Some(Chord {
+                key: ChordKey::F(10),
+                mods: 0
+            })
+        );
+        assert_eq!(
+            parse_chord("ctrl+alt+pageup"),
+            Some(Chord {
+                key: ChordKey::PageUp,
+                mods: MOD_CTRL | MOD_ALT
+            })
+        );
         assert_eq!(parse_chord("bogus+key"), None);
     }
 
@@ -318,13 +354,19 @@ mod tests {
         o.insert("leader".into(), serde_json::Value::String("ctrl+a".into()));
         let km = Keymap::from_overrides(&o);
         // New binding works; old defaults for that action are gone.
-        assert_eq!(km.lookup(&parse_chord("f2").unwrap()), Some(Action::OpenSettings));
+        assert_eq!(
+            km.lookup(&parse_chord("f2").unwrap()),
+            Some(Action::OpenSettings)
+        );
         assert_eq!(km.lookup(&parse_chord("ctrl+,").unwrap()), None);
         assert_eq!(km.lookup(&parse_chord("alt+s").unwrap()), None);
         // Unbound action.
         assert_eq!(km.lookup(&parse_chord("ctrl+y").unwrap()), None);
         // Untouched defaults remain.
-        assert_eq!(km.lookup(&parse_chord("alt+n").unwrap()), Some(Action::OpenNewAgent));
+        assert_eq!(
+            km.lookup(&parse_chord("alt+n").unwrap()),
+            Some(Action::OpenNewAgent)
+        );
         // Leader rebound.
         assert!(km.is_leader(&parse_chord("ctrl+a").unwrap()));
         assert!(!km.is_leader(&parse_chord("ctrl+b").unwrap()));
@@ -333,8 +375,14 @@ mod tests {
     #[test]
     fn default_map() {
         let km = Keymap::from_overrides(&serde_json::Map::new());
-        assert_eq!(km.lookup(&parse_chord("ctrl+,").unwrap()), Some(Action::OpenSettings));
-        assert_eq!(km.lookup(&parse_chord("alt+s").unwrap()), Some(Action::OpenSettings));
+        assert_eq!(
+            km.lookup(&parse_chord("ctrl+,").unwrap()),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            km.lookup(&parse_chord("alt+s").unwrap()),
+            Some(Action::OpenSettings)
+        );
         assert!(km.is_leader(&parse_chord("ctrl+b").unwrap()));
         assert!(!km.describe().is_empty());
     }

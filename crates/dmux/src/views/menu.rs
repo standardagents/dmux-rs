@@ -15,7 +15,12 @@ pub struct MenuItem {
 
 impl MenuItem {
     pub fn new(label: impl Into<String>, hint: impl Into<String>, cmd: AppCmd) -> Self {
-        Self { label: label.into(), hint: hint.into(), cmd, danger: false }
+        Self {
+            label: label.into(),
+            hint: hint.into(),
+            cmd,
+            danger: false,
+        }
     }
 
     pub fn danger(mut self) -> Self {
@@ -37,7 +42,13 @@ pub struct MenuView {
 
 impl MenuView {
     pub fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
-        Self { title: title.into(), items, list: ListState::default(), anchor: None, source: None }
+        Self {
+            title: title.into(),
+            items,
+            list: ListState::default(),
+            anchor: None,
+            source: None,
+        }
     }
 
     /// Render as a flyout whose top-left sits at (x, y), clamped to the
@@ -110,8 +121,18 @@ impl View for MenuView {
             let y = inner.y + row as u16;
             let selected = i == self.list.selected;
             let line_rect = Rect::new(inner.x, y, inner.w, 1);
-            let bg = if selected { ctx.theme.bg_selected } else { ctx.theme.bg_raised };
-            buf.fill(line_rect, &dmux_compositor::Cell { bg, ..Default::default() });
+            let bg = if selected {
+                ctx.theme.bg_selected
+            } else {
+                ctx.theme.bg_raised
+            };
+            buf.fill(
+                line_rect,
+                &dmux_compositor::Cell {
+                    bg,
+                    ..Default::default()
+                },
+            );
             let fg = if item.danger {
                 ctx.theme.danger
             } else if selected {
@@ -120,19 +141,41 @@ impl View for MenuView {
                 ctx.theme.text_dim
             };
             let caret = if selected { "▸ " } else { "  " };
-            buf.draw_text(inner.x, y, caret, ctx.theme.accent, bg, AttrFlags::BOLD, line_rect);
+            buf.draw_text(
+                inner.x,
+                y,
+                caret,
+                ctx.theme.accent,
+                bg,
+                AttrFlags::BOLD,
+                line_rect,
+            );
             buf.draw_text(
                 inner.x + 2,
                 y,
                 &item.label,
                 fg,
                 bg,
-                if selected { AttrFlags::BOLD } else { AttrFlags::empty() },
+                if selected {
+                    AttrFlags::BOLD
+                } else {
+                    AttrFlags::empty()
+                },
                 line_rect,
             );
             if !item.hint.is_empty() {
-                let hx = inner.right().saturating_sub(item.hint.chars().count() as u16 + 1);
-                buf.draw_text(hx, y, &item.hint, ctx.theme.text_faint, bg, AttrFlags::empty(), line_rect);
+                let hx = inner
+                    .right()
+                    .saturating_sub(item.hint.chars().count() as u16 + 1);
+                buf.draw_text(
+                    hx,
+                    y,
+                    &item.hint,
+                    ctx.theme.text_faint,
+                    bg,
+                    AttrFlags::empty(),
+                    line_rect,
+                );
             }
             clicks.add(line_rect, ClickTarget::Overlay(i as u64));
         }
@@ -213,17 +256,23 @@ mod tests {
 
     #[test]
     fn escape_dismisses_the_flyout() {
-        let mut v = MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)])
-            .anchored(30, 5);
-        let esc = KeyEvent { key: KeyCode::Escape, modifiers: Modifiers::NONE };
+        let mut v =
+            MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)]).anchored(30, 5);
+        let esc = KeyEvent {
+            key: KeyCode::Escape,
+            modifiers: Modifiers::NONE,
+        };
         assert!(matches!(v.on_key(&esc), ViewResult::Close));
     }
 
     #[test]
     fn enter_runs_the_selected_item() {
-        let mut v = MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)])
-            .anchored(30, 5);
-        let enter = KeyEvent { key: KeyCode::Enter, modifiers: Modifiers::NONE };
+        let mut v =
+            MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)]).anchored(30, 5);
+        let enter = KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+        };
         assert!(matches!(v.on_key(&enter), ViewResult::CloseAnd(_)));
     }
 }

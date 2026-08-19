@@ -26,7 +26,12 @@ pub struct Theme {
 
 impl Theme {
     pub fn with_accent(accent: Color, accent_soft: Color, accent_rgb: (u8, u8, u8)) -> Self {
-        Self { accent, accent_soft, accent_rgb, ..Self::default() }
+        Self {
+            accent,
+            accent_soft,
+            accent_rgb,
+            ..Self::default()
+        }
     }
 
     /// Accent palette by dmux theme name (mirrors `src/theme/colors.ts`
@@ -78,8 +83,9 @@ impl Default for Theme {
 /// TS project color themes (`sidebarProjects[].colorTheme` values). Names,
 /// default, and auto-assignment order are the TS `themePalette` contract —
 /// both implementations must pick identical colors for the same config.
-pub const PROJECT_THEME_NAMES: &[&str] =
-    &["red", "blue", "yellow", "orange", "green", "purple", "cyan", "magenta"];
+pub const PROJECT_THEME_NAMES: &[&str] = &[
+    "red", "blue", "yellow", "orange", "green", "purple", "cyan", "magenta",
+];
 pub const DEFAULT_PROJECT_THEME: &str = "orange";
 
 /// (accent, soft) for a project color theme; unknown names get the default.
@@ -100,6 +106,10 @@ pub fn project_theme(name: &str) -> (Color, Color) {
 /// Auto-assignment order: the default theme first, then the rest (TS
 /// `AUTO_SIDEBAR_THEME_ORDER`).
 pub fn project_theme_auto_order() -> impl Iterator<Item = &'static str> {
-    std::iter::once(DEFAULT_PROJECT_THEME)
-        .chain(PROJECT_THEME_NAMES.iter().copied().filter(|n| *n != DEFAULT_PROJECT_THEME))
+    std::iter::once(DEFAULT_PROJECT_THEME).chain(
+        PROJECT_THEME_NAMES
+            .iter()
+            .copied()
+            .filter(|n| *n != DEFAULT_PROJECT_THEME),
+    )
 }

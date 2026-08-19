@@ -29,7 +29,12 @@ pub fn parse_pane_title(title: &str) -> PaneTitle {
         None => (stable.clone(), None),
     };
 
-    PaneTitle { display, stable, slug, project_tag }
+    PaneTitle {
+        display,
+        stable,
+        slug,
+        project_tag,
+    }
 }
 
 /// Encode a pane title per the shared contract: bare stable title when the

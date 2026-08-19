@@ -29,9 +29,9 @@ struct Drop {
 
 /// Half-width katakana + digits + sparse punctuation, all display width 1.
 const RAIN_GLYPHS: &[char] = &[
-    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ',
-    'ﾃ', 'ﾄ', 'ﾅ', 'ﾆ', 'ﾇ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ', 'ﾏ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ', 'ﾔ',
-    '0', '1', '2', '3', '4', '5', '7', '8', '9', '+', '*', '=', '<', '>', ':', '·', '¦', 'ﾘ', 'ﾚ',
+    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ', 'ﾃ',
+    'ﾄ', 'ﾅ', 'ﾆ', 'ﾇ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ', 'ﾏ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ', 'ﾔ', '0', '1',
+    '2', '3', '4', '5', '7', '8', '9', '+', '*', '=', '<', '>', ':', '·', '¦', 'ﾘ', 'ﾚ',
 ];
 
 fn xorshift(state: &mut u32) -> u32 {
@@ -79,7 +79,13 @@ impl MatrixRain {
         } else {
             -((xorshift(&mut self.rng) % (self.rows as u32 * 8)) as i32)
         };
-        Drop { col, head_fp, speed_fp, len, seed: xorshift(&mut self.rng) }
+        Drop {
+            col,
+            head_fp,
+            speed_fp,
+            len,
+            seed: xorshift(&mut self.rng),
+        }
     }
 
     pub fn step(&mut self) {
@@ -126,7 +132,12 @@ impl MatrixRain {
                 buf.set(
                     col,
                     area.y + row as u16,
-                    Cell { ch: glyph, fg, bg: Color::Default, ..Cell::default() },
+                    Cell {
+                        ch: glyph,
+                        fg,
+                        bg: Color::Default,
+                        ..Cell::default()
+                    },
                 );
             }
         }
@@ -157,7 +168,11 @@ const WORDMARK_BITMAP: &[&str] = &[
 /// Gradient ramp derived from the active theme's accent: lightened toward
 /// white at the cap, the pure accent at the baseline.
 fn theme_ramp(base: (u8, u8, u8), row: usize, rows: usize) -> Color {
-    let t = if rows <= 1 { 0.0 } else { row as f32 / (rows - 1) as f32 };
+    let t = if rows <= 1 {
+        0.0
+    } else {
+        row as f32 / (rows - 1) as f32
+    };
     // Lighten factor: 0.55 at the top row fading to 0 at the baseline.
     let f = 0.55 * (1.0 - t);
     let mix = |c: u8| -> u8 { (c as f32 + (255.0 - c as f32) * f).round().min(255.0) as u8 };
@@ -165,7 +180,11 @@ fn theme_ramp(base: (u8, u8, u8), row: usize, rows: usize) -> Color {
 }
 
 pub(crate) fn wordmark_size(doubled: bool) -> (u16, u16) {
-    let w = WORDMARK_BITMAP.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let w = WORDMARK_BITMAP
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
     let h = WORDMARK_BITMAP.len() as u16;
     if doubled {
         (w * 2, h * 2)
@@ -190,7 +209,12 @@ fn draw_wordmark(buf: &mut CellBuffer, x: u16, y: u16, clip: Rect, doubled: bool
                         buf.set(
                             cx,
                             row,
-                            Cell { ch: '█', fg: color, bg: Color::Default, ..Cell::default() },
+                            Cell {
+                                ch: '█',
+                                fg: color,
+                                bg: Color::Default,
+                                ..Cell::default()
+                            },
                         );
                     } else if clip.contains(cx, row) {
                         buf.set(cx, row, Cell::default());
@@ -231,7 +255,10 @@ pub fn build_cards(
     ];
     for wt in worktrees.iter().take(4) {
         match &wt.agent {
-            Some(agent) if crate::agents::agent(agent).is_some_and(|d| d.resume_template.is_some() && installed.contains(d.id)) => {
+            Some(agent)
+                if crate::agents::agent(agent)
+                    .is_some_and(|d| d.resume_template.is_some() && installed.contains(d.id)) =>
+            {
                 let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
                 cards.push(WelcomeCard {
                     icon: "⟲",
@@ -248,7 +275,10 @@ pub fn build_cards(
                 icon: "⎇",
                 title: wt.slug.clone(),
                 subtitle: "reopen worktree in a terminal".into(),
-                cmd: AppCmd::NewTerminalAt { path: wt.path.clone(), name: wt.slug.clone() },
+                cmd: AppCmd::NewTerminalAt {
+                    path: wt.path.clone(),
+                    name: wt.slug.clone(),
+                },
             }),
         }
     }
@@ -291,9 +321,12 @@ pub fn draw(
     let wm_bitmap_rows = WORDMARK_BITMAP.len() as u16;
     // 2×2 brand mark when there's room; single scale on short/narrow hosts.
     let (wm_w2, _) = wordmark_size(true);
-    let doubled =
-        content.h >= wm_bitmap_rows * 2 + 3 + cards_rows + 6 && content.w >= wm_w2 + 8;
-    let wm_rows = if doubled { wm_bitmap_rows * 2 } else { wm_bitmap_rows };
+    let doubled = content.h >= wm_bitmap_rows * 2 + 3 + cards_rows + 6 && content.w >= wm_w2 + 8;
+    let wm_rows = if doubled {
+        wm_bitmap_rows * 2
+    } else {
+        wm_bitmap_rows
+    };
     let total_h = wm_rows + 3 + cards_rows + 4;
     let top = content.y + (content.h.saturating_sub(total_h)) / 2;
 
@@ -313,7 +346,15 @@ pub fn draw(
 
     let tagline = t("welcome.tagline");
     let tag_x = content.x + (content.w.saturating_sub(tagline.chars().count() as u16)) / 2;
-    buf.draw_text(tag_x, top + wm_rows + 1, tagline, theme.text_dim, Color::Default, AttrFlags::ITALIC, content);
+    buf.draw_text(
+        tag_x,
+        top + wm_rows + 1,
+        tagline,
+        theme.text_dim,
+        Color::Default,
+        AttrFlags::ITALIC,
+        content,
+    );
 
     // Card grid, two columns of bordered cards.
     let grid_top = top + wm_rows + 3;
@@ -331,10 +372,17 @@ pub fn draw(
     // Agent availability strip.
     let strip_y = grid_top + cards_rows + 1;
     let mut strip = String::new();
-    for def in crate::agents::AGENTS.iter().filter(|d| d.default_enabled || scene.installed.contains(d.id)) {
+    for def in crate::agents::AGENTS
+        .iter()
+        .filter(|d| d.default_enabled || scene.installed.contains(d.id))
+    {
         strip.push_str(&format!(
             "{} {}   ",
-            if scene.installed.contains(def.id) { "●" } else { "○" },
+            if scene.installed.contains(def.id) {
+                "●"
+            } else {
+                "○"
+            },
             def.short
         ));
     }
@@ -342,11 +390,30 @@ pub fn draw(
     let strip_x = content.x + (content.w.saturating_sub(strip.chars().count() as u16)) / 2;
     // Draw dots colored by availability.
     let mut x = strip_x;
-    for def in crate::agents::AGENTS.iter().filter(|d| d.default_enabled || scene.installed.contains(d.id)) {
+    for def in crate::agents::AGENTS
+        .iter()
+        .filter(|d| d.default_enabled || scene.installed.contains(d.id))
+    {
         let ok = scene.installed.contains(def.id);
         let dot_color = if ok { theme.ok } else { theme.text_faint };
-        x = buf.draw_text(x, strip_y, if ok { "●" } else { "○" }, dot_color, Color::Default, AttrFlags::empty(), content);
-        x = buf.draw_text(x, strip_y, &format!(" {}   ", def.short), if ok { theme.text_dim } else { theme.text_faint }, Color::Default, AttrFlags::empty(), content);
+        x = buf.draw_text(
+            x,
+            strip_y,
+            if ok { "●" } else { "○" },
+            dot_color,
+            Color::Default,
+            AttrFlags::empty(),
+            content,
+        );
+        x = buf.draw_text(
+            x,
+            strip_y,
+            &format!(" {}   ", def.short),
+            if ok { theme.text_dim } else { theme.text_faint },
+            Color::Default,
+            AttrFlags::empty(),
+            content,
+        );
     }
 
     // Footer status line, codex-style — anchored to the bottom row of the
@@ -354,15 +421,39 @@ pub fn draw(
     let footer_y = content.bottom().saturating_sub(1);
     let left = format!("● session ready — {}", scene.session_name);
     let lx = content.x + 2;
-    let mut fx = buf.draw_text(lx, footer_y, "●", theme.ok, Color::Default, AttrFlags::empty(), content);
-    fx = buf.draw_text(fx, footer_y, &format!(" session ready — {}", scene.session_name), theme.text_faint, Color::Default, AttrFlags::empty(), content);
+    let mut fx = buf.draw_text(
+        lx,
+        footer_y,
+        "●",
+        theme.ok,
+        Color::Default,
+        AttrFlags::empty(),
+        content,
+    );
+    fx = buf.draw_text(
+        fx,
+        footer_y,
+        &format!(" session ready — {}", scene.session_name),
+        theme.text_faint,
+        Color::Default,
+        AttrFlags::empty(),
+        content,
+    );
     let _ = fx;
     let right = scene.project_root;
     let rx = content
         .right()
         .saturating_sub(right.chars().count() as u16 + 2)
         .max(lx + left.chars().count() as u16 + 3);
-    buf.draw_text(rx, footer_y, right, theme.text_faint, Color::Default, AttrFlags::empty(), content);
+    buf.draw_text(
+        rx,
+        footer_y,
+        right,
+        theme.text_faint,
+        Color::Default,
+        AttrFlags::empty(),
+        content,
+    );
 }
 
 /// A Codex-style card: rounded border, icon block, bold title, dim subtitle.
@@ -378,42 +469,138 @@ fn draw_card(
     if rect.w < 10 || rect.h < 4 {
         return;
     }
-    let bg = if selected { theme.bg_selected } else { theme.bg_raised };
+    let bg = if selected {
+        theme.bg_selected
+    } else {
+        theme.bg_raised
+    };
     let border = if selected { theme.accent } else { theme.border };
-    buf.fill(rect, &Cell { bg, ..Cell::default() });
+    buf.fill(
+        rect,
+        &Cell {
+            bg,
+            ..Cell::default()
+        },
+    );
 
     let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right() - 1, rect.bottom() - 1);
-    let horiz = Cell { ch: '─', fg: border, bg, ..Cell::default() };
+    let horiz = Cell {
+        ch: '─',
+        fg: border,
+        bg,
+        ..Cell::default()
+    };
     for col in x0 + 1..x1 {
         buf.set(col, y0, horiz.clone());
         buf.set(col, y1, horiz.clone());
     }
-    let vert = Cell { ch: '│', fg: border, bg, ..Cell::default() };
+    let vert = Cell {
+        ch: '│',
+        fg: border,
+        bg,
+        ..Cell::default()
+    };
     for row in y0 + 1..y1 {
         buf.set(x0, row, vert.clone());
         buf.set(x1, row, vert.clone());
     }
-    buf.set(x0, y0, Cell { ch: '╭', fg: border, bg, ..Cell::default() });
-    buf.set(x1, y0, Cell { ch: '╮', fg: border, bg, ..Cell::default() });
-    buf.set(x0, y1, Cell { ch: '╰', fg: border, bg, ..Cell::default() });
-    buf.set(x1, y1, Cell { ch: '╯', fg: border, bg, ..Cell::default() });
+    buf.set(
+        x0,
+        y0,
+        Cell {
+            ch: '╭',
+            fg: border,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x1,
+        y0,
+        Cell {
+            ch: '╮',
+            fg: border,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x0,
+        y1,
+        Cell {
+            ch: '╰',
+            fg: border,
+            bg,
+            ..Cell::default()
+        },
+    );
+    buf.set(
+        x1,
+        y1,
+        Cell {
+            ch: '╯',
+            fg: border,
+            bg,
+            ..Cell::default()
+        },
+    );
 
-    let icon_fg = if selected { theme.accent } else { theme.text_dim };
-    buf.draw_text(rect.x + 2, rect.y + 1, card.icon, icon_fg, bg, AttrFlags::BOLD, rect);
+    let icon_fg = if selected {
+        theme.accent
+    } else {
+        theme.text_dim
+    };
+    buf.draw_text(
+        rect.x + 2,
+        rect.y + 1,
+        card.icon,
+        icon_fg,
+        bg,
+        AttrFlags::BOLD,
+        rect,
+    );
     let title_fg = if selected { theme.text } else { theme.text_dim };
-    buf.draw_text(rect.x + 5, rect.y + 1, &card.title, title_fg, bg, AttrFlags::BOLD, rect);
+    buf.draw_text(
+        rect.x + 5,
+        rect.y + 1,
+        &card.title,
+        title_fg,
+        bg,
+        AttrFlags::BOLD,
+        rect,
+    );
     if selected {
-        buf.draw_text(rect.right().saturating_sub(3), rect.y + 1, "⏎", theme.accent, bg, AttrFlags::BOLD, rect);
+        buf.draw_text(
+            rect.right().saturating_sub(3),
+            rect.y + 1,
+            "⏎",
+            theme.accent,
+            bg,
+            AttrFlags::BOLD,
+            rect,
+        );
     }
     let max_sub = rect.w.saturating_sub(7) as usize;
     let subtitle: String = if card.subtitle.chars().count() > max_sub {
-        let mut s: String = card.subtitle.chars().take(max_sub.saturating_sub(1)).collect();
+        let mut s: String = card
+            .subtitle
+            .chars()
+            .take(max_sub.saturating_sub(1))
+            .collect();
         s.push('…');
         s
     } else {
         card.subtitle.clone()
     };
-    buf.draw_text(rect.x + 5, rect.y + 2, &subtitle, theme.text_faint, bg, AttrFlags::empty(), rect);
+    buf.draw_text(
+        rect.x + 5,
+        rect.y + 2,
+        &subtitle,
+        theme.text_faint,
+        bg,
+        AttrFlags::empty(),
+        rect,
+    );
 }
 
 #[cfg(test)]

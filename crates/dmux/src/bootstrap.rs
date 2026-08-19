@@ -109,7 +109,11 @@ fn stream_step(
 pub fn run_blocking(plan: &Plan, emit: &mut dyn FnMut(Ev)) {
     let q = crate::shq;
     emit(Ev::Step(0));
-    let base = if plan.base_branch.is_empty() { String::new() } else { format!(" {}", q(&plan.base_branch)) };
+    let base = if plan.base_branch.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", q(&plan.base_branch))
+    };
     let add = format!(
         "git -C {root} worktree add -b {branch} {wt}{base} || git -C {root} worktree add {wt} {branch}",
         root = q(&plan.root),
@@ -138,7 +142,9 @@ pub fn run_blocking(plan: &Plan, emit: &mut dyn FnMut(Ev)) {
             emit,
         );
         if !ok {
-            emit(Ev::Detail("worktree_created hook exited nonzero (continuing)".into()));
+            emit(Ev::Detail(
+                "worktree_created hook exited nonzero (continuing)".into(),
+            ));
         }
     }
 
@@ -149,7 +155,13 @@ pub fn run_blocking(plan: &Plan, emit: &mut dyn FnMut(Ev)) {
 /// Paint the loader over a pane's body rect.
 pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64) {
     // The pane's shell may already have painted a prompt — cover it all.
-    buf.fill(rect, &Cell { bg: theme.bg, ..Cell::default() });
+    buf.fill(
+        rect,
+        &Cell {
+            bg: theme.bg,
+            ..Cell::default()
+        },
+    );
 
     let total = ui.steps.len();
     let h = (total as u16 + 8).min(rect.h);
@@ -160,9 +172,25 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
 
     // Identity line: what's being set up, for whom.
     let head = format!("{} · {}", ui.title, ui.agent_label);
-    buf.draw_text(inner.x + 1, inner.y, &head, theme.text, bg, AttrFlags::BOLD, inner);
+    buf.draw_text(
+        inner.x + 1,
+        inner.y,
+        &head,
+        theme.text,
+        bg,
+        AttrFlags::BOLD,
+        inner,
+    );
     let branch = format!("⎇ {}", ui.branch);
-    buf.draw_text(inner.x + 1, inner.y + 1, &branch, theme.text_faint, bg, AttrFlags::empty(), inner);
+    buf.draw_text(
+        inner.x + 1,
+        inner.y + 1,
+        &branch,
+        theme.text_faint,
+        bg,
+        AttrFlags::empty(),
+        inner,
+    );
 
     // Step checklist.
     let steps_y = inner.y + 3;
@@ -182,7 +210,15 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
             ("○".to_string(), theme.text_faint, theme.text_faint)
         };
         buf.draw_text(inner.x + 2, y, &glyph, color, bg, AttrFlags::BOLD, inner);
-        buf.draw_text(inner.x + 4, y, label, label_color, bg, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 4,
+            y,
+            label,
+            label_color,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
     }
 
     // Progress bar + counters.
@@ -200,16 +236,44 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
         for i in 0..bar_w {
             let x = inner.x + 1 + i as u16;
             let (ch, fg) = if i < filled {
-                ('▰', if ui.failed.is_some() { theme.danger } else { theme.accent })
+                (
+                    '▰',
+                    if ui.failed.is_some() {
+                        theme.danger
+                    } else {
+                        theme.accent
+                    },
+                )
             } else if i == filled && ui.done_at.is_none() && ui.failed.is_none() {
                 // A breathing leading edge keeps the bar alive between steps.
-                if anim % 6 < 3 { ('▰', theme.accent_soft) } else { ('▱', theme.border) }
+                if anim % 6 < 3 {
+                    ('▰', theme.accent_soft)
+                } else {
+                    ('▱', theme.border)
+                }
             } else {
                 ('▱', theme.border)
             };
-            buf.set(x, bar_y, Cell { ch, fg, bg, ..Cell::default() });
+            buf.set(
+                x,
+                bar_y,
+                Cell {
+                    ch,
+                    fg,
+                    bg,
+                    ..Cell::default()
+                },
+            );
         }
-        buf.draw_text(inner.x + 1 + bar_w as u16, bar_y, &counter, theme.text_faint, bg, AttrFlags::empty(), inner);
+        buf.draw_text(
+            inner.x + 1 + bar_w as u16,
+            bar_y,
+            &counter,
+            theme.text_faint,
+            bg,
+            AttrFlags::empty(),
+            inner,
+        );
     }
 
     // Live output line (hook/npm/git chatter) or the failure reason.
@@ -221,6 +285,17 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
         Some(_) => (ui.detail.clone(), theme.danger),
         None => (ui.detail.clone(), theme.text_faint),
     };
-    let clipped: String = line.chars().take(inner.w.saturating_sub(2) as usize).collect();
-    buf.draw_text(inner.x + 1, detail_y, &clipped, color, bg, AttrFlags::ITALIC, inner);
+    let clipped: String = line
+        .chars()
+        .take(inner.w.saturating_sub(2) as usize)
+        .collect();
+    buf.draw_text(
+        inner.x + 1,
+        detail_y,
+        &clipped,
+        color,
+        bg,
+        AttrFlags::ITALIC,
+        inner,
+    );
 }

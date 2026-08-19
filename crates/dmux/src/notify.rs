@@ -10,7 +10,8 @@ fn helper_socket() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
     }
-    let path = std::env::var_os("HOME").map(PathBuf::from)?
+    let path = std::env::var_os("HOME")
+        .map(PathBuf::from)?
         .join(".dmux")
         .join("native-helper")
         .join("run")
@@ -26,7 +27,9 @@ pub fn available() -> bool {
 
 /// Send a native notification. Blocking but bounded; call from spawn_blocking.
 pub fn notify(title: &str, body: &str, sound: Option<&str>) -> bool {
-    let Some(path) = helper_socket() else { return false };
+    let Some(path) = helper_socket() else {
+        return false;
+    };
     let payload = serde_json::json!({
         "type": "notify",
         "title": title,

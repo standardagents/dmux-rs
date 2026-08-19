@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use dmux_compositor::{CellBuffer, Rect};
 use dmux_core::{SettingsScope, SettingsStore};
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState, PanelStyle};
+use dmux_ui::{
+    centered, draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState,
+    PanelStyle,
+};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 use crate::sounds::SOUNDS;
@@ -21,7 +24,11 @@ impl SoundsView {
         Self {
             settings,
             list: ListState::default(),
-            scope: if has_project { SettingsScope::Project } else { SettingsScope::Global },
+            scope: if has_project {
+                SettingsScope::Project
+            } else {
+                SettingsScope::Global
+            },
         }
     }
 
@@ -34,7 +41,9 @@ impl SoundsView {
     }
 
     fn toggle(&mut self, idx: usize) -> ViewResult {
-        let Some(def) = SOUNDS.get(idx) else { return ViewResult::Stay };
+        let Some(def) = SOUNDS.get(idx) else {
+            return ViewResult::Stay;
+        };
         let mut enabled = self.enabled_ids();
         if let Some(pos) = enabled.iter().position(|id| id == def.id) {
             enabled.remove(pos);
@@ -43,7 +52,9 @@ impl SoundsView {
         }
         ViewResult::Cmd(AppCmd::SetSetting {
             key: "enabledNotificationSounds".into(),
-            value: serde_json::Value::Array(enabled.into_iter().map(serde_json::Value::String).collect()),
+            value: serde_json::Value::Array(
+                enabled.into_iter().map(serde_json::Value::String).collect(),
+            ),
             scope: self.scope,
         })
     }
@@ -58,16 +69,35 @@ impl View for SoundsView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let rect = centered(area, area.w.min(52), (SOUNDS.len() as u16 + 4).min(area.h));
-        let inner = draw_panel(buf, rect, "Notification Sounds", ctx.theme, PanelStyle::Modal);
+        let inner = draw_panel(
+            buf,
+            rect,
+            "Notification Sounds",
+            ctx.theme,
+            PanelStyle::Modal,
+        );
         let enabled = self.enabled_ids();
         self.list.clamp(SOUNDS.len());
-        for (row, (i, def)) in SOUNDS.iter().enumerate().take(inner.h.saturating_sub(1) as usize).enumerate() {
+        for (row, (i, def)) in SOUNDS
+            .iter()
+            .enumerate()
+            .take(inner.h.saturating_sub(1) as usize)
+            .enumerate()
+        {
             let y = inner.y + row as u16;
             let on = enabled.iter().any(|id| id == def.id);
             let label = format!("{} {}", draw_checkbox(on), def.label);
             let value = if def.resource.is_some() { "" } else { "system" };
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(buf, row_rect, &label, value, ctx.theme, i == self.list.selected, true);
+            draw_kv_row(
+                buf,
+                row_rect,
+                &label,
+                value,
+                ctx.theme,
+                i == self.list.selected,
+                true,
+            );
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
         draw_hint_bar(

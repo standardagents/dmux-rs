@@ -70,7 +70,8 @@ pub fn compare(pane: &LogicalPane, reply: &Reply) -> Vec<String> {
         for col in 0..cols {
             let a = live.get(col, row);
             let b = shadow.get(col, row);
-            let ch_eq = a.ch == b.ch || (a.ch == ' ' && b.ch == '\0') || (a.ch == '\0' && b.ch == ' ');
+            let ch_eq =
+                a.ch == b.ch || (a.ch == ' ' && b.ch == '\0') || (a.ch == '\0' && b.ch == ' ');
             let fg_eq = color_equiv(a.fg, b.fg, &pane.term, SLOT_FG);
             let bg_eq = color_equiv(a.bg, b.bg, &pane.term, SLOT_BG);
             // tmux compacts trailing BCE backgrounds on scrolled rows; we
@@ -153,10 +154,7 @@ pub fn parse_incident(text: &str) -> Option<(u16, u16, Vec<Vec<u8>>, Vec<u8>)> {
     let cap_start = text.find("== tmux capture")?;
     let cap_body = &text[text[cap_start..].find('\n')? + cap_start + 1..];
     let cap_end = cap_body.find("\n== ")?;
-    let capture: Vec<Vec<u8>> = cap_body[..cap_end]
-        .lines()
-        .map(unescape_default)
-        .collect();
+    let capture: Vec<Vec<u8>> = cap_body[..cap_end].lines().map(unescape_default).collect();
 
     let ring_start = text.find("== raw %output ring")?;
     let ring_body = &text[text[ring_start..].find('\n')? + ring_start + 1..];
@@ -239,7 +237,11 @@ pub fn replay_incident(text: &str) -> Option<Vec<String>> {
     let (cols, rows, capture, ring) = parse_incident(text)?;
     let mut live = PaneTerm::new(cols, rows, 0);
     live.advance(&ring);
-    let reply = Reply { lines: capture, ok: true, rtt: std::time::Duration::ZERO };
+    let reply = Reply {
+        lines: capture,
+        ok: true,
+        rtt: std::time::Duration::ZERO,
+    };
     let mut scratch = PaneTerm::new(cols, rows, 0);
     scratch.advance(&seed_bytes(&reply));
     let a = render_grid(&live, cols, rows);
@@ -248,13 +250,20 @@ pub fn replay_incident(text: &str) -> Option<Vec<String>> {
     for row in 0..rows {
         for col in 0..cols {
             let (x, y) = (a.get(col, row), b.get(col, row));
-            let ch_eq = x.ch == y.ch || (x.ch == ' ' && y.ch == '\0') || (x.ch == '\0' && y.ch == ' ');
+            let ch_eq =
+                x.ch == y.ch || (x.ch == ' ' && y.ch == '\0') || (x.ch == '\0' && y.ch == ' ');
             let fg_eq = color_equiv(x.fg, y.fg, &live, 256);
             let bg_eq = color_equiv(x.bg, y.bg, &live, 257);
-            let tolerated =
-                x.ch == ' ' && y.ch == ' ' && fg_eq && y.bg == Color::Default && x.bg != Color::Default;
+            let tolerated = x.ch == ' '
+                && y.ch == ' '
+                && fg_eq
+                && y.bg == Color::Default
+                && x.bg != Color::Default;
             if !(ch_eq && fg_eq && bg_eq) && !tolerated {
-                diffs.push(format!("({col},{row}) replay={:?} capture={:?}", x.ch, y.ch));
+                diffs.push(format!(
+                    "({col},{row}) replay={:?} capture={:?}",
+                    x.ch, y.ch
+                ));
             }
         }
     }
@@ -267,7 +276,9 @@ mod tests {
 
     fn pane_with(content: &[u8]) -> LogicalPane {
         let reply = Reply {
-            lines: vec!["%5\u{1}@0\u{1}p__dmux__p\u{1}30\u{1}4\u{1}0\u{1}zsh\u{1}w".as_bytes().to_vec()],
+            lines: vec!["%5\u{1}@0\u{1}p__dmux__p\u{1}30\u{1}4\u{1}0\u{1}zsh\u{1}w"
+                .as_bytes()
+                .to_vec()],
             ok: true,
             rtt: std::time::Duration::ZERO,
         };
@@ -294,7 +305,10 @@ mod tests {
             "",
             "",
         ]);
-        assert!(compare(&pane, &cap).is_empty(), "identical content must not alert");
+        assert!(
+            compare(&pane, &cap).is_empty(),
+            "identical content must not alert"
+        );
     }
 
     /// Every incident promoted into tests/corpus/ must replay with zero
@@ -302,8 +316,12 @@ mod tests {
     /// regression tests.
     #[test]
     fn corpus_incidents_replay_clean() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("corpus");
-        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("corpus");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("incident") {
@@ -337,6 +355,12 @@ pub fn eligible(pane: &LogicalPane, now: Instant) -> bool {
         && !pane.throttled
         && pane.reseed_buffer.is_none()
         && pane.term.display_offset() == 0
-        && pane.last_output.map(|t| now.duration_since(t) >= QUIESCE).unwrap_or(false)
-        && pane.last_verify.map(|t| now.duration_since(t) >= INTERVAL).unwrap_or(true)
+        && pane
+            .last_output
+            .map(|t| now.duration_since(t) >= QUIESCE)
+            .unwrap_or(false)
+        && pane
+            .last_verify
+            .map(|t| now.duration_since(t) >= INTERVAL)
+            .unwrap_or(true)
 }

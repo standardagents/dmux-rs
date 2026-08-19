@@ -12,7 +12,8 @@ use tokio::process::Command;
 use crate::InferError;
 
 pub async fn generate(model: &str, system: &str, user: &str) -> Result<String, InferError> {
-    let result = tokio::time::timeout(std::time::Duration::from_secs(30), run(model, system, user)).await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_secs(30), run(model, system, user)).await;
     match result {
         Ok(inner) => inner,
         Err(_) => Err(InferError::Request("codex app-server timed out".into())),
@@ -48,7 +49,11 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
             .write_all(format!("{msg}\n").as_bytes())
             .await
             .map_err(|e| InferError::Request(e.to_string()))?;
-        while let Some(line) = lines.next_line().await.map_err(|e| InferError::Request(e.to_string()))? {
+        while let Some(line) = lines
+            .next_line()
+            .await
+            .map_err(|e| InferError::Request(e.to_string()))?
+        {
             let v: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -65,9 +70,15 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
     }
 
     next_id += 1;
-    round_trip(&mut stdin, &mut lines, next_id, "initialize", json!({
-        "clientInfo": {"name": "dmux", "title": "dmux", "version": "1"}
-    }))
+    round_trip(
+        &mut stdin,
+        &mut lines,
+        next_id,
+        "initialize",
+        json!({
+            "clientInfo": {"name": "dmux", "title": "dmux", "version": "1"}
+        }),
+    )
     .await?;
     stdin
         .write_all(b"{\"method\":\"initialized\",\"params\":{}}\n")
@@ -104,7 +115,11 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
 
     // Collect notifications until the turn completes.
     let mut final_text = String::new();
-    while let Some(line) = lines.next_line().await.map_err(|e| InferError::Request(e.to_string()))? {
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| InferError::Request(e.to_string()))?
+    {
         let v: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
@@ -113,7 +128,9 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
             continue;
         }
         match v["method"].as_str() {
-            Some("item/completed") if v["params"]["item"]["type"].as_str() == Some("agentMessage") => {
+            Some("item/completed")
+                if v["params"]["item"]["type"].as_str() == Some("agentMessage") =>
+            {
                 if let Some(text) = v["params"]["item"]["text"].as_str() {
                     final_text = text.to_string();
                 }
@@ -122,7 +139,9 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
                 let turn = &v["params"]["turn"];
                 match turn["status"].as_str() {
                     Some("failed") => {
-                        let msg = turn["error"]["message"].as_str().unwrap_or("ChatGPT inference failed");
+                        let msg = turn["error"]["message"]
+                            .as_str()
+                            .unwrap_or("ChatGPT inference failed");
                         return Err(InferError::Request(msg.to_string()));
                     }
                     _ => {
@@ -145,7 +164,9 @@ async fn run(model: &str, system: &str, user: &str) -> Result<String, InferError
     let _ = child.start_kill();
     let trimmed = final_text.trim().to_string();
     if trimmed.is_empty() {
-        Err(InferError::BadResponse("ChatGPT returned an empty response".into()))
+        Err(InferError::BadResponse(
+            "ChatGPT returned an empty response".into(),
+        ))
     } else {
         Ok(trimmed)
     }

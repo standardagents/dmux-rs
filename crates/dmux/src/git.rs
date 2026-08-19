@@ -22,11 +22,15 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Uncommitted changes (staged, unstaged, or untracked)?
 pub fn worktree_dirty(path: &Path) -> bool {
-    git(path, &["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false)
+    git(path, &["status", "--porcelain"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn current_branch(path: &Path) -> Option<String> {
-    git(path, &["rev-parse", "--abbrev-ref", "HEAD"]).ok().filter(|b| b != "HEAD")
+    git(path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .filter(|b| b != "HEAD")
 }
 
 /// Commit everything in the worktree (when `message` is Some), then merge its
@@ -52,7 +56,10 @@ pub fn commit_and_merge(
             .status();
         match status {
             Ok(st) if !st.success() => {
-                return Err(format!("pre_merge hook vetoed the merge (exit {})", st.code().unwrap_or(-1)));
+                return Err(format!(
+                    "pre_merge hook vetoed the merge (exit {})",
+                    st.code().unwrap_or(-1)
+                ));
             }
             Err(err) => return Err(format!("pre_merge hook: {err}")),
             _ => {}
@@ -69,7 +76,10 @@ pub fn commit_and_merge(
                 root,
                 "post_merge",
                 root,
-                &[("DMUX_BRANCH", branch.to_string()), ("DMUX_TARGET_BRANCH", target.clone())],
+                &[
+                    ("DMUX_BRANCH", branch.to_string()),
+                    ("DMUX_TARGET_BRANCH", target.clone()),
+                ],
             );
             Ok(target)
         }
@@ -114,8 +124,11 @@ pub fn abort_merge(root: &Path) {
 
 /// Remove a merged worktree and its branch. Best-effort.
 pub fn cleanup_worktree(root: &Path, worktree: &Path, branch: &str) -> Result<(), String> {
-    git(root, &["worktree", "remove", "--force", &worktree.to_string_lossy()])
-        .map_err(|e| format!("worktree remove: {e}"))?;
+    git(
+        root,
+        &["worktree", "remove", "--force", &worktree.to_string_lossy()],
+    )
+    .map_err(|e| format!("worktree remove: {e}"))?;
     let _ = git(root, &["branch", "-D", branch]);
     Ok(())
 }

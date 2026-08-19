@@ -52,7 +52,14 @@ impl Metrics {
         }
     }
 
-    pub fn record_frame(&mut self, total: Duration, diff: Duration, write: Duration, bytes_out: usize, full: bool) {
+    pub fn record_frame(
+        &mut self,
+        total: Duration,
+        diff: Duration,
+        write: Duration,
+        bytes_out: usize,
+        full: bool,
+    ) {
         self.frames += 1;
         if full {
             self.full_repaints += 1;
@@ -71,7 +78,10 @@ impl Metrics {
     pub fn hud_lines(&self) -> Vec<String> {
         let p = |h: &Histogram<u64>, q: f64| h.value_at_quantile(q) as f64 / 1000.0;
         vec![
-            format!("frames {}  full {}  coalesced {}", self.frames, self.full_repaints, self.coalesced),
+            format!(
+                "frames {}  full {}  coalesced {}",
+                self.frames, self.full_repaints, self.coalesced
+            ),
             format!(
                 "frame ms p50 {:.2} p95 {:.2} p99 {:.2} max {:.2}",
                 p(&self.frame_total_us, 0.50),

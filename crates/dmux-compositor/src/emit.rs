@@ -83,10 +83,12 @@ impl Emitter {
         self.set_style(cell.fg, cell.bg, cell.attrs & STYLE_ATTRS);
         self.set_link(cell.link);
         let mut utf8 = [0u8; 4];
-        self.buf.extend_from_slice(cell.ch.encode_utf8(&mut utf8).as_bytes());
+        self.buf
+            .extend_from_slice(cell.ch.encode_utf8(&mut utf8).as_bytes());
         if let Some(zw) = &cell.zerowidth {
             for ch in zw.iter() {
-                self.buf.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
+                self.buf
+                    .extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
             }
         }
         // Implicit cursor advance is only trusted for plain printable ASCII.

@@ -191,7 +191,11 @@ impl CellBuffer {
                 if col > clip.x && col - 1 < self.cols {
                     let i = self.idx(col - 1, row);
                     let cell = &mut self.cells[i];
-                    let mut zw: Vec<char> = cell.zerowidth.take().map(|b| b.into_vec()).unwrap_or_default();
+                    let mut zw: Vec<char> = cell
+                        .zerowidth
+                        .take()
+                        .map(|b| b.into_vec())
+                        .unwrap_or_default();
                     zw.push(ch);
                     cell.zerowidth = Some(zw.into_boxed_slice());
                 }

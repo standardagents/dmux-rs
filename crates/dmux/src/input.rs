@@ -160,7 +160,10 @@ pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
         newline_mode: false,
         modify_other_keys: None,
     };
-    key.key.encode(key.modifiers, encode_modes, true).ok().map(|s| s.into_bytes())
+    key.key
+        .encode(key.modifiers, encode_modes, true)
+        .ok()
+        .map(|s| s.into_bytes())
 }
 
 /// True when the Xterm/legacy encoding would silently drop this key's
@@ -193,7 +196,14 @@ pub fn encode_paste(text: &str, modes: InputModes) -> Vec<u8> {
 /// Encode a mouse event for a pane app that enabled SGR mouse reporting.
 /// `col`/`row` are pane-local 0-based; output uses 1-based SGR coords.
 pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8> {
-    format!("\x1b[<{};{};{}{}", button, col + 1, row + 1, if pressed { 'M' } else { 'm' }).into_bytes()
+    format!(
+        "\x1b[<{};{};{}{}",
+        button,
+        col + 1,
+        row + 1,
+        if pressed { 'M' } else { 'm' }
+    )
+    .into_bytes()
 }
 
 /// Classify a mouse event: (col, row, kind, shift), 0-based. SGR 1002 mode
@@ -240,7 +250,10 @@ mod tests {
     use super::*;
 
     fn key(code: KeyCode, mods: Modifiers) -> KeyEvent {
-        KeyEvent { key: code, modifiers: mods }
+        KeyEvent {
+            key: code,
+            modifiers: mods,
+        }
     }
 
     fn km() -> crate::keys::Keymap {
@@ -249,25 +262,64 @@ mod tests {
 
     #[test]
     fn leader_flow() {
-        assert_eq!(route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), false, &km()), Routed::LeaderArm);
-        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::NONE), InputModes::default(), true, &km()), Routed::OpenNewAgent);
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('b'), Modifiers::CTRL),
+                InputModes::default(),
+                false,
+                &km()
+            ),
+            Routed::LeaderArm
+        );
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('n'), Modifiers::NONE),
+                InputModes::default(),
+                true,
+                &km()
+            ),
+            Routed::OpenNewAgent
+        );
         // Double leader = literal Ctrl+b to the pane.
         assert_eq!(
-            route_key(&key(KeyCode::Char('b'), Modifiers::CTRL), InputModes::default(), true, &km()),
+            route_key(
+                &key(KeyCode::Char('b'), Modifiers::CTRL),
+                InputModes::default(),
+                true,
+                &km()
+            ),
             Routed::PaneBytes(vec![0x02])
         );
         // Unknown leader command swallowed, not leaked.
-        assert_eq!(route_key(&key(KeyCode::Char('z'), Modifiers::NONE), InputModes::default(), true, &km()), Routed::Ignore);
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('z'), Modifiers::NONE),
+                InputModes::default(),
+                true,
+                &km()
+            ),
+            Routed::Ignore
+        );
     }
 
     #[test]
     fn plain_chars_become_pane_bytes() {
-        match route_key(&key(KeyCode::Char('a'), Modifiers::NONE), InputModes::default(), false, &km()) {
+        match route_key(
+            &key(KeyCode::Char('a'), Modifiers::NONE),
+            InputModes::default(),
+            false,
+            &km(),
+        ) {
             Routed::PaneBytes(b) => assert_eq!(b, b"a"),
             other => panic!("{other:?}"),
         }
         // 'b' without ctrl is NOT the leader.
-        match route_key(&key(KeyCode::Char('b'), Modifiers::NONE), InputModes::default(), false, &km()) {
+        match route_key(
+            &key(KeyCode::Char('b'), Modifiers::NONE),
+            InputModes::default(),
+            false,
+            &km(),
+        ) {
             Routed::PaneBytes(b) => assert_eq!(b, b"b"),
             other => panic!("{other:?}"),
         }
@@ -277,31 +329,80 @@ mod tests {
     fn keymap_chords() {
         // Direct settings chord (kitty hosts).
         assert_eq!(
-            route_key(&key(KeyCode::Char(','), Modifiers::CTRL), InputModes::default(), false, &km()),
+            route_key(
+                &key(KeyCode::Char(','), Modifiers::CTRL),
+                InputModes::default(),
+                false,
+                &km()
+            ),
             Routed::OpenSettings
         );
         // TS-era letters on Alt.
-        assert_eq!(route_key(&key(KeyCode::Char('s'), Modifiers::ALT), InputModes::default(), false, &km()), Routed::OpenSettings);
-        assert_eq!(route_key(&key(KeyCode::Char('n'), Modifiers::SUPER), InputModes::default(), false, &km()), Routed::OpenNewAgent);
-        assert_eq!(route_key(&key(KeyCode::Char('3'), Modifiers::SUPER), InputModes::default(), false, &km()), Routed::FocusIndex(2));
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('s'), Modifiers::ALT),
+                InputModes::default(),
+                false,
+                &km()
+            ),
+            Routed::OpenSettings
+        );
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('n'), Modifiers::SUPER),
+                InputModes::default(),
+                false,
+                &km()
+            ),
+            Routed::OpenNewAgent
+        );
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('3'), Modifiers::SUPER),
+                InputModes::default(),
+                false,
+                &km()
+            ),
+            Routed::FocusIndex(2)
+        );
         // A rebound keymap changes routing.
         let mut o = serde_json::Map::new();
         o.insert("settings".into(), serde_json::Value::String("f2".into()));
         let custom = crate::keys::Keymap::from_overrides(&o);
-        assert_eq!(route_key(&key(KeyCode::Function(2), Modifiers::NONE), InputModes::default(), false, &custom), Routed::OpenSettings);
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Function(2), Modifiers::NONE),
+                InputModes::default(),
+                false,
+                &custom
+            ),
+            Routed::OpenSettings
+        );
         assert!(matches!(
-            route_key(&key(KeyCode::Char(','), Modifiers::CTRL), InputModes::default(), false, &custom),
+            route_key(
+                &key(KeyCode::Char(','), Modifiers::CTRL),
+                InputModes::default(),
+                false,
+                &custom
+            ),
             Routed::PaneBytes(_) | Routed::Ignore
         ));
     }
 
     #[test]
     fn arrows_respect_app_cursor_mode() {
-        let normal = encode_key(&key(KeyCode::UpArrow, Modifiers::NONE), InputModes::default()).unwrap();
+        let normal = encode_key(
+            &key(KeyCode::UpArrow, Modifiers::NONE),
+            InputModes::default(),
+        )
+        .unwrap();
         assert_eq!(normal, b"\x1b[A");
         let app = encode_key(
             &key(KeyCode::UpArrow, Modifiers::NONE),
-            InputModes { app_cursor: true, ..Default::default() },
+            InputModes {
+                app_cursor: true,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert_eq!(app, b"\x1bOA");
@@ -315,7 +416,13 @@ mod tests {
 
     #[test]
     fn paste_bracketing() {
-        let out = encode_paste("x", InputModes { bracketed_paste: true, ..Default::default() });
+        let out = encode_paste(
+            "x",
+            InputModes {
+                bracketed_paste: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(out, b"\x1b[200~x\x1b[201~");
     }
 
@@ -325,11 +432,26 @@ mod tests {
         // never requested a keyboard protocol (Claude Code's shift+Enter
         // newline; tmux `extended-keys on` behaves the same way).
         let m = InputModes::default();
-        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::SHIFT), m).unwrap(), b"\x1b[13;2u");
-        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::CTRL), m).unwrap(), b"\x1b[13;5u");
+        assert_eq!(
+            encode_key(&key(KeyCode::Enter, Modifiers::SHIFT), m).unwrap(),
+            b"\x1b[13;2u"
+        );
+        assert_eq!(
+            encode_key(&key(KeyCode::Enter, Modifiers::CTRL), m).unwrap(),
+            b"\x1b[13;5u"
+        );
         // Unmodified and legacy-expressible keys keep their classic forms.
-        assert_eq!(encode_key(&key(KeyCode::Enter, Modifiers::NONE), m).unwrap(), b"\r");
-        assert_eq!(encode_key(&key(KeyCode::Tab, Modifiers::SHIFT), m).unwrap(), b"\x1b[Z");
-        assert_eq!(encode_key(&key(KeyCode::Char('c'), Modifiers::CTRL), m).unwrap(), b"\x03");
+        assert_eq!(
+            encode_key(&key(KeyCode::Enter, Modifiers::NONE), m).unwrap(),
+            b"\r"
+        );
+        assert_eq!(
+            encode_key(&key(KeyCode::Tab, Modifiers::SHIFT), m).unwrap(),
+            b"\x1b[Z"
+        );
+        assert_eq!(
+            encode_key(&key(KeyCode::Char('c'), Modifiers::CTRL), m).unwrap(),
+            b"\x03"
+        );
     }
 }

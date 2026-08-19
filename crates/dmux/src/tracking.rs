@@ -132,7 +132,9 @@ fn open_files(pid: u32) -> Vec<String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let out = std::process::Command::new("lsof").args(["-Fn", "-p", &pid.to_string()]).output();
+        let out = std::process::Command::new("lsof")
+            .args(["-Fn", "-p", &pid.to_string()])
+            .output();
         match out {
             Ok(out) => String::from_utf8_lossy(&out.stdout)
                 .lines()
@@ -147,7 +149,11 @@ fn open_files(pid: u32) -> Vec<String> {
 /// Observe agents in the given panes: (slug, pane_pid) → observation.
 pub fn observe(panes: &[(String, u32)]) -> Vec<(String, AgentObservation)> {
     let table = process_table();
-    tracing::debug!(processes = table.len(), panes = panes.len(), "tracking observe");
+    tracing::debug!(
+        processes = table.len(),
+        panes = panes.len(),
+        "tracking observe"
+    );
     let mut out = Vec::new();
     for (slug, pane_pid) in panes {
         match find_agent(&table, *pane_pid) {
@@ -155,7 +161,14 @@ pub fn observe(panes: &[(String, u32)]) -> Vec<(String, AgentObservation)> {
                 let files = open_files(agent_pid);
                 let session_id = files.iter().find_map(|p| session_from_path(agent_id, p));
                 tracing::debug!(%slug, agent_id, agent_pid, files = files.len(), session = ?session_id, "agent observed");
-                out.push((slug.clone(), AgentObservation { agent_id, agent_pid, session_id }));
+                out.push((
+                    slug.clone(),
+                    AgentObservation {
+                        agent_id,
+                        agent_pid,
+                        session_id,
+                    },
+                ));
             }
             None => {
                 let root = table.get(pane_pid);
@@ -187,14 +200,20 @@ mod tests {
             Some("abcdefab-1234-5678-9abc-def012345678".to_string())
         );
         assert_eq!(session_from_path("claude", "/tmp/other.jsonl"), None);
-        assert_eq!(session_from_path("claude", "/Users/x/.claude/projects/x/notauuid.jsonl"), None);
+        assert_eq!(
+            session_from_path("claude", "/Users/x/.claude/projects/x/notauuid.jsonl"),
+            None
+        );
     }
 
     #[test]
     fn agent_command_matching() {
         assert_eq!(match_agent("claude --continue"), Some("claude"));
         assert_eq!(match_agent("/opt/homebrew/bin/codex resume"), Some("codex"));
-        assert_eq!(match_agent("node /usr/local/bin/claude --flag"), Some("claude"));
+        assert_eq!(
+            match_agent("node /usr/local/bin/claude --flag"),
+            Some("claude")
+        );
         assert_eq!(match_agent("vim ."), None);
     }
 

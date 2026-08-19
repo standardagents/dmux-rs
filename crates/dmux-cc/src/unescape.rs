@@ -12,7 +12,12 @@ pub fn unescape_output(data: &[u8]) -> Vec<u8> {
         let b = data[i];
         if b == b'\\' && i + 3 < data.len() {
             let (d1, d2, d3) = (data[i + 1], data[i + 2], data[i + 3]);
-            if d1.is_ascii_digit() && d1 < b'8' && d2.is_ascii_digit() && d2 < b'8' && d3.is_ascii_digit() && d3 < b'8'
+            if d1.is_ascii_digit()
+                && d1 < b'8'
+                && d2.is_ascii_digit()
+                && d2 < b'8'
+                && d3.is_ascii_digit()
+                && d3 < b'8'
             {
                 let val = ((d1 - b'0') as u16) * 64 + ((d2 - b'0') as u16) * 8 + (d3 - b'0') as u16;
                 out.push(val as u8);

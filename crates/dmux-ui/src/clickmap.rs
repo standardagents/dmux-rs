@@ -11,7 +11,9 @@ pub struct ClickMap<T> {
 
 impl<T> Default for ClickMap<T> {
     fn default() -> Self {
-        Self { regions: Vec::new() }
+        Self {
+            regions: Vec::new(),
+        }
     }
 }
 

@@ -132,9 +132,16 @@ mod tests {
 
         let mut store = SettingsStore::load(&dir, Some(&dir.join("proj")));
         assert_eq!(store.get_str("colorTheme"), Some("violet"));
-        store.set("colorTheme", Value::String("cyan".into()), SettingsScope::Project);
+        store.set(
+            "colorTheme",
+            Value::String("cyan".into()),
+            SettingsScope::Project,
+        );
         assert_eq!(store.get_str("colorTheme"), Some("cyan"));
-        assert_eq!(store.effective_scope("colorTheme"), Some(SettingsScope::Project));
+        assert_eq!(
+            store.effective_scope("colorTheme"),
+            Some(SettingsScope::Project)
+        );
 
         store.save(SettingsScope::Project).unwrap();
         store.set("minPaneWidth", Value::from(70u64), SettingsScope::Global);

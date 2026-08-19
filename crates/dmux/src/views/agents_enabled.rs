@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use dmux_compositor::{CellBuffer, Rect};
 use dmux_core::{SettingsScope, SettingsStore};
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState, PanelStyle};
+use dmux_ui::{
+    centered, draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState,
+    PanelStyle,
+};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 use crate::agents::AGENTS;
@@ -21,20 +24,36 @@ impl EnabledAgentsView {
         Self {
             settings,
             list: ListState::default(),
-            scope: if has_project { SettingsScope::Project } else { SettingsScope::Global },
+            scope: if has_project {
+                SettingsScope::Project
+            } else {
+                SettingsScope::Global
+            },
         }
     }
 
     fn enabled_set(&self) -> Vec<String> {
         let store = self.settings.lock().unwrap();
-        match store.get("enabledAgents").and_then(|v| v.as_array().cloned()) {
-            Some(list) => list.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-            None => AGENTS.iter().filter(|a| a.default_enabled).map(|a| a.id.to_string()).collect(),
+        match store
+            .get("enabledAgents")
+            .and_then(|v| v.as_array().cloned())
+        {
+            Some(list) => list
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            None => AGENTS
+                .iter()
+                .filter(|a| a.default_enabled)
+                .map(|a| a.id.to_string())
+                .collect(),
         }
     }
 
     fn toggle(&mut self, idx: usize) -> ViewResult {
-        let Some(def) = AGENTS.get(idx) else { return ViewResult::Stay };
+        let Some(def) = AGENTS.get(idx) else {
+            return ViewResult::Stay;
+        };
         let mut enabled = self.enabled_set();
         if let Some(pos) = enabled.iter().position(|id| id == def.id) {
             enabled.remove(pos);
@@ -43,7 +62,9 @@ impl EnabledAgentsView {
         }
         ViewResult::Cmd(AppCmd::SetSetting {
             key: "enabledAgents".into(),
-            value: serde_json::Value::Array(enabled.into_iter().map(serde_json::Value::String).collect()),
+            value: serde_json::Value::Array(
+                enabled.into_iter().map(serde_json::Value::String).collect(),
+            ),
             scope: self.scope,
         })
     }
@@ -61,12 +82,25 @@ impl View for EnabledAgentsView {
         let inner = draw_panel(buf, rect, "Enabled Agents", ctx.theme, PanelStyle::Modal);
         let enabled = self.enabled_set();
         self.list.clamp(AGENTS.len());
-        for (row, (i, def)) in AGENTS.iter().enumerate().take(inner.h.saturating_sub(1) as usize).enumerate() {
+        for (row, (i, def)) in AGENTS
+            .iter()
+            .enumerate()
+            .take(inner.h.saturating_sub(1) as usize)
+            .enumerate()
+        {
             let y = inner.y + row as u16;
             let on = enabled.iter().any(|id| id == def.id);
             let label = format!("{} {}  [{}]", draw_checkbox(on), def.name, def.short);
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(buf, row_rect, &label, "", ctx.theme, i == self.list.selected, true);
+            draw_kv_row(
+                buf,
+                row_rect,
+                &label,
+                "",
+                ctx.theme,
+                i == self.list.selected,
+                true,
+            );
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
         draw_hint_bar(

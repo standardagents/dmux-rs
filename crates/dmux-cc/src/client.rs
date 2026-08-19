@@ -46,7 +46,10 @@ impl Reply {
     }
 
     pub fn text_lines(&self) -> Vec<String> {
-        self.lines.iter().map(|l| String::from_utf8_lossy(l).into_owned()).collect()
+        self.lines
+            .iter()
+            .map(|l| String::from_utf8_lossy(l).into_owned())
+            .collect()
     }
 }
 
@@ -82,7 +85,10 @@ pub struct Client<T> {
 
 impl<T> Clone for Client<T> {
     fn clone(&self) -> Self {
-        Self { cmd_tx: self.cmd_tx.clone(), pending: self.pending.clone() }
+        Self {
+            cmd_tx: self.cmd_tx.clone(),
+            pending: self.pending.clone(),
+        }
     }
 }
 
@@ -113,9 +119,11 @@ impl<T> Client<T> {
 
         // The hello block (the attach command's own reply) arrives before any
         // command we send: pre-register an untagged slot for it.
-        let pending: Arc<Mutex<VecDeque<PendingSlot<T>>>> = Arc::new(Mutex::new(VecDeque::from([
-            PendingSlot { sent_at: Instant::now(), tag: None },
-        ])));
+        let pending: Arc<Mutex<VecDeque<PendingSlot<T>>>> =
+            Arc::new(Mutex::new(VecDeque::from([PendingSlot {
+                sent_at: Instant::now(),
+                tag: None,
+            }])));
 
         tokio::spawn(async move {
             let mut parser = Parser::new();
@@ -145,7 +153,9 @@ impl<T> Client<T> {
                     }
                 }
             }
-            let _ = event_tx.send(CcEvent::Exit(Some("stream closed".into()))).await;
+            let _ = event_tx
+                .send(CcEvent::Exit(Some("stream closed".into())))
+                .await;
         });
 
         tokio::spawn(async move {
@@ -164,7 +174,10 @@ impl<T> Client<T> {
             tracing::debug!("cc writer: channel closed");
         });
 
-        let router = ReplyRouter { pending: pending.clone(), current: None };
+        let router = ReplyRouter {
+            pending: pending.clone(),
+            current: None,
+        };
         Ok((Client { cmd_tx, pending }, event_rx, router, child))
     }
 
@@ -189,7 +202,10 @@ impl<T> Client<T> {
         // Hold the pending lock across the channel send so slot order always
         // matches write order even with concurrent senders.
         let mut pending = self.pending.lock().unwrap();
-        pending.push_back(PendingSlot { sent_at: Instant::now(), tag });
+        pending.push_back(PendingSlot {
+            sent_at: Instant::now(),
+            tag,
+        });
         self.cmd_tx.send(cmd).map_err(|_| {
             pending.pop_back();
             CcError::Closed
@@ -222,7 +238,11 @@ impl<T> ReplyRouter<T> {
                 let slot = self.pending.lock().unwrap().pop_front();
                 match slot {
                     Some(slot) => {
-                        let reply = Reply { lines, ok, rtt: slot.sent_at.elapsed() };
+                        let reply = Reply {
+                            lines,
+                            ok,
+                            rtt: slot.sent_at.elapsed(),
+                        };
                         match slot.tag {
                             Some(tag) => Routed::Reply(tag, reply),
                             None => Routed::Consumed,

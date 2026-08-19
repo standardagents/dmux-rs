@@ -7,11 +7,11 @@ use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 pub use termwiz::escape::csi::KittyKeyboardFlags;
+use termwiz::input::InputParser;
 pub use termwiz::input::{
     InputEvent, KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons,
     MouseEvent,
 };
-use termwiz::input::InputParser;
 use tokio::sync::mpsc;
 
 #[derive(Debug, thiserror::Error)]
@@ -64,7 +64,10 @@ impl HostTerminal {
             let _ = out.write_all(b"\x1b[>1u");
             let _ = out.flush();
         }
-        Ok(Self { caps, restored: false })
+        Ok(Self {
+            caps,
+            restored: false,
+        })
     }
 
     pub fn caps(&self) -> HostCaps {
@@ -112,7 +115,8 @@ fn is_tty(fd: i32) -> bool {
 pub fn term_size() -> (u16, u16) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     let fd = std::io::stdout().as_raw_fd();
-    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 && ws.ws_col > 0 && ws.ws_row > 0
+    {
         (ws.ws_col, ws.ws_row)
     } else {
         (80, 24)
@@ -178,7 +182,10 @@ fn find_kitty_reply(acc: &[u8]) -> bool {
     let mut i = 0;
     while let Some(pos) = acc[i..].windows(2).position(|w| w == b"[?") {
         let start = i + pos + 2;
-        let digits: usize = acc[start..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let digits: usize = acc[start..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
         if digits > 0 && acc.get(start + digits) == Some(&b'u') {
             return true;
         }
@@ -191,7 +198,11 @@ fn set_stdin_nonblocking(nonblocking: bool) {
     let fd = std::io::stdin().as_raw_fd();
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
-        let flags = if nonblocking { flags | libc::O_NONBLOCK } else { flags & !libc::O_NONBLOCK };
+        let flags = if nonblocking {
+            flags | libc::O_NONBLOCK
+        } else {
+            flags & !libc::O_NONBLOCK
+        };
         libc::fcntl(fd, libc::F_SETFL, flags);
     }
 }
@@ -253,7 +264,9 @@ pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
 pub fn spawn_resize_watcher() -> mpsc::Receiver<(u16, u16)> {
     let (tx, rx) = mpsc::channel::<(u16, u16)>(4);
     tokio::spawn(async move {
-        let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) else {
+        let Ok(mut sig) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+        else {
             return;
         };
         while sig.recv().await.is_some() {
