@@ -557,13 +557,18 @@ async fn run(
             let s = app.settings.lock().unwrap();
             s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
         };
+        // Test-ring cadence: super frequent by design — a fresh release
+        // should reach every head within about a minute.
         let poll_secs: u64 = std::env::var("DMUX_UPDATE_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(600);
+            .unwrap_or(60);
         tokio::spawn(async move {
+            // First check soon after boot so a stale install converges fast.
+            let mut delay = 15;
             loop {
-                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+                delay = poll_secs;
                 let r = repo.clone();
                 let tag = tokio::task::spawn_blocking(move || updater::latest_tag(&r)).await;
                 let tag = match tag {
