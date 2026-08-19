@@ -595,7 +595,11 @@ fn convert_cell(cell: &alacritty_terminal::term::cell::Cell, colors: &Colors) ->
     attrs.set(AttrFlags::WIDE_SPACER, f.contains(Flags::WIDE_CHAR_SPACER));
 
     Cell {
-        ch: cell.c,
+        // alacritty records a TAB as the literal '\t' character in the cell
+        // it lands on; tmux stores a blank there. A tab is cursor movement,
+        // not a glyph — and emitting the raw byte to the host would jump ITS
+        // cursor to the next tab stop, corrupting the frame (#46).
+        ch: if cell.c == '\t' { ' ' } else { cell.c },
         zerowidth: cell.zerowidth().map(|zw| zw.to_vec().into_boxed_slice()),
         fg: resolve_color(colors, cell.fg),
         bg: resolve_color(colors, cell.bg),
@@ -658,6 +662,22 @@ mod tests {
                 .any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "OSC 4 query must be answered, got {fx:?}"
         );
+    }
+
+    #[test]
+    fn tabs_render_as_blanks_not_glyphs() {
+        // #46: a program emitting TAB must leave blank cells, exactly like
+        // tmux's grid — never a literal '\t' glyph the emitter would then
+        // write to the host as a cursor jump.
+        let mut t = PaneTerm::new(20, 2, 0);
+        t.advance(b"a\tb");
+        let mut buf = dmux_compositor::CellBuffer::new(20, 2);
+        t.render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 20, 2));
+        assert_eq!(buf.get(0, 0).ch, 'a');
+        for col in 1..8 {
+            assert_eq!(buf.get(col, 0).ch, ' ', "col {col} must be blank");
+        }
+        assert_eq!(buf.get(8, 0).ch, 'b');
     }
 
     #[test]
