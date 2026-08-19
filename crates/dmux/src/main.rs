@@ -22,6 +22,7 @@ mod sounds;
 mod tracking;
 mod updater;
 mod verify;
+mod view_stack;
 mod views;
 mod welcome;
 
@@ -46,7 +47,7 @@ use sidebar::{key_action as sidebar_key_action, nav_targets as sidebar_nav_targe
 use sidebar::{SidebarKeyAction, SidebarNavTarget};
 use views::{
     AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
-    MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
+    MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -2989,28 +2990,6 @@ impl App {
         self.execute_cmd(AppCmd::FocusPane(next))
     }
 
-    fn apply_view_result(&mut self, result: ViewResult) -> bool {
-        match result {
-            ViewResult::Stay => true,
-            ViewResult::Close => {
-                self.views.pop();
-                self.dirty = true;
-                true
-            }
-            ViewResult::Push(view) => {
-                self.views.push(view);
-                self.dirty = true;
-                true
-            }
-            ViewResult::Cmd(cmd) => self.execute_cmd(cmd),
-            ViewResult::CloseAnd(cmd) => {
-                self.views.pop();
-                self.dirty = true;
-                self.execute_cmd(cmd)
-            }
-        }
-    }
-
     // ------------------------------------------------------------------
     // Commands
 
@@ -3638,7 +3617,7 @@ impl App {
             project_root,
         );
         if let Some(prompt) = prompt {
-            view = view.with_prompt(prompt);
+            view = view.with_issue_prompt(prompt);
         }
         self.views.push(Box::new(view));
         self.dirty = true;

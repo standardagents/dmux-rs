@@ -12,6 +12,22 @@ pub struct TextInput {
     pub cursor: usize,
     pub placeholder: String,
     scroll_cols: u16,
+    scroll_rows: u16,
+}
+
+#[derive(Debug)]
+struct WrappedGlyph {
+    text: String,
+    row: u16,
+    col: u16,
+}
+
+#[derive(Debug)]
+struct WrappedText {
+    glyphs: Vec<WrappedGlyph>,
+    cursor_row: u16,
+    cursor_col: u16,
+    rows: u16,
 }
 
 pub enum InputKey {
@@ -87,6 +103,16 @@ impl TextInput {
                 self.cursor = 0;
             }
         }
+    }
+
+    /// Number of visual rows used when wrapped within a field of `rect_width`.
+    pub fn wrapped_line_count(&self, rect_width: u16) -> u16 {
+        wrap_text(
+            &self.value,
+            self.cursor,
+            rect_width.saturating_sub(2).max(1),
+        )
+        .rows
     }
 
     /// Draw into `rect` (single row). Returns the screen column of the cursor
@@ -165,6 +191,125 @@ impl TextInput {
         }
         focused.then_some(cursor_screen).flatten()
     }
+
+    /// Draw a visually wrapped field. Explicit newlines start new rows, and
+    /// the vertical window follows the cursor when the content exceeds `rect`.
+    pub fn draw_wrapped(
+        &mut self,
+        buf: &mut CellBuffer,
+        rect: Rect,
+        theme: &Theme,
+        focused: bool,
+    ) -> Option<(u16, u16)> {
+        if rect.is_empty() {
+            return None;
+        }
+        let bg = if focused {
+            theme.bg_selected
+        } else {
+            theme.bg_raised
+        };
+        buf.fill(
+            rect,
+            &Cell {
+                bg,
+                ..Cell::default()
+            },
+        );
+
+        let content = Rect::new(rect.x + 1, rect.y, rect.w.saturating_sub(2), rect.h);
+        if content.is_empty() {
+            return None;
+        }
+        if self.value.is_empty() {
+            buf.draw_text(
+                content.x,
+                content.y,
+                &self.placeholder,
+                theme.text_faint,
+                bg,
+                AttrFlags::ITALIC,
+                content,
+            );
+            return focused.then_some((content.x, content.y));
+        }
+
+        let wrapped = wrap_text(&self.value, self.cursor, content.w);
+        if wrapped.cursor_row < self.scroll_rows {
+            self.scroll_rows = wrapped.cursor_row;
+        } else if wrapped.cursor_row >= self.scroll_rows + content.h {
+            self.scroll_rows = wrapped.cursor_row + 1 - content.h;
+        }
+        let visible_end = self.scroll_rows + content.h;
+        for glyph in wrapped
+            .glyphs
+            .iter()
+            .filter(|glyph| glyph.row >= self.scroll_rows && glyph.row < visible_end)
+        {
+            buf.draw_text(
+                content.x + glyph.col,
+                content.y + glyph.row - self.scroll_rows,
+                &glyph.text,
+                theme.text,
+                bg,
+                AttrFlags::empty(),
+                content,
+            );
+        }
+
+        focused.then_some((
+            content.x + wrapped.cursor_col.min(content.w.saturating_sub(1)),
+            content.y + wrapped.cursor_row - self.scroll_rows,
+        ))
+    }
+}
+
+fn wrap_text(value: &str, cursor: usize, width: u16) -> WrappedText {
+    let width = width.max(1);
+    let mut glyphs: Vec<WrappedGlyph> = Vec::new();
+    let mut row = 0u16;
+    let mut col = 0u16;
+    let mut cursor_position = None;
+
+    for (index, character) in value.char_indices() {
+        if index == cursor {
+            cursor_position = Some((row, col));
+        }
+        if character == '\n' {
+            row += 1;
+            col = 0;
+            continue;
+        }
+
+        let character_width = character.width().unwrap_or(0) as u16;
+        if character_width == 0 {
+            if let Some(glyph) = glyphs.last_mut() {
+                glyph.text.push(character);
+            }
+            continue;
+        }
+        if col > 0 && col.saturating_add(character_width) > width {
+            row += 1;
+            col = 0;
+        }
+        glyphs.push(WrappedGlyph {
+            text: character.to_string(),
+            row,
+            col,
+        });
+        col = col.saturating_add(character_width.min(width));
+        if col >= width {
+            row += 1;
+            col = 0;
+        }
+    }
+    let (cursor_row, cursor_col) = cursor_position.unwrap_or((row, col));
+    WrappedText {
+        glyphs,
+        cursor_row,
+        cursor_col,
+        rows: row.max(cursor_row) + 1,
+    }
 }
 
 #[cfg(test)]
@@ -193,5 +338,34 @@ mod tests {
         t.handle(InputKey::Right);
         t.handle(InputKey::Backspace);
         assert_eq!(t.value, "hllo");
+    }
+
+    #[test]
+    fn wrapped_input_respects_visual_wraps_and_newlines() {
+        let mut input = TextInput::with_value("alpha beta\ngamma");
+        let mut buf = CellBuffer::new(8, 3);
+        let theme = Theme::default();
+        let cursor = input.draw_wrapped(&mut buf, Rect::new(0, 0, 8, 3), &theme, true);
+
+        let row = |y| (0..8).map(|x| buf.get(x, y).ch).collect::<String>();
+        assert!(row(0).contains("alpha"));
+        assert!(row(1).contains("beta"));
+        assert!(row(2).contains("gamma"));
+        assert_eq!(cursor, Some((6, 2)));
+        assert_eq!(input.wrapped_line_count(8), 3);
+    }
+
+    #[test]
+    fn wrapped_input_scrolls_to_keep_the_cursor_visible() {
+        let mut input = TextInput::with_value("one\ntwo\nthree");
+        let mut buf = CellBuffer::new(10, 2);
+        let theme = Theme::default();
+        let cursor = input.draw_wrapped(&mut buf, Rect::new(0, 0, 10, 2), &theme, true);
+
+        assert_eq!(input.scroll_rows, 1);
+        assert_eq!(cursor, Some((6, 1)));
+        let row = |y| (0..10).map(|x| buf.get(x, y).ch).collect::<String>();
+        assert!(row(0).contains("two"));
+        assert!(row(1).contains("three"));
     }
 }

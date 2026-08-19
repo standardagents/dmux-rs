@@ -151,6 +151,8 @@ pub enum ViewResult {
     Cmd(AppCmd),
     /// Execute and close.
     CloseAnd(AppCmd),
+    /// Execute after closing this view and its parent flow view.
+    CloseTwoAnd(AppCmd),
 }
 
 /// Click targets across the whole composed frame. Views register

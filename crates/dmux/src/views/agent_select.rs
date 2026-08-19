@@ -15,6 +15,7 @@ const TAG_PERMISSION: u64 = 3;
 const TAG_ROW: u64 = 100;
 const TAG_MINUS: u64 = 200;
 const TAG_PLUS: u64 = 300;
+const MAX_PROMPT_ROWS: u16 = 6;
 
 const PERMISSION_MODES: [(&str, &str); 4] = [
     ("", "Agent default (ask)"),
@@ -39,6 +40,7 @@ pub struct AgentSelectView {
     focus: usize,
     permission_idx: usize,
     project_root: Option<String>,
+    close_parent_on_launch: bool,
 }
 
 impl AgentSelectView {
@@ -90,11 +92,14 @@ impl AgentSelectView {
             focus: 0,
             permission_idx,
             project_root,
+            close_parent_on_launch: false,
         }
     }
 
-    pub fn with_prompt(mut self, prompt: String) -> Self {
-        self.prompt.value = prompt;
+    pub fn with_issue_prompt(mut self, prompt: String) -> Self {
+        let placeholder = std::mem::take(&mut self.prompt.placeholder);
+        self.prompt = TextInput::with_value(prompt).placeholder(placeholder);
+        self.close_parent_on_launch = true;
         self
     }
 
@@ -121,16 +126,29 @@ impl AgentSelectView {
             .filter(|r| r.count > 0)
             .map(|r| (r.def.id.to_string(), r.count))
             .collect();
-        ViewResult::CloseAnd(AppCmd::LaunchAgents {
+        let command = AppCmd::LaunchAgents {
             prompt: self.prompt.value.trim().to_string(),
             allocations,
             mode: PERMISSION_MODES[self.permission_idx].0.to_string(),
             project_root: self.project_root.clone(),
-        })
+        };
+        if self.close_parent_on_launch {
+            ViewResult::CloseTwoAnd(command)
+        } else {
+            ViewResult::CloseAnd(command)
+        }
     }
 
     fn zones(&self) -> usize {
         self.rows.len() + 3
+    }
+
+    fn prompt_rows(&self, panel_width: u16, max_height: u16) -> u16 {
+        let capacity = max_height.saturating_sub(self.rows.len() as u16 + 9).max(1);
+        self.prompt
+            .wrapped_line_count(panel_width.saturating_sub(4))
+            .min(MAX_PROMPT_ROWS)
+            .min(capacity)
     }
 }
 
@@ -142,8 +160,11 @@ impl View for AgentSelectView {
         ctx: &ViewCtx<'_>,
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let h = (self.rows.len() as u16 + 10).min(area.h.saturating_sub(2));
-        let rect = centered(area, area.w.min(58), h);
+        let panel_width = area.w.min(58);
+        let max_h = area.h.saturating_sub(2);
+        let prompt_rows = self.prompt_rows(panel_width, max_h);
+        let h = (self.rows.len() as u16 + prompt_rows + 9).min(max_h);
+        let rect = centered(area, panel_width, h);
         let inner = draw_panel(buf, rect, t("agent.title"), ctx.theme, PanelStyle::Modal);
         let bg = ctx.theme.bg_raised;
 
@@ -156,22 +177,22 @@ impl View for AgentSelectView {
             AttrFlags::empty(),
             inner,
         );
-        let prompt_rect = Rect::new(inner.x, inner.y + 1, inner.w, 1);
+        let prompt_rect = Rect::new(inner.x, inner.y + 1, inner.w, prompt_rows);
         let cursor = self
             .prompt
-            .draw(buf, prompt_rect, ctx.theme, self.focus == 0);
+            .draw_wrapped(buf, prompt_rect, ctx.theme, self.focus == 0);
         clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
 
         buf.draw_text(
             inner.x + 1,
-            inner.y + 3,
+            inner.y + prompt_rows + 2,
             t("agent.allocate"),
             ctx.theme.text_dim,
             bg,
             AttrFlags::empty(),
             inner,
         );
-        let rows_y = inner.y + 4;
+        let rows_y = inner.y + prompt_rows + 3;
         for (i, row) in self.rows.iter().enumerate() {
             let y = rows_y + i as u16;
             if y >= inner.bottom().saturating_sub(3) {
@@ -422,6 +443,7 @@ impl View for AgentSelectView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dmux_host::Modifiers;
 
     #[test]
     fn launch_retains_the_sidebar_project_root() {
@@ -440,5 +462,62 @@ mod tests {
             panic!("expected an agent launch command");
         };
         assert_eq!(project_root.as_deref(), Some("/projects/empty"));
+    }
+
+    #[test]
+    fn issue_launch_closes_the_chooser_and_issue_browser() {
+        let agent = &AGENTS[0];
+        let installed = std::collections::HashSet::from([agent.id]);
+        let view = AgentSelectView::new(
+            &installed,
+            &[agent.id.to_string()],
+            Some(agent.id),
+            "",
+            Some("/projects/coordinator".into()),
+        )
+        .with_issue_prompt("Work on owner/repo#1".into());
+
+        assert!(matches!(
+            view.launch(),
+            ViewResult::CloseTwoAnd(AppCmd::LaunchAgents { .. })
+        ));
+    }
+
+    #[test]
+    fn issue_prompt_allocates_multiple_visual_rows() {
+        let agent = &AGENTS[0];
+        let installed = std::collections::HashSet::from([agent.id]);
+        let view = AgentSelectView::new(
+            &installed,
+            &[agent.id.to_string()],
+            Some(agent.id),
+            "",
+            None,
+        )
+        .with_issue_prompt(
+            "Work on these assigned issues:\n\n- owner/repo#123: A long issue title that wraps\n  https://github.com/owner/repo/issues/123".into(),
+        );
+        assert!(view.prompt_rows(58, 28) > 1);
+        assert_eq!(view.prompt.cursor, view.prompt.value.len());
+    }
+
+    #[test]
+    fn cancelling_issue_launch_returns_to_the_issue_browser() {
+        let agent = &AGENTS[0];
+        let installed = std::collections::HashSet::from([agent.id]);
+        let mut view = AgentSelectView::new(
+            &installed,
+            &[agent.id.to_string()],
+            Some(agent.id),
+            "",
+            None,
+        )
+        .with_issue_prompt("Work on owner/repo#1".into());
+        let escape = KeyEvent {
+            key: KeyCode::Escape,
+            modifiers: Modifiers::NONE,
+        };
+
+        assert!(matches!(view.on_key(&escape), ViewResult::Close));
     }
 }
