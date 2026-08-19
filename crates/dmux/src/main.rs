@@ -2205,7 +2205,15 @@ impl App {
                         }
                     }
                 }
-                Some(ClickTarget::Overlay(_)) | None => {}
+                Some(ClickTarget::Overlay(_)) | None => {
+                    // A click on empty sidebar background still hands the
+                    // sidebar the keyboard (#15) — the whole strip is the
+                    // input area, not just its rows.
+                    if target.is_none() && col <= self.layout.sidebar.right() && !self.sidebar_focused {
+                        self.sidebar_focused = true;
+                        self.dirty = true;
+                    }
+                }
             },
             MouseKind::LeftHeld | MouseKind::Release => {}
         }

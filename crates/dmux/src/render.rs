@@ -100,16 +100,19 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     if area.is_empty() {
         return;
     }
-    buf.fill(area, &Cell { bg: t.bg, ..Cell::default() });
+    // Focused sidebar reads as the active input area: the whole surface
+    // lifts to the raised background, not just the selected row (#15).
+    let sb_bg = sidebar_surface(t, scene.sidebar_focused);
+    buf.fill(area, &Cell { bg: sb_bg, ..Cell::default() });
 
     // Header: session name between braille fills.
     let header = format!("⣿⣿ {} ", truncate(scene.session_name, area.w.saturating_sub(6) as usize));
-    let end = buf.draw_text(area.x, 0, &header, t.accent, t.bg, AttrFlags::BOLD, area);
+    let end = buf.draw_text(area.x, 0, &header, t.accent, sb_bg, AttrFlags::BOLD, area);
     let mut fill = String::new();
     for _ in end..area.right() {
         fill.push('⣿');
     }
-    buf.draw_text(end, 0, &fill, t.accent, t.bg, AttrFlags::BOLD, area);
+    buf.draw_text(end, 0, &fill, t.accent, sb_bg, AttrFlags::BOLD, area);
 
     // Project groups (TS parity: main project first, per-group colors,
     // per-group creation actions, blank spacing between groups).
@@ -122,12 +125,12 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         }
         if multi {
             let text = format!("⣿ {} ", truncate(&group.name, area.w.saturating_sub(8) as usize));
-            let end = buf.draw_text(area.x, row, &text, group.accent, t.bg, AttrFlags::BOLD, area);
+            let end = buf.draw_text(area.x, row, &text, group.accent, sb_bg, AttrFlags::BOLD, area);
             let mut fill = String::new();
             for _ in end..area.right() {
                 fill.push('⣿');
             }
-            buf.draw_text(end, row, &fill, group.accent_soft, t.bg, AttrFlags::empty(), area);
+            buf.draw_text(end, row, &fill, group.accent_soft, sb_bg, AttrFlags::empty(), area);
             row += 1;
         }
         for &i in &group.pane_indices {
@@ -158,7 +161,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 (t.text_dim, AttrFlags::empty())
             };
-            let bg = if selected { t.bg_selected } else { t.bg };
+            let bg = if selected { t.bg_selected } else { sb_bg };
             let row_rect = Rect::new(area.x, row, area.w, 1);
             if selected {
                 buf.fill(row_rect, &Cell { bg, ..Cell::default() });
@@ -184,17 +187,13 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         // Per-project creation actions, right-aligned like the TS sidebar;
         // the active project shows its hotkeys.
         if row < bottom_limit {
-            let (na, term) = if group.active {
-                ("[n]ew agent".to_string(), "[t]erminal".to_string())
-            } else {
-                ("new agent".to_string(), "terminal".to_string())
-            };
+            let (na, term) = action_labels(group.active, scene.sidebar_focused);
             let total = na.chars().count() as u16 + term.chars().count() as u16 + 2;
             let x0 = area.right().saturating_sub(total + 1);
             let color = if group.active { group.accent } else { t.text_faint };
-            let ax = buf.draw_text(x0, row, &na, color, t.bg, AttrFlags::empty(), area);
+            let ax = buf.draw_text(x0, row, &na, color, sb_bg, AttrFlags::empty(), area);
             clicks.add(Rect::new(x0, row, ax - x0, 1), ClickTarget::SidebarGroupNewAgent(gi));
-            let tx = buf.draw_text(ax + 2, row, &term, color, t.bg, AttrFlags::empty(), area);
+            let tx = buf.draw_text(ax + 2, row, &term, color, sb_bg, AttrFlags::empty(), area);
             clicks.add(Rect::new(ax + 2, row, tx - ax - 2, 1), ClickTarget::SidebarGroupNewTerminal(gi));
             row += 1;
         }
@@ -208,28 +207,28 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     let border_x = area.right();
     if border_x < buf.cols() {
         for y in 0..area.bottom() {
-            buf.set(border_x, y, Cell { ch: '│', fg: t.border, bg: t.bg, ..Cell::default() });
+            buf.set(border_x, y, Cell { ch: '│', fg: t.border, bg: sb_bg, ..Cell::default() });
         }
     }
 
     // Action rows: always-visible click targets so nothing needs a manual.
     let actions_row = area.bottom().saturating_sub(4);
-    let x = buf.draw_text(area.x + 1, actions_row, "+ agent", t.accent, t.bg, AttrFlags::BOLD, area);
+    let x = buf.draw_text(area.x + 1, actions_row, "+ agent", t.accent, sb_bg, AttrFlags::BOLD, area);
     clicks.add(Rect::new(area.x + 1, actions_row, x - area.x - 1, 1), ClickTarget::SidebarNewAgent);
-    let x2 = buf.draw_text(x + 2, actions_row, "+ terminal", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let x2 = buf.draw_text(x + 2, actions_row, "+ terminal", t.text_dim, sb_bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(x + 2, actions_row, x2 - x - 2, 1), ClickTarget::SidebarNewTerminal);
-    let x3 = buf.draw_text(x2 + 2, actions_row, "+ proj", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let x3 = buf.draw_text(x2 + 2, actions_row, "+ proj", t.text_dim, sb_bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(x2 + 2, actions_row, x3 - x2 - 2, 1), ClickTarget::SidebarNewProject);
 
     let tools_row = area.bottom().saturating_sub(3);
-    let sx = buf.draw_text(area.x + 1, tools_row, "⚙ settings", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let sx = buf.draw_text(area.x + 1, tools_row, "⚙ settings", t.text_dim, sb_bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(area.x + 1, tools_row, sx - area.x - 1, 1), ClickTarget::SidebarSettings);
-    let hx = buf.draw_text(sx + 2, tools_row, "? shortcuts", t.text_dim, t.bg, AttrFlags::empty(), area);
+    let hx = buf.draw_text(sx + 2, tools_row, "? shortcuts", t.text_dim, sb_bg, AttrFlags::empty(), area);
     clicks.add(Rect::new(sx + 2, tools_row, hx - sx - 2, 1), ClickTarget::SidebarHelp);
 
     // Build + auto-filed issues (first-party diagnostics ring).
     let ver_row = area.bottom().saturating_sub(2);
-    let vx = buf.draw_text(area.x + 1, ver_row, scene.version, t.text_faint, t.bg, AttrFlags::empty(), area);
+    let vx = buf.draw_text(area.x + 1, ver_row, scene.version, t.text_faint, sb_bg, AttrFlags::empty(), area);
     let (total, fresh) = scene.issues;
     if total > 0 {
         let label = if fresh > 0 {
@@ -238,7 +237,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             format!(" · 🐛 {total}")
         };
         let color = if fresh > 0 { t.warn } else { t.text_faint };
-        let ix = buf.draw_text(vx, ver_row, &label, color, t.bg, AttrFlags::empty(), area);
+        let ix = buf.draw_text(vx, ver_row, &label, color, sb_bg, AttrFlags::empty(), area);
         clicks.add(Rect::new(vx, ver_row, ix.saturating_sub(vx), 1), ClickTarget::SidebarIssues);
     }
 
@@ -250,7 +249,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         scene.status_line
     };
     let footer_fg = if scene.leader_armed { t.warn } else { t.text_faint };
-    buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, t.bg, AttrFlags::empty(), area);
+    buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, sb_bg, AttrFlags::empty(), area);
 }
 
 /// Title-bar colors: focus (activation) and sidebar selection are distinct
@@ -269,6 +268,22 @@ fn title_bar_style(
         (accent, theme.bg_selected)
     } else {
         (accent, theme.bg_raised)
+    }
+}
+
+/// The sidebar's base surface: raised while it owns the keyboard so focus
+/// is unmistakable (#15), the terminal default otherwise (#6).
+fn sidebar_surface(theme: &Theme, focused: bool) -> Color {
+    if focused { theme.bg_raised } else { theme.bg }
+}
+
+/// Project action labels: bracketed hotkeys only while the sidebar has the
+/// keyboard (#15) — hotkeys aren't live otherwise.
+fn action_labels(group_active: bool, sidebar_focused: bool) -> (String, String) {
+    if group_active && sidebar_focused {
+        ("[n]ew agent".to_string(), "[t]erminal".to_string())
+    } else {
+        ("new agent".to_string(), "terminal".to_string())
     }
 }
 
@@ -381,6 +396,23 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_focus_states_render_distinctly() {
+        // #15: the whole sidebar surface lifts while it owns the keyboard,
+        // and the action labels advertise hotkeys only then.
+        let theme = Theme::named("violet");
+        assert_ne!(sidebar_surface(&theme, true), sidebar_surface(&theme, false));
+        assert_eq!(sidebar_surface(&theme, true), theme.bg_raised);
+        assert_eq!(sidebar_surface(&theme, false), theme.bg);
+        assert_eq!(
+            action_labels(true, true),
+            ("[n]ew agent".to_string(), "[t]erminal".to_string())
+        );
+        // Unfocused (or inactive group): plain labels — hotkeys aren't live.
+        assert_eq!(action_labels(true, false), ("new agent".to_string(), "terminal".to_string()));
+        assert_eq!(action_labels(false, true), ("new agent".to_string(), "terminal".to_string()));
+    }
 
     #[test]
     fn selection_and_focus_are_distinct_states() {
