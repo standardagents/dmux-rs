@@ -119,18 +119,11 @@ impl LogicalPane {
         let count = reply.lines.len();
         for (i, line) in reply.lines.iter().enumerate() {
             seed.extend_from_slice(line);
-            // tmux trims trailing background-colored blanks from captures and
-            // instead leaves their SGR open at end-of-line. Materialize that
-            // hint with EL: erase-to-end BCE-fills the rest of the row with
-            // the open background, so full-width bands (agent composer rows)
-            // survive the seed instead of dying at the last glyph. Only for
-            // non-empty lines: an entirely empty line is tmux's serialization
-            // of a default-blank row even when a background is still open
-            // (its lazy format never resets on rows it paints nothing on),
-            // so an EL there would band rows tmux means to be blank.
-            if !line.is_empty() {
-                seed.extend_from_slice(b"\x1b[K");
-            }
+            // No trailing-cell reconstruction here: the capture itself is
+            // faithful because seed_command uses -N (background-filled blanks
+            // arrive as real spaces under their SGR). Synthesizing an EL from
+            // the open SGR instead would band rows whose trailing cells are
+            // genuinely default.
             // capture-pane emits one reply line per screen row; rejoin with
             // CRLF except after the last row so the cursor row stays correct.
             if i + 1 < count {
@@ -150,12 +143,18 @@ impl LogicalPane {
     }
 
     pub fn seed_command(&self) -> String {
+        // -N (preserve trailing spaces) is what keeps background runs alive:
+        // BCE-filled cells (agent composer bands, banded padding rows)
+        // serialize as real spaces under the open SGR. Never add -J here —
+        // it implies -T, which throws exactly those trailing positions away
+        // (and joining is unnecessary anyway: our emulator is sized to the
+        // tmux pane, so wrapped rows land identically).
         if self.alt_screen {
             // Alt-screen apps (vim, TUIs) have no meaningful history; capture
             // just the visible screen so the seed matches what tmux shows.
-            format!("capture-pane -epqJ -t {}", self.tmux_pane)
+            format!("capture-pane -epqN -t {}", self.tmux_pane)
         } else {
-            format!("capture-pane -epqJ -t {} -S -{}", self.tmux_pane, SEED_HISTORY_LINES)
+            format!("capture-pane -epqN -t {} -S -{}", self.tmux_pane, SEED_HISTORY_LINES)
         }
     }
 
@@ -323,28 +322,39 @@ mod tests {
     }
 
     #[test]
-    fn seed_restores_trailing_background_bands() {
-        // tmux capture trims trailing bg-colored blanks, leaving the SGR open
-        // at end-of-line; the seed must BCE-fill the rest of the row (agent
-        // composer bands) instead of letting the band die at the last glyph.
-        let reply = reply_of(&["%5\u{1}@0\u{1}p__dmux__p\u{1}30\u{1}4\u{1}0\u{1}zsh\u{1}w"]);
+    fn seed_restores_background_bands_from_dash_n_capture() {
+        // seed_command captures with -N, so BCE-filled cells (composer bands,
+        // banded padding rows) arrive as real spaces under their SGR. The
+        // replay must reproduce them exactly — and must NOT invent bands on
+        // rows whose trailing cells the capture left out (default blanks).
+        let reply = reply_of(&["%5\u{1}@0\u{1}p__dmux__p\u{1}30\u{1}5\u{1}0\u{1}zsh\u{1}w"]);
         let infos = parse_pane_list(&reply);
         let mut pane = adopt_panes(None, &infos).remove(0);
         pane.begin_reseed();
-        let seed = reply_of(&["\u{1b}[48;5;236m> say hello to me", "", "\u{1b}[49mplain row"]);
+        let band_pad = format!("\u{1b}[48;5;236m{}", " ".repeat(30));
+        let band_text = format!("> say hello to me{}", " ".repeat(13));
+        let seed = reply_of(&[
+            &band_pad,             // banded blank padding row (row 0)
+            &band_text,            // banded text row, SGR carried over (row 1)
+            "",                    // default blank row (row 2)
+            "\u{1b}[49mplain\u{1b}[48;5;236mX", // row 3: default text, one banded X, rest default
+        ]);
         pane.finish_reseed(&seed, None);
 
-        let mut buf = dmux_compositor::CellBuffer::new(30, 4);
-        pane.term.render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 30, 4));
-        // Band row: last column still carries the open background.
-        assert_eq!(buf.get(29, 0).bg, dmux_compositor::Color::Indexed(236), "band must span the full row");
-        assert_eq!(buf.get(5, 0).bg, dmux_compositor::Color::Indexed(236));
-        // The empty capture line is a default-blank row despite the still-open
-        // background (tmux's lazy serialization): it must NOT get banded.
-        assert_eq!(buf.get(0, 1).bg, dmux_compositor::Color::Default, "blank row must not be banded");
-        assert_eq!(buf.get(29, 1).bg, dmux_compositor::Color::Default);
-        // Reset row stays default too.
-        assert_eq!(buf.get(29, 2).bg, dmux_compositor::Color::Default, "band must not bleed past its row");
+        let mut buf = dmux_compositor::CellBuffer::new(30, 5);
+        pane.term.render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 30, 5));
+        let band = dmux_compositor::Color::Indexed(236);
+        let default = dmux_compositor::Color::Default;
+        // Padding row and text row: banded edge to edge.
+        assert_eq!(buf.get(0, 0).bg, band, "padding row must be banded");
+        assert_eq!(buf.get(29, 0).bg, band, "padding row must span the full width");
+        assert_eq!(buf.get(5, 1).bg, band);
+        assert_eq!(buf.get(29, 1).bg, band, "text row band must span the full width");
+        // Default blank row stays default despite band rows around it.
+        assert_eq!(buf.get(29, 2).bg, default, "blank row must not be banded");
+        // Open SGR at end-of-line must not band unused trailing cells.
+        assert_eq!(buf.get(5, 3).bg, band, "the X itself is banded");
+        assert_eq!(buf.get(29, 3).bg, default, "unused trailing cells stay default");
     }
 
     #[test]
