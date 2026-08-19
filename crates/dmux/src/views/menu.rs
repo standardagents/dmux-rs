@@ -31,17 +31,26 @@ pub struct MenuView {
     list: ListState,
     /// Anchor cell for a row-attached flyout (#14); None = centered modal.
     anchor: Option<(u16, u16)>,
+    /// Originating sidebar row, kept undimmed by the scrim (#16).
+    source: Option<Rect>,
 }
 
 impl MenuView {
     pub fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
-        Self { title: title.into(), items, list: ListState::default(), anchor: None }
+        Self { title: title.into(), items, list: ListState::default(), anchor: None, source: None }
     }
 
     /// Render as a flyout whose top-left sits at (x, y), clamped to the
     /// terminal so edge rows stay fully usable.
     pub fn anchored(mut self, x: u16, y: u16) -> Self {
         self.anchor = Some((x, y));
+        self
+    }
+
+    /// The sidebar row this flyout belongs to — excluded from the scrim so
+    /// row and menu read as one connected control (#16).
+    pub fn with_source(mut self, row: Rect) -> Self {
+        self.source = Some(row);
         self
     }
 
@@ -173,6 +182,10 @@ impl View for MenuView {
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.items.len());
         ViewResult::Stay
+    }
+
+    fn scrim_exception(&self) -> Option<Rect> {
+        self.source
     }
 }
 

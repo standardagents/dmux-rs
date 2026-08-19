@@ -13,9 +13,21 @@ pub enum PanelStyle {
 /// Dim everything under an overlay so the modal reads as a layer. Cheap trick:
 /// repaint every cell's colors to the faint ramp, keeping glyphs.
 pub fn draw_scrim(buf: &mut CellBuffer, area: Rect) {
+    draw_scrim_except(buf, area, None);
+}
+
+/// `draw_scrim` with a carve-out: cells inside `except` keep their styling —
+/// used to keep a flyout's originating sidebar row visually connected to the
+/// menu beside it while the rest of the scene dims.
+pub fn draw_scrim_except(buf: &mut CellBuffer, area: Rect, except: Option<Rect>) {
     let clip = area.intersect(&buf.area());
     for row in clip.y..clip.bottom() {
         for col in clip.x..clip.right() {
+            if let Some(keep) = except {
+                if col >= keep.x && col < keep.right() && row >= keep.y && row < keep.bottom() {
+                    continue;
+                }
+            }
             let mut cell = buf.get(col, row).clone();
             cell.fg = Color::Indexed(238);
             cell.bg = Color::Indexed(232);
@@ -69,4 +81,32 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.w);
     let h = h.min(area.h);
     Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
+}
+
+#[cfg(test)]
+mod scrim_tests {
+    use super::*;
+
+    #[test]
+    fn scrim_exception_keeps_the_row_bright() {
+        // #16: the flyout's originating sidebar row stays undimmed.
+        let mut buf = CellBuffer::new(20, 5);
+        let styled = crate::theme::Theme::named("violet");
+        buf.fill(buf.area(), &dmux_compositor::Cell { fg: styled.text, bg: styled.bg_selected, ..Default::default() });
+        let keep = Rect::new(0, 2, 20, 1);
+        let area = buf.area();
+        draw_scrim_except(&mut buf, area, Some(keep));
+        // Inside the carve-out: original colors.
+        assert_eq!(buf.get(5, 2).bg, styled.bg_selected);
+        assert_eq!(buf.get(5, 2).fg, styled.text);
+        // Outside: dimmed to the scrim ramp.
+        assert_eq!(buf.get(5, 1).bg, Color::Indexed(232));
+        assert_eq!(buf.get(5, 3).fg, Color::Indexed(238));
+        // No exception: everything dims (existing behavior unchanged).
+        let mut buf2 = CellBuffer::new(4, 2);
+        let area2 = buf2.area();
+        buf2.fill(area2, &dmux_compositor::Cell { bg: styled.bg_selected, ..Default::default() });
+        draw_scrim(&mut buf2, area2);
+        assert_eq!(buf2.get(0, 0).bg, Color::Indexed(232));
+    }
 }

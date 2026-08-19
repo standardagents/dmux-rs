@@ -36,7 +36,7 @@ use dmux_core::{
     SettingsStore,
 };
 use dmux_host::{HostTerminal, InputEvent};
-use dmux_ui::{draw_scrim, ClickMap, Theme};
+use dmux_ui::{ClickMap, Theme};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
 use views::{
@@ -2333,7 +2333,9 @@ impl App {
                 if let Some(p) = self.panes.get(idx) {
                     let title = p.display_title().to_string();
                     let items = self.pane_menu_items(idx);
-                    self.views.push(Box::new(MenuView::new(title, items).anchored(x, y)));
+                    let row = Rect::new(self.layout.sidebar.x, y, self.layout.sidebar.w, 1);
+                    self.views
+                        .push(Box::new(MenuView::new(title, items).anchored(x, y).with_source(row)));
                     self.dirty = true;
                 }
             }
@@ -3487,7 +3489,10 @@ impl App {
         self.view_cursor = None;
         if !self.views.is_empty() {
             let area = self.back.area();
-            draw_scrim(&mut self.back, area);
+            // The top view may carve out its source row (#16 — anchored
+            // flyouts keep their sidebar row undimmed).
+            let except = self.views.last().and_then(|v| v.scrim_exception());
+            dmux_ui::draw_scrim_except(&mut self.back, area, except);
             let ctx = ViewCtx { theme: &self.theme, anim: self.anim };
             let full = Rect::new(0, 0, self.size.0, self.size.1);
             let last = self.views.len() - 1;
