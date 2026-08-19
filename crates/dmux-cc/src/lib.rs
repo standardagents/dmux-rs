@@ -14,6 +14,7 @@ pub use command::quote_arg;
 pub use event::{CcEvent, PaneId, SessionId, WindowId};
 pub use parse::Parser;
 pub use unescape::unescape_output;
+pub use command::command_is_line_safe;
 
 #[cfg(feature = "tokio-adapter")]
 pub use client::{CcError, Client, Reply, ReplyRouter, Routed};

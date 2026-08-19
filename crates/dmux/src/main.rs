@@ -844,9 +844,18 @@ impl App {
         if let Err(err) = self.host.write_frame(osc.as_bytes()) {
             tracing::warn!(%err, "clipboard forward failed");
         }
-        let _ = self
-            .client
-            .send(format!("set-buffer -b dmux {}", dmux_cc::quote_arg(text)));
+        // Selected text routinely holds newlines and quotes; inlining it in
+        // a control-mode command split the line and desynced the session
+        // (#18). load-buffer from a temp file is byte-exact and quote-proof.
+        let path = std::env::temp_dir().join(format!("dmux-rs-clip-{}", std::process::id()));
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                let _ = self
+                    .client
+                    .send(format!("load-buffer -b dmux {}", dmux_cc::quote_arg(&path.to_string_lossy())));
+            }
+            Err(err) => tracing::warn!(%err, "clipboard buffer write failed"),
+        }
     }
 
     fn toast(&mut self, msg: impl Into<String>) {

@@ -20,6 +20,8 @@ pub enum CcError {
     Closed,
     #[error("control-mode protocol desync: {0}")]
     Desync(String),
+    #[error("command contains an embedded line break")]
+    UnsafeCommand,
 }
 
 /// A completed command reply: payload lines between `%begin` and `%end`/`%error`.
@@ -166,6 +168,12 @@ impl<T> Client<T> {
     }
 
     fn send_inner(&self, cmd: String, tag: Option<T>) -> Result<(), CcError> {
+        // A command with an embedded line break would desync the whole
+        // control stream (#18) — refuse it loudly instead of dying quietly.
+        if !crate::command_is_line_safe(&cmd) {
+            tracing::warn!(cmd = %cmd.escape_default(), "dropped control-mode command with embedded line break");
+            return Err(CcError::UnsafeCommand);
+        }
         // Hold the pending lock across the channel send so slot order always
         // matches write order even with concurrent senders.
         let mut pending = self.pending.lock().unwrap();

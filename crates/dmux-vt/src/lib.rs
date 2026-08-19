@@ -708,3 +708,34 @@ mod tests {
         assert_eq!(buf.get(0, 0).ch, ' ');
     }
 }
+
+#[cfg(test)]
+mod selection_safety_tests {
+    use super::*;
+    use dmux_compositor::{CellBuffer, Rect};
+
+    #[test]
+    fn selection_beyond_grid_is_safe() {
+        // #18: the on-screen rect can be larger than the tmux pane, so drag
+        // coordinates can exceed the emulator grid. Out-of-grid points must
+        // clamp, not panic, through every selection consumer.
+        let mut t = PaneTerm::new(10, 5, 100);
+        t.advance(b"hello\r\nworld\r\nthird\r\nfourth\r\nfifth\r\nsixth\r\n");
+        t.selection_start(3, 2, false);
+        t.selection_update(50, 200);
+        let _ = t.selection_text();
+        let mut buf = CellBuffer::new(10, 5);
+        t.render_into(&mut buf, Rect::new(0, 0, 10, 5));
+        // Scrolled view: points still clamp inside history bounds.
+        t.scroll_view(3);
+        t.selection_start(0, 0, false);
+        t.selection_update(9, 4, );
+        let _ = t.selection_text();
+        // Word-select (semantic) at an out-of-grid point.
+        t.selection_clear();
+        t.selection_start(50, 200, true);
+        t.selection_update(60, 250);
+        let _ = t.selection_text();
+        t.render_into(&mut buf, Rect::new(0, 0, 10, 5));
+    }
+}
