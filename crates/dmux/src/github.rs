@@ -145,9 +145,7 @@ pub fn parse_remote_url(remote: &str) -> Option<RepoRef> {
 
 /// Retrieve open issues using the user's existing gh authentication.
 pub fn fetch_open_issues(repo: &RepoRef) -> Result<Vec<GitHubIssue>, String> {
-    let endpoint = format!("repos/{}/issues?state=open&per_page=100", repo.slug);
-    let output = Command::new("gh")
-        .args(["api", "--paginate", "--slurp", &endpoint])
+    let output = issue_api_command(repo)
         .output()
         .map_err(|error| format!("could not run gh: {error}"))?;
 
@@ -165,35 +163,27 @@ pub fn fetch_open_issues(repo: &RepoRef) -> Result<Vec<GitHubIssue>, String> {
     parse_issues_json(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Parse the array returned by gh api --paginate --slurp.
+/// Parse the sequential JSON arrays returned by gh api --paginate.
 ///
 /// GitHub returns pull requests from this endpoint as issue-shaped objects.
 /// Their pull_request field identifies them, so those entries are excluded
 /// from the issue browser.
 pub fn parse_issues_json(json: &str) -> Result<Vec<GitHubIssue>, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|error| format!("invalid issue JSON: {error}"))?;
-    let entries = match value {
-        Value::Array(pages) => pages,
-        _ => return Err("issue JSON must be an array".to_owned()),
-    };
-
     let mut issues = Vec::new();
-    for page_or_issue in entries {
-        match page_or_issue {
-            Value::Array(page) => {
-                for entry in page {
-                    if let Some(issue) = parse_issue(entry)? {
-                        issues.push(issue);
-                    }
-                }
-            }
-            entry => {
-                if let Some(issue) = parse_issue(entry)? {
-                    issues.push(issue);
-                }
-            }
+    let mut pages = serde_json::Deserializer::from_str(json).into_iter::<Value>();
+    let mut found_page = false;
+    for page in &mut pages {
+        found_page = true;
+        let page = page.map_err(|error| format!("invalid issue JSON: {error}"))?;
+        let Value::Array(entries) = page else {
+            return Err("issue JSON pages must be arrays".to_owned());
+        };
+        for entry in entries {
+            parse_issue_entry(entry, &mut issues)?;
         }
+    }
+    if !found_page {
+        return Err("issue JSON must contain an array".to_owned());
     }
     Ok(issues)
 }
@@ -234,6 +224,24 @@ fn parse_issue(value: Value) -> Result<Option<GitHubIssue>, String> {
         assignees,
         updated_at,
     }))
+}
+
+fn issue_api_command(repo: &RepoRef) -> Command {
+    let endpoint = format!("repos/{}/issues?state=open&per_page=100", repo.slug);
+    let mut command = Command::new("gh");
+    command.args(["api", "--paginate"]).arg(endpoint);
+    command
+}
+
+fn parse_issue_entry(value: Value, issues: &mut Vec<GitHubIssue>) -> Result<(), String> {
+    if let Value::Array(entries) = value {
+        for entry in entries {
+            parse_issue_entry(entry, issues)?;
+        }
+    } else if let Some(issue) = parse_issue(value)? {
+        issues.push(issue);
+    }
+    Ok(())
 }
 
 fn required_string(object: &serde_json::Map<String, Value>, field: &str) -> Result<String, String> {
@@ -363,6 +371,35 @@ mod tests {
                 assignees: vec!["andrew-boyd".to_owned()],
                 updated_at: "2026-08-19T20:00:00Z".to_owned(),
             }])
+        );
+    }
+
+    #[test]
+    fn parses_sequential_paginated_arrays() {
+        let json = r#"[{"number":1,"title":"First","html_url":"https://github.com/o/r/issues/1","labels":[],"assignees":[],"updated_at":"today"}]
+[{"number":2,"title":"Second","html_url":"https://github.com/o/r/issues/2","labels":[],"assignees":[],"updated_at":"today"}]"#;
+        let issues = parse_issues_json(json).unwrap();
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].number, 1);
+        assert_eq!(issues[1].number, 2);
+    }
+
+    #[test]
+    fn uses_pagination_without_the_newer_slurp_flag() {
+        let command = issue_api_command(&RepoRef {
+            slug: "standardagents/dmux-rs".to_owned(),
+        });
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "api",
+                "--paginate",
+                "repos/standardagents/dmux-rs/issues?state=open&per_page=100"
+            ]
         );
     }
 
