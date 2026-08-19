@@ -49,6 +49,7 @@ pub struct SidebarGroup {
     pub accent: Color,
     pub accent_soft: Color,
     pub pane_indices: Vec<usize>,
+    pub issue_label: String,
     /// Owns the selected pane (or is the main project when none is).
     pub active: bool,
 }
@@ -211,9 +212,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             // row dims so the movement reads.
             let reorder_target = scene.reorder.map(|(_, pr)| pr == row).unwrap_or(false);
             let reorder_src = scene.reorder.map(|(srci, _)| srci == i).unwrap_or(false);
-            let (fg, attrs) = if pane.closing {
-                (t.text_faint, AttrFlags::empty())
-            } else if pane.hidden {
+            let (fg, attrs) = if pane.closing || pane.hidden {
                 (t.text_faint, AttrFlags::empty())
             } else if focused {
                 (group.accent, AttrFlags::BOLD)
@@ -300,6 +299,26 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 t.text_faint
             };
+            let issue_max = x0.saturating_sub(area.x + 2) as usize;
+            let issue_label = truncate(&group.issue_label, issue_max);
+            let ix = area.x + 1;
+            let issue_end = buf.draw_text(
+                ix,
+                row,
+                &issue_label,
+                if group.active {
+                    group.accent
+                } else {
+                    t.text_faint
+                },
+                sb_bg,
+                AttrFlags::empty(),
+                area,
+            );
+            clicks.add(
+                Rect::new(ix, row, issue_end.saturating_sub(ix), 1),
+                ClickTarget::SidebarGroupIssues(gi),
+            );
             let ax = buf.draw_text(x0, row, &na, color, sb_bg, AttrFlags::empty(), area);
             clicks.add(
                 Rect::new(x0, row, ax - x0, 1),
@@ -729,6 +748,7 @@ mod tests {
             accent: Color::Indexed(214),
             accent_soft: Color::Indexed(130),
             pane_indices: vec![],
+            issue_label: "0 issues".into(),
             active: true,
         };
         assert_eq!(group_fill_color(&group), group.accent);

@@ -10,6 +10,7 @@ mod diff_view;
 mod hooks_view;
 mod infer_view;
 mod input_view;
+mod issues;
 mod logs;
 mod menu;
 mod path_picker;
@@ -24,6 +25,7 @@ pub use diff_view::DiffView;
 pub use hooks_view::HooksView;
 pub use infer_view::InferProvidersView;
 pub use input_view::{InputPurpose, InputView};
+pub use issues::IssueBrowserView;
 pub use logs::LogsView;
 pub use menu::{MenuItem, MenuView};
 pub use path_picker::PathPickerView;
@@ -56,6 +58,14 @@ pub enum AppCmd {
     OpenNewAgentAt {
         project_root: String,
     },
+    ChooseAgentForIssues {
+        project_root: String,
+        prompt: String,
+    },
+    RefreshIssues {
+        project_root: String,
+    },
+    OpenUrl(String),
     OpenShortcuts,
     OpenLogs,
     PromptRename(usize),
@@ -156,6 +166,7 @@ pub enum ClickTarget {
     /// The 🐛 issues chip: opens the newest filed issue in the browser.
     SidebarIssues,
     /// Per-project creation actions (index into the sidebar groups).
+    SidebarGroupIssues(usize),
     SidebarGroupNewAgent(usize),
     SidebarGroupNewTerminal(usize),
     PaneBody(usize),

@@ -6,6 +6,7 @@
 mod agents;
 mod bootstrap;
 mod git;
+mod github;
 mod hooks;
 
 mod input;
@@ -37,11 +38,12 @@ use dmux_core::{
 };
 use dmux_host::{HostTerminal, InputEvent};
 use dmux_ui::{ClickMap, Theme};
+use github::{IssueLoadState, SharedIssueState};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
 use views::{
-    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView,
-    PathPickerView, SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
+    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
+    MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -310,6 +312,8 @@ enum AppMsg {
     Bootstrap { slug: String, ev: bootstrap::Ev },
     /// Automatic incident report finished (issue filed or failed).
     IssueFiled(Result<report::FiledIssue, String>),
+    /// A project's GitHub issue state changed in a background task.
+    IssuesChanged,
     /// A newer release is downloaded and staged; swap + re-exec.
     UpdateStaged { tag: String, staged: PathBuf },
     /// Agent process tracking sweep finished.
@@ -581,6 +585,7 @@ struct App {
     new_issue_count: usize,
     version_line: String,
     sidebar_groups: Vec<render::SidebarGroup>,
+    project_issues: std::collections::HashMap<String, SharedIssueState>,
     pane_accents: Vec<(dmux_compositor::Color, dmux_compositor::Color)>,
     /// A staged self-update: swap + re-exec after clean shutdown.
     reexec_after: Option<PathBuf>,
@@ -783,6 +788,7 @@ async fn run(
         new_issue_count: 0,
         version_line: updater::version_line(),
         sidebar_groups: Vec::new(),
+        project_issues: std::collections::HashMap::new(),
         pane_accents: Vec::new(),
         reexec_after: None,
         want_exit: false,
@@ -898,9 +904,9 @@ async fn run(
             }
         });
     }
-    if app.inference_primary.is_some() {
+    if let Some(primary) = &app.inference_primary {
         tracing::info!(
-            provider = %app.inference_primary.as_ref().unwrap().provider_id,
+            provider = %primary.provider_id,
             "inference configured; LLM status escalation active"
         );
     }
@@ -1241,8 +1247,7 @@ impl App {
                 det,
                 dry.as_deref(),
             )
-            .map(|f| f.issue)
-            .map_err(|e| e);
+            .map(|f| f.issue);
             let _ = tx.send(AppMsg::IssueFiled(result));
         });
     }
@@ -1605,6 +1610,10 @@ impl App {
             }
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
+                self.dirty = true;
+            }
+            AppMsg::IssuesChanged => {
+                self.rebuild_sidebar_groups();
                 self.dirty = true;
             }
             AppMsg::AiMergeDone { branch, result } => match result {
@@ -2070,6 +2079,7 @@ impl App {
                     accent,
                     accent_soft: soft,
                     pane_indices,
+                    issue_label: github::issue_state_label(self.project_issues.get(root)),
                     active: *root == active_root,
                 }
             })
@@ -2086,6 +2096,31 @@ impl App {
                     .unwrap_or((self.theme.accent, self.theme.accent_soft))
             })
             .collect();
+        self.ensure_project_issue_loads();
+    }
+
+    fn ensure_project_issue_loads(&mut self) {
+        let roots: Vec<String> = self
+            .sidebar_groups
+            .iter()
+            .map(|group| group.root.clone())
+            .filter(|root| !self.project_issues.contains_key(root))
+            .collect();
+        for root in roots {
+            self.refresh_project_issues(root);
+        }
+    }
+
+    fn refresh_project_issues(&mut self, project_root: String) {
+        let state = self
+            .project_issues
+            .entry(project_root.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(IssueLoadState::Loading { repository: None })))
+            .clone();
+        let tx = self.app_tx.clone();
+        github::refresh_issue_state(state, project_root, move || {
+            let _ = tx.send(AppMsg::IssuesChanged);
+        });
     }
 
     /// Project root that new panes should target: the selected pane's
@@ -2828,6 +2863,17 @@ impl App {
                     return self.execute_cmd(AppCmd::OpenSettings)
                 }
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
+                Some(ClickTarget::SidebarGroupIssues(gi)) => {
+                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
+                    {
+                        if let Some(state) = self.project_issues.get(&project_root).cloned() {
+                            self.views
+                                .push(Box::new(IssueBrowserView::new(project_root, state)));
+                            self.dirty = true;
+                        }
+                    }
+                    return true;
+                }
                 Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
                     if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
@@ -3102,8 +3148,20 @@ impl App {
                 )));
                 self.dirty = true;
             }
-            AppCmd::OpenNewAgent => self.open_agent_select(None),
-            AppCmd::OpenNewAgentAt { project_root } => self.open_agent_select(Some(project_root)),
+            AppCmd::OpenNewAgent => self.open_agent_select(None, None),
+            AppCmd::OpenNewAgentAt { project_root } => {
+                self.open_agent_select(Some(project_root), None)
+            }
+            AppCmd::ChooseAgentForIssues {
+                project_root,
+                prompt,
+            } => self.open_agent_select(Some(project_root), Some(prompt)),
+            AppCmd::RefreshIssues { project_root } => self.refresh_project_issues(project_root),
+            AppCmd::OpenUrl(url) => {
+                tokio::task::spawn_blocking(move || {
+                    let _ = std::process::Command::new("open").arg(url).status();
+                });
+            }
             AppCmd::OpenShortcuts => {
                 self.views.push(Box::new(ShortcutsView::new(
                     self.host.caps().kitty_keyboard,
@@ -3587,7 +3645,7 @@ impl App {
                     injection: None,
                     worktree_path: Some(path.clone()),
                     cwd: Some(path.clone()),
-                    project_root: (PathBuf::from(&path) != self.project_root).then_some(path),
+                    project_root: (Path::new(&path) != self.project_root.as_path()).then_some(path),
                 });
             }
             AppCmd::LaunchAgents {
@@ -3601,7 +3659,7 @@ impl App {
         true
     }
 
-    fn open_agent_select(&mut self, project_root: Option<String>) {
+    fn open_agent_select(&mut self, project_root: Option<String>, prompt: Option<String>) {
         let (default_agent, default_mode, enabled) = {
             let s = self.settings.lock().unwrap();
             let enabled = s
@@ -3625,13 +3683,17 @@ impl App {
                 enabled,
             )
         };
-        self.views.push(Box::new(AgentSelectView::new(
+        let mut view = AgentSelectView::new(
             &self.installed_agents,
             &enabled,
             default_agent.as_deref(),
             &default_mode,
             project_root,
-        )));
+        );
+        if let Some(prompt) = prompt {
+            view = view.with_prompt(prompt);
+        }
+        self.views.push(Box::new(view));
         self.dirty = true;
     }
 
@@ -4088,7 +4150,6 @@ impl App {
             record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
             record.prompt = ctx.prompt.clone();
             record.agent = ctx.agent.clone();
-            if ctx.agent.is_some() {}
             record.worktree_path = ctx.worktree_path.clone();
             record.project_root = ctx.project_root.clone();
             record.project_name = ctx.project_root.as_deref().map(|r| {
@@ -4777,14 +4838,12 @@ async fn ai_merge(
             git::abort_merge(root);
             format!("write {file}: {e}")
         })?;
-        git::stage_file(root, file).map_err(|e| {
+        git::stage_file(root, file).inspect_err(|_| {
             git::abort_merge(root);
-            e
         })?;
     }
-    git::commit_merge(root).map_err(|e| {
+    git::commit_merge(root).inspect_err(|_| {
         git::abort_merge(root);
-        e
     })?;
     Ok(files.len())
 }
@@ -4809,7 +4868,7 @@ async fn check_latest_version() -> Option<String> {
 fn is_newer(a: &str, b: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
         v.trim_start_matches('v')
-            .split(|c: char| c == '.' || c == '-')
+            .split(['.', '-'])
             .filter_map(|p| p.parse().ok())
             .collect()
     };
@@ -4985,6 +5044,7 @@ mod tests {
             accent: dmux_compositor::Color::Default,
             accent_soft: dmux_compositor::Color::Default,
             pane_indices,
+            issue_label: "0 issues".into(),
             active: false,
         };
         let groups = vec![group("/active", vec![0]), group("/empty", vec![])];

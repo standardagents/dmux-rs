@@ -93,6 +93,11 @@ impl AgentSelectView {
         }
     }
 
+    pub fn with_prompt(mut self, prompt: String) -> Self {
+        self.prompt.value = prompt;
+        self
+    }
+
     fn total(&self) -> u32 {
         self.rows.iter().map(|r| r.count as u32).sum()
     }
