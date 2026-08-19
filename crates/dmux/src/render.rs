@@ -252,6 +252,14 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, sb_bg, AttrFlags::empty(), area);
 }
 
+/// Whether a pane header renders with the full active treatment: actual
+/// focus always does; while the sidebar owns the keyboard, the selected
+/// pane previews it too (#21) — Enter then makes the preview real. With the
+/// sidebar unfocused, selection falls back to the milder #13 state.
+fn header_shows_active(focused: bool, selected: bool, sidebar_focused: bool) -> bool {
+    focused || (selected && sidebar_focused)
+}
+
 /// Title-bar colors: focus (activation) and sidebar selection are distinct
 /// states (#13). Focused wins with the solid soft-accent band; a pane
 /// selected in the sidebar gets the sidebar's neutral selection surface
@@ -312,12 +320,15 @@ fn draw_pane_title(
     let selected = idx == scene.selected;
     let (pa, ps) = scene.pane_accents.get(idx).copied().unwrap_or((t.accent, t.accent_soft));
     let bar = Rect::new(body.x, body.y - TITLE_ROWS, body.w, TITLE_ROWS);
-    let (fg, bg) = title_bar_style(t, (pa, ps), focused, selected);
+    // #21: sidebar navigation previews the full active header on the
+    // selected pane — input focus doesn't move until Enter.
+    let full = header_shows_active(focused, selected, scene.sidebar_focused);
+    let (fg, bg) = title_bar_style(t, (pa, ps), full, selected);
     buf.fill(bar, &Cell { bg, ..Cell::default() });
 
     let glyph = status_glyph(pane, scene.anim);
     let label = format!(" {glyph} {} ", truncate(pane.display_title(), bar.w.saturating_sub(16) as usize));
-    let attrs = if focused || selected { AttrFlags::BOLD } else { AttrFlags::empty() };
+    let attrs = if full || selected { AttrFlags::BOLD } else { AttrFlags::empty() };
     buf.draw_text(bar.x, bar.y, &label, fg, bg, attrs, bar);
     if selected && !focused {
         // Mirror the sidebar's selection bar so the eye can pair them (#13).
@@ -412,6 +423,16 @@ mod tests {
         // Unfocused (or inactive group): plain labels — hotkeys aren't live.
         assert_eq!(action_labels(true, false), ("new agent".to_string(), "terminal".to_string()));
         assert_eq!(action_labels(false, true), ("new agent".to_string(), "terminal".to_string()));
+    }
+
+    #[test]
+    fn sidebar_selection_previews_the_active_header() {
+        // #21: full treatment follows focus — or selection while the
+        // sidebar owns the keyboard; never a stale preview afterwards.
+        assert!(header_shows_active(true, false, false), "focused is always active");
+        assert!(header_shows_active(false, true, true), "sidebar navigation previews");
+        assert!(!header_shows_active(false, true, false), "no preview once sidebar unfocused");
+        assert!(!header_shows_active(false, false, true), "unselected panes stay plain");
     }
 
     #[test]
