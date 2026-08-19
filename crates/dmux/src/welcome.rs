@@ -349,8 +349,9 @@ pub fn draw(
         x = buf.draw_text(x, strip_y, &format!(" {}   ", def.short), if ok { theme.text_dim } else { theme.text_faint }, Color::Default, AttrFlags::empty(), content);
     }
 
-    // Footer status line, codex-style.
-    let footer_y = (strip_y + 2).min(content.bottom().saturating_sub(1));
+    // Footer status line, codex-style — anchored to the bottom row of the
+    // content area so it reads as a persistent footer at any height (#3).
+    let footer_y = content.bottom().saturating_sub(1);
     let left = format!("● session ready — {}", scene.session_name);
     let lx = content.x + 2;
     let mut fx = buf.draw_text(lx, footer_y, "●", theme.ok, Color::Default, AttrFlags::empty(), content);
@@ -413,4 +414,36 @@ fn draw_card(
         card.subtitle.clone()
     };
     buf.draw_text(rect.x + 5, rect.y + 2, &subtitle, theme.text_faint, bg, AttrFlags::empty(), rect);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_anchors_to_bottom_row() {
+        let theme = Theme::named("dmux");
+        let installed = std::collections::HashSet::new();
+        let cards = build_cards(&installed, "proj", &[]);
+        let scene = WelcomeScene {
+            cards: &cards,
+            selected: 0,
+            session_name: "sess",
+            project_root: "/tmp/proj",
+            installed: &installed,
+        };
+        let mut clicks = ClickMap::new();
+        // Tall terminal: the footer must sit on the bottom content row, not
+        // trail the centered card grid (#3).
+        let (w, h) = (120u16, 60u16);
+        let mut buf = CellBuffer::new(w, h);
+        draw(&mut buf, Rect::new(0, 0, w, h), &theme, &scene, &mut clicks);
+        let bottom: String = (0..w).map(|c| buf.get(c, h - 1).ch).collect();
+        assert!(
+            bottom.contains("session ready"),
+            "footer must be on the bottom row, got: {bottom:?}"
+        );
+        let right_ok = bottom.contains("/tmp/proj");
+        assert!(right_ok, "project path shares the bottom row: {bottom:?}");
+    }
 }
