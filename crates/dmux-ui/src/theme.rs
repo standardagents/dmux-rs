@@ -57,7 +57,11 @@ impl Default for Theme {
             text: Color::Indexed(253),
             text_dim: Color::Indexed(246),
             text_faint: Color::Indexed(240),
-            bg: Color::Indexed(233),
+            // The sidebar's base surface is the terminal's own background
+            // (#6): pane content and the welcome canvas already show it, so
+            // a fixed indexed base reads as a mismatched slab under custom
+            // palettes. Raised/selected surfaces keep their indexed steps.
+            bg: Color::Default,
             bg_raised: Color::Indexed(235),
             bg_selected: Color::Indexed(237),
             canvas: Color::Indexed(234),
