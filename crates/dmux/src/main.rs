@@ -433,6 +433,15 @@ async fn run(
 
     let _ = client.send("refresh-client -f ignore-size,pause-after=1,wait-exit");
     let _ = client.send(format!("refresh-client -C {}x{}", size.0, size.1));
+    // tmux answers pane OSC 10/11 queries itself, and with only a
+    // control-mode client attached it reports black-on-black — apps then
+    // mis-detect the theme (codex painted a light composer, #4).
+    // window-style feeds tmux the palette's answer; it tints only
+    // tmux-client rendering (nothing watches that — dmux is the client)
+    // and never reaches capture-pane grids, so the verifier and seed path
+    // are unaffected.
+    let (default_fg, default_bg) = dmux_vt::palette::default_fg_bg_hex();
+    let _ = client.send(format!("set -g window-style 'fg={default_fg},bg={default_bg}'"));
     client.send_tagged(
         format!("show-options -t {} -qv @dmux_controller_pid", dmux_cc::quote_arg(&session_name)),
         Tag::ControllerPid,

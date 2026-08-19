@@ -28,6 +28,14 @@ const ANSI16: [(u8, u8, u8); 16] = [
 const FOREGROUND: (u8, u8, u8) = (0xd0, 0xd0, 0xd0);
 const BACKGROUND: (u8, u8, u8) = (0x1a, 0x1a, 0x1a);
 
+/// Default fg/bg as `#rrggbb` strings — fed to tmux's `window-style` at
+/// attach so tmux's own OSC 10/11 answers report these values (tmux
+/// answers those queries itself, before any reply of ours could arrive).
+pub fn default_fg_bg_hex() -> (String, String) {
+    let hex = |(r, g, b): (u8, u8, u8)| format!("#{r:02x}{g:02x}{b:02x}");
+    (hex(FOREGROUND), hex(BACKGROUND))
+}
+
 /// Resolve a palette index the way alacritty's color array is laid out:
 /// 0..=255 are the xterm palette; the named specials follow.
 pub fn color_for(index: usize) -> Rgb {

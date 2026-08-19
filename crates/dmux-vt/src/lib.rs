@@ -2,7 +2,7 @@
 //! surface the compositor and status heuristics consume. One `PaneTerm` per
 //! dmux pane; bytes from `%output` go in, cells and side effects come out.
 
-mod palette;
+pub mod palette;
 
 use std::sync::{Arc, Mutex};
 
@@ -212,7 +212,18 @@ impl PaneTerm {
                 Event::PtyWrite(s) => out.push(TermSideEffect::PtyResponse(s.into_bytes())),
                 Event::ClipboardStore(_, s) => out.push(TermSideEffect::Clipboard(s)),
                 Event::ColorRequest(index, formatter) => {
-                    out.push(TermSideEffect::PtyResponse(formatter(palette::color_for(index)).into_bytes()));
+                    // tmux answers OSC 10/11 (default fg/bg) queries itself,
+                    // synchronously — always ahead of any reply we could
+                    // send. A second reply from us lingers in the app's
+                    // input queue and corrupts its next read (#4), so those
+                    // two are tmux's alone (fed correct values via
+                    // window-style at attach). OSC 4 (indexed) and OSC 12
+                    // (cursor) tmux stays silent on; we answer those.
+                    let fg = NamedColor::Foreground as usize;
+                    let bg = NamedColor::Background as usize;
+                    if index != fg && index != bg {
+                        out.push(TermSideEffect::PtyResponse(formatter(palette::color_for(index)).into_bytes()));
+                    }
                 }
                 Event::TextAreaSizeRequest(formatter) => {
                     let size = WindowSize {
@@ -586,6 +597,24 @@ mod tests {
         assert!(
             fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "expected DA1 response, got {fx:?}"
+        );
+    }
+
+    #[test]
+    fn default_fg_bg_queries_are_left_to_tmux() {
+        // tmux answers OSC 10/11 itself (window-style carries our values);
+        // a second reply from us corrupts the app's input queue (#4).
+        let mut t = PaneTerm::new(10, 3, 0);
+        let fx = t.advance(b"\x1b]10;?\x07\x1b]11;?\x07");
+        assert!(
+            !fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
+            "OSC 10/11 must not be answered by dmux, got {fx:?}"
+        );
+        // OSC 4 (indexed palette) tmux stays silent on — we must answer.
+        let fx = t.advance(b"\x1b]4;1;?\x07");
+        assert!(
+            fx.iter().any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
+            "OSC 4 query must be answered, got {fx:?}"
         );
     }
 
