@@ -3322,7 +3322,7 @@ impl App {
                 "tip: ^b h hides a pane without killing it",
                 "tip: autopilot (pane menu) auto-accepts option dialogs",
             ];
-            TIPS[(timestamp() / 15) as usize % TIPS.len()].to_string()
+            TIPS[tip_index(timestamp(), TIPS.len())].to_string()
         } else {
             "^b for commands · ^b ? help".to_string()
         };
@@ -3642,6 +3642,12 @@ fn timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+/// Footer tip rotation: one step per 15 seconds of wall clock (`now_ms` is
+/// milliseconds — #5 shipped a /15 that rotated every 15ms).
+fn tip_index(now_ms: u64, len: usize) -> usize {
+    (now_ms / 15_000) as usize % len.max(1)
+}
+
 fn iso_now() -> String {
     // Close-enough ISO timestamp without a chrono dependency (UTC seconds).
     let secs = std::time::SystemTime::now()
@@ -3702,5 +3708,15 @@ mod tests {
         assert_eq!(ts.len(), 24);
         assert!(ts.ends_with("Z"));
         assert!(ts.starts_with("20"));
+    }
+
+    #[test]
+    fn footer_tips_hold_for_fifteen_seconds() {
+        // Stable within a 15s window…
+        assert_eq!(tip_index(0, 7), tip_index(14_999, 7));
+        // …advances by exactly one across the boundary…
+        assert_eq!(tip_index(15_000, 7), 1);
+        // …and wraps around the tip list.
+        assert_eq!(tip_index(7 * 15_000, 7), 0);
     }
 }
