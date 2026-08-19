@@ -84,17 +84,6 @@ fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux
     dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
 }
 
-/// Pane status for an LLM verdict. Option dialogs ALWAYS land on Waiting —
-/// dmux never auto-accepts one (#31); the agent's own autonomous mode is
-/// the only thing allowed to press Enter.
-fn verdict_pane_status(v: &dmux_infer::PaneVerdict) -> PaneStatus {
-    match v {
-        dmux_infer::PaneVerdict::OptionDialog => PaneStatus::Waiting,
-        dmux_infer::PaneVerdict::OpenPrompt => PaneStatus::Idle,
-        dmux_infer::PaneVerdict::InProgress => PaneStatus::Working,
-    }
-}
-
 /// Sidebar drag-reorder gesture (#26). A press on a row arms a candidate;
 /// crossing onto a different terminal row enters reorder mode (an ordinary
 /// click never does); release commits over a sidebar row or cancels
@@ -1680,7 +1669,9 @@ impl App {
                         // path — dmux never auto-accepts one (#31; agents
                         // bring their own autonomous modes).
                         Ok(dmux_infer::PaneVerdict::OptionDialog) => {
-                            p.status = verdict_pane_status(&dmux_infer::PaneVerdict::OptionDialog);
+                            p.status = session::verdict_pane_status(
+                                &dmux_infer::PaneVerdict::OptionDialog,
+                            );
                             if !is_focused && !p.needs_attention {
                                 p.needs_attention = true;
                                 attention = Some(format!("△ {} needs input", p.display_title()));
@@ -4159,6 +4150,13 @@ impl App {
 
     fn handle_deadlines(&mut self) {
         let now = Instant::now();
+        // Missed-WINCH safety net (#43): the terminal can settle to its
+        // final size between the startup ioctl and signal-handler install
+        // (e.g. a window still animating to full screen), leaving the first
+        // frame one row/column short forever. Re-probe on every deadline
+        // pass — the ioctl is microseconds and handle_resize no-ops on an
+        // unchanged size.
+        self.handle_resize(dmux_host::term_size());
         // Settle classification: quiet panes get a heuristic verdict
         // (working spinner text / waiting on the user / idle).
         let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
@@ -5004,24 +5002,6 @@ mod tests {
         assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
         let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
         assert!(panes_to_break_out(&after).is_empty());
-    }
-
-    #[test]
-    fn option_dialogs_map_to_waiting_never_auto_accept() {
-        // #31: an option dialog is the user's decision — Waiting/attention,
-        // never Working-with-injected-Enter.
-        assert_eq!(
-            verdict_pane_status(&dmux_infer::PaneVerdict::OptionDialog),
-            PaneStatus::Waiting
-        );
-        assert_eq!(
-            verdict_pane_status(&dmux_infer::PaneVerdict::OpenPrompt),
-            PaneStatus::Idle
-        );
-        assert_eq!(
-            verdict_pane_status(&dmux_infer::PaneVerdict::InProgress),
-            PaneStatus::Working
-        );
     }
 
     #[test]

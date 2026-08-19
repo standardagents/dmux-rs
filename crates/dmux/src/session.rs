@@ -445,6 +445,17 @@ pub fn order_panes(panes: &mut [LogicalPane], slug_order: &[String]) {
     });
 }
 
+/// Pane status for an LLM verdict. Option dialogs ALWAYS land on Waiting —
+/// dmux never auto-accepts one (#31); the agent's own autonomous mode is
+/// the only thing allowed to press Enter.
+pub fn verdict_pane_status(v: &dmux_infer::PaneVerdict) -> PaneStatus {
+    match v {
+        dmux_infer::PaneVerdict::OptionDialog => PaneStatus::Waiting,
+        dmux_infer::PaneVerdict::OpenPrompt => PaneStatus::Idle,
+        dmux_infer::PaneVerdict::InProgress => PaneStatus::Working,
+    }
+}
+
 /// Decide which tmux panes are content panes and pair them with config
 /// entries by slug (via the title contract). Config panes with no live tmux
 /// pane are skipped in Phase 0 (recreation is a Phase 1 concern); live panes
@@ -639,6 +650,24 @@ mod tests {
         assert_eq!(pane.term.history_len(), 0, "alt grid has no scrollback");
         // …and the local view can't scroll into stale frames.
         assert_eq!(pane.term.scroll_view(3), 0);
+    }
+
+    #[test]
+    fn option_dialogs_map_to_waiting_never_auto_accept() {
+        // #31: an option dialog is the user's decision — Waiting/attention,
+        // never Working-with-injected-Enter.
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::OptionDialog),
+            PaneStatus::Waiting
+        );
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::OpenPrompt),
+            PaneStatus::Idle
+        );
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::InProgress),
+            PaneStatus::Working
+        );
     }
 
     #[test]
