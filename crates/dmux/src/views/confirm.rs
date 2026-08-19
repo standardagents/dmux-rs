@@ -61,7 +61,7 @@ impl View for ConfirmView {
             inner.y + 1,
             &self.message,
             ctx.theme.text,
-            ctx.theme.bg_raised,
+            ctx.theme.bg_panel,
             AttrFlags::empty(),
             inner,
         );

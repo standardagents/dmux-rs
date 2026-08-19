@@ -124,7 +124,7 @@ impl View for MenuView {
             let bg = if selected {
                 ctx.theme.bg_selected
             } else {
-                ctx.theme.bg_raised
+                ctx.theme.bg_panel
             };
             buf.fill(
                 line_rect,

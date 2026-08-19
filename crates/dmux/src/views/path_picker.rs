@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, ListState, PanelStyle, TextInput};
+use dmux_ui::{
+    centered, draw_hint_bar, draw_panel, panel_frame, ClickMap, ListState, PanelStyle, TextInput,
+};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -199,13 +201,15 @@ impl View for PathPickerView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let w = area.w.saturating_sub(10).clamp(44, 90);
-        let h = area.h.saturating_sub(6).clamp(12, 24);
+        let h = area.h.saturating_sub(6).clamp(14, 26);
         let rect = centered(area, w, h);
         let inner = draw_panel(buf, rect, "Add project", ctx.theme, PanelStyle::Modal);
+        let frame = panel_frame(inner);
+        let content = frame.content;
 
         // Current directory (tail-truncated from the left so the leaf shows).
         let dir_str = self.dir.to_string_lossy();
-        let max = inner.w.saturating_sub(2) as usize;
+        let max = content.w.saturating_sub(2) as usize;
         let shown: String = if dir_str.chars().count() > max {
             let tail: String = dir_str
                 .chars()
@@ -220,11 +224,11 @@ impl View for PathPickerView {
             dir_str.into_owned()
         };
         buf.draw_text(
-            inner.x + 1,
-            inner.y,
+            content.x + 1,
+            content.y,
             &shown,
             ctx.theme.accent,
-            ctx.theme.bg_raised,
+            ctx.theme.bg_panel,
             AttrFlags::BOLD,
             inner,
         );
@@ -232,24 +236,24 @@ impl View for PathPickerView {
         // Filter input.
         let cursor = self.input.draw(
             buf,
-            Rect::new(inner.x + 1, inner.y + 1, inner.w.saturating_sub(2), 1),
+            Rect::new(content.x + 1, content.y + 1, content.w.saturating_sub(2), 1),
             ctx.theme,
             true,
         );
 
         // Notice / error line.
-        let msg_row = inner.y + 2;
+        let msg_row = content.y + 2;
         if let Some(msg) =
             self.notice
                 .as_deref()
                 .or(self.listing.as_ref().err().map(|e| e.as_str()))
         {
             buf.draw_text(
-                inner.x + 1,
+                content.x + 1,
                 msg_row,
                 msg,
                 ctx.theme.warn,
-                ctx.theme.bg_raised,
+                ctx.theme.bg_panel,
                 AttrFlags::empty(),
                 inner,
             );
@@ -258,7 +262,7 @@ impl View for PathPickerView {
         // Entry list: synthetic accept row, then dirs-first entries.
         let rows = self.filtered();
         let list_top = msg_row + 1;
-        let visible = inner.bottom().saturating_sub(1).saturating_sub(list_top) as usize;
+        let visible = content.bottom().saturating_sub(list_top) as usize;
         self.list.clamp(self.row_count());
         self.list.ensure_visible(visible);
         let mut y = list_top;
@@ -276,11 +280,11 @@ impl View for PathPickerView {
                 .take(visible)
         {
             let selected = row_i == self.list.selected;
-            let line = Rect::new(inner.x, y, inner.w, 1);
+            let line = Rect::new(content.x, y, content.w, 1);
             let bg = if selected {
                 ctx.theme.bg_selected
             } else {
-                ctx.theme.bg_raised
+                ctx.theme.bg_panel
             };
             buf.fill(
                 line,
@@ -303,18 +307,18 @@ impl View for PathPickerView {
             } else {
                 AttrFlags::empty()
             };
-            buf.draw_text(inner.x + 2, y, &label, fg, bg, attrs, line);
+            buf.draw_text(content.x + 2, y, &label, fg, bg, attrs, line);
             clicks.add(line, ClickTarget::Overlay(row_i as u64));
             y += 1;
         }
         if let Ok(l) = &self.listing {
             if l.truncated {
                 buf.draw_text(
-                    inner.x + 2,
-                    y.min(inner.bottom().saturating_sub(2)),
+                    content.x + 2,
+                    y.min(content.bottom().saturating_sub(1)),
                     "… listing capped",
                     ctx.theme.text_faint,
-                    ctx.theme.bg_raised,
+                    ctx.theme.bg_panel,
                     AttrFlags::empty(),
                     inner,
                 );
@@ -323,7 +327,7 @@ impl View for PathPickerView {
 
         draw_hint_bar(
             buf,
-            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
+            frame.footer,
             &[
                 ("↑↓", "select"),
                 ("⏎", "open/accept"),

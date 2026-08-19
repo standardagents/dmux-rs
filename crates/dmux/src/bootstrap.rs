@@ -168,7 +168,7 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
     let w = rect.w.saturating_sub(4).clamp(24, 56);
     let card = centered(rect, w, h);
     let inner = draw_panel(buf, card, "Preparing worktree", theme, PanelStyle::Modal);
-    let bg = theme.bg_raised;
+    let bg = theme.bg_panel;
 
     // Identity line: what's being set up, for whom.
     let head = format!("{} · {}", ui.title, ui.agent_label);

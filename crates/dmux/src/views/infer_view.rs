@@ -66,7 +66,7 @@ impl View for InferProvidersView {
             ctx.theme,
             PanelStyle::Modal,
         );
-        let bg = ctx.theme.bg_raised;
+        let bg = ctx.theme.bg_panel;
 
         buf.draw_text(
             inner.x + 1,

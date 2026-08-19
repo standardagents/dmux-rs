@@ -54,7 +54,7 @@ pub fn draw_panel(
         PanelStyle::Modal => theme.accent,
         PanelStyle::Flat => theme.border,
     };
-    let bg = theme.bg_raised;
+    let bg = theme.bg_panel;
 
     buf.fill(
         rect,
@@ -139,11 +139,92 @@ pub fn draw_panel(
     )
 }
 
+/// Shared overlay geometry (#42): every modal splits its `draw_panel` inner
+/// rect the same way — one padding row under the title border, the body,
+/// one blank row, then the bottom hint row.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PanelFrame {
+    /// Body region: lists, fields, sections, action rows.
+    pub content: Rect,
+    /// Single bottom row for `draw_hint_bar`.
+    pub footer: Rect,
+}
+
+/// Split a panel's inner rect into the shared frame.
+pub fn panel_frame(inner: Rect) -> PanelFrame {
+    if inner.h < 4 {
+        return PanelFrame {
+            content: inner,
+            footer: Rect::default(),
+        };
+    }
+    PanelFrame {
+        content: Rect::new(inner.x, inner.y + 1, inner.w, inner.h - 3),
+        footer: Rect::new(inner.x, inner.bottom() - 1, inner.w, 1),
+    }
+}
+
+/// Total panel height for `content_rows` body rows plus the shared chrome:
+/// two border rows, the top padding row, the blank row, and the hint row.
+pub fn frame_height(content_rows: u16) -> u16 {
+    content_rows + 5
+}
+
 /// Center a `w`×`h` panel within `area` (clamped).
 pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.w);
     let h = h.min(area.h);
     Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use super::*;
+
+    #[test]
+    fn panel_surface_inherits_the_terminal_background() {
+        // #42: overlays sit on the user's terminal background like the
+        // sidebar and canvas — no fixed gray slab.
+        let mut buf = CellBuffer::new(30, 10);
+        buf.fill(
+            buf.area(),
+            &Cell {
+                bg: Color::Indexed(17),
+                ..Cell::default()
+            },
+        );
+        let theme = crate::theme::Theme::default();
+        let rect = Rect::new(2, 1, 24, 8);
+        let inner = draw_panel(&mut buf, rect, "Title", &theme, PanelStyle::Modal);
+        // Interior and border cells both carry the terminal default.
+        assert_eq!(buf.get(inner.x, inner.y).bg, Color::Default);
+        assert_eq!(buf.get(rect.x, rect.y).bg, Color::Default);
+        assert_eq!(
+            buf.get(rect.right() - 1, rect.bottom() - 1).bg,
+            Color::Default
+        );
+        // Outside the panel the underlying scene is untouched.
+        assert_eq!(buf.get(0, 0).bg, Color::Indexed(17));
+    }
+
+    #[test]
+    fn panel_frame_reserves_padding_and_footer_rows() {
+        // #42 spacing contract: one padding row under the title border, one
+        // blank row, then the single-row footer at the panel bottom.
+        let inner = Rect::new(4, 2, 40, 12);
+        let frame = panel_frame(inner);
+        assert_eq!(frame.content, Rect::new(4, 3, 40, 9));
+        assert_eq!(frame.footer, Rect::new(4, 13, 40, 1));
+        // The blank row sits between them.
+        assert_eq!(frame.content.bottom() + 1, frame.footer.y);
+        // frame_height sizes a panel so the frame fits its body exactly.
+        let h = frame_height(9);
+        let sized = Rect::new(0, 0, 40, h - 2); // inner = panel minus borders
+        assert_eq!(panel_frame(sized).content.h, 9);
+        // Degenerate panels don't underflow.
+        let tiny = panel_frame(Rect::new(0, 0, 10, 3));
+        assert!(tiny.footer.is_empty());
+    }
 }
 
 #[cfg(test)]

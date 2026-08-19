@@ -72,7 +72,7 @@ impl View for HooksView {
         let h = (self.rows.len() as u16 + 6).min(area.h.saturating_sub(2));
         let rect = centered(area, area.w.min(58), h);
         let inner = draw_panel(buf, rect, "Project Hooks", ctx.theme, PanelStyle::Modal);
-        let bg = ctx.theme.bg_raised;
+        let bg = ctx.theme.bg_panel;
 
         let dir_line = self.dir.to_string_lossy();
         buf.draw_text(

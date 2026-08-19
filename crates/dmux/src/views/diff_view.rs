@@ -88,7 +88,7 @@ impl View for DiffView {
         if self.scroll > max_scroll {
             self.scroll = max_scroll;
         }
-        let bg = ctx.theme.bg_raised;
+        let bg = ctx.theme.bg_panel;
         for (row, line) in self
             .lines
             .iter()

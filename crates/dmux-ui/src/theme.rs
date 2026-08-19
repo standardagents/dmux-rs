@@ -13,6 +13,10 @@ pub struct Theme {
     pub text_dim: Color,
     pub text_faint: Color,
     pub bg: Color,
+    /// Overlay panel surface (#42): the terminal's own background, like the
+    /// sidebar and canvas — the scrim and accent border separate the layer,
+    /// not a fixed gray slab that fights custom palettes.
+    pub bg_panel: Color,
     pub bg_raised: Color,
     pub bg_selected: Color,
     /// Unused content-area background — a hair lighter than the terminal
@@ -67,6 +71,7 @@ impl Default for Theme {
             // a fixed indexed base reads as a mismatched slab under custom
             // palettes. Raised/selected surfaces keep their indexed steps.
             bg: Color::Default,
+            bg_panel: Color::Default,
             bg_raised: Color::Indexed(235),
             bg_selected: Color::Indexed(237),
             // Transparent like the sidebar (#23): the user's terminal

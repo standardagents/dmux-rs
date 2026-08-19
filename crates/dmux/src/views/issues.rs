@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
 use dmux_ui::{
-    centered, draw_button, draw_hint_bar, draw_panel, spinner_frame, ButtonStyle, ClickMap,
-    ListState, PanelStyle,
+    centered, draw_button, draw_hint_bar, draw_panel, frame_height, panel_frame, spinner_frame,
+    ButtonStyle, ClickMap, ListState, PanelStyle,
 };
 
 use crate::github::{GitHubIssue, IssueLoadState, SharedIssueState};
@@ -231,9 +231,12 @@ impl View for IssueBrowserView {
                 .len()
         });
         let max_h = area.h.saturating_sub(2);
-        let h = (issue_count as u16 + repository_count as u16 + 7)
+        // Body: the grouped list (issues plus one header per repository),
+        // one blank row, then the action-button row.
+        let list_rows = (issue_count + repository_count).max(2) as u16;
+        let h = frame_height(list_rows + 2)
             .min(max_h)
-            .max(max_h.min(8));
+            .max(max_h.min(frame_height(4)));
         let rect = centered(area, area.w.min(100), h);
         let title = match self.repository(&state) {
             Some(repository) => format!("Issues · {repository}"),
@@ -244,9 +247,11 @@ impl View for IssueBrowserView {
             return None;
         }
 
-        let bg = ctx.theme.bg_raised;
-        let rows_bottom = inner.bottom().saturating_sub(2);
-        let visible = rows_bottom.saturating_sub(inner.y) as usize;
+        let frame = panel_frame(inner);
+        let content = frame.content;
+        let bg = ctx.theme.bg_panel;
+        let rows_bottom = content.bottom().saturating_sub(2);
+        let visible = rows_bottom.saturating_sub(content.y) as usize;
         if let Some(issues) = loaded_issues(&state) {
             ensure_grouped_visible(&mut self.list, issues, visible);
         }
@@ -254,8 +259,8 @@ impl View for IssueBrowserView {
         match &state {
             IssueLoadState::Unavailable => {
                 buf.draw_text(
-                    inner.x,
-                    inner.y + 1,
+                    content.x,
+                    content.y,
                     "No GitHub repositories found",
                     ctx.theme.text_dim,
                     bg,
@@ -266,8 +271,8 @@ impl View for IssueBrowserView {
             IssueLoadState::Loading { repository } => {
                 let repo = repository.as_deref().unwrap_or("the selected project");
                 buf.draw_text(
-                    inner.x,
-                    inner.y + 1,
+                    content.x,
+                    content.y,
                     &format!(
                         "{} Loading open issues for {repo}…",
                         spinner_frame(ctx.anim)
@@ -284,8 +289,8 @@ impl View for IssueBrowserView {
             } => {
                 let repo = repository.as_deref().unwrap_or("the selected project");
                 buf.draw_text(
-                    inner.x,
-                    inner.y,
+                    content.x,
+                    content.y,
                     &format!("Unable to load open issues for {repo}"),
                     ctx.theme.danger,
                     bg,
@@ -293,8 +298,8 @@ impl View for IssueBrowserView {
                     inner,
                 );
                 buf.draw_text(
-                    inner.x,
-                    inner.y + 1,
+                    content.x,
+                    content.y + 1,
                     message,
                     ctx.theme.text_dim,
                     bg,
@@ -304,8 +309,8 @@ impl View for IssueBrowserView {
             }
             IssueLoadState::Loaded { repository, issues } if issues.is_empty() => {
                 buf.draw_text(
-                    inner.x,
-                    inner.y + 1,
+                    content.x,
+                    content.y,
                     &format!("No open issues in {repository}"),
                     ctx.theme.text_dim,
                     bg,
@@ -314,7 +319,7 @@ impl View for IssueBrowserView {
                 );
             }
             IssueLoadState::Loaded { issues, .. } => {
-                let mut y = inner.y;
+                let mut y = content.y;
                 let mut previous_repository = None;
                 for (idx, issue) in issues.iter().enumerate().skip(self.list.scroll) {
                     if y >= rows_bottom {
@@ -322,7 +327,7 @@ impl View for IssueBrowserView {
                     }
                     if previous_repository.as_deref() != Some(issue.repository.as_str()) {
                         buf.draw_text(
-                            inner.x,
+                            content.x,
                             y,
                             &issue.repository,
                             ctx.theme.accent,
@@ -336,7 +341,7 @@ impl View for IssueBrowserView {
                             break;
                         }
                     }
-                    let row_rect = Rect::new(inner.x, y, inner.w, 1);
+                    let row_rect = Rect::new(content.x, y, content.w, 1);
                     let focused = idx == self.list.selected;
                     let selected = self
                         .selected
@@ -351,7 +356,7 @@ impl View for IssueBrowserView {
                     );
                     let checkbox = if selected { "◼" } else { "◻" };
                     buf.draw_text(
-                        inner.x + 2,
+                        content.x + 2,
                         y,
                         checkbox,
                         if selected {
@@ -365,7 +370,7 @@ impl View for IssueBrowserView {
                     );
                     let prefix = format!(" #{:<5} ", issue.number);
                     let x = buf.draw_text(
-                        inner.x + 4,
+                        content.x + 4,
                         y,
                         &prefix,
                         ctx.theme.accent,
@@ -374,7 +379,7 @@ impl View for IssueBrowserView {
                         row_rect,
                     );
                     let title_width =
-                        inner.w.saturating_sub(x.saturating_sub(inner.x) + 1) as usize;
+                        content.w.saturating_sub(x.saturating_sub(content.x) + 1) as usize;
                     let meta = issue_meta(issue);
                     let text = if meta.is_empty() {
                         issue.title.clone()
@@ -405,10 +410,10 @@ impl View for IssueBrowserView {
             }
         }
 
-        let button_y = inner.bottom().saturating_sub(1);
+        let button_y = content.bottom().saturating_sub(1);
         let refresh = draw_button(
             buf,
-            inner.x,
+            content.x,
             button_y,
             "Refresh",
             ctx.theme,
@@ -446,7 +451,7 @@ impl View for IssueBrowserView {
         clicks.add(continue_button, ClickTarget::Overlay(TAG_CONTINUE));
         draw_hint_bar(
             buf,
-            Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.w, 1),
+            frame.footer,
             &[
                 ("↑↓", "select"),
                 ("space", "toggle"),
@@ -643,6 +648,50 @@ mod tests {
         };
         view.on_key(&key(KeyCode::DownArrow));
         assert_eq!(view.selected_count(), 0);
+    }
+
+    #[test]
+    fn overlay_uses_the_shared_frame_spacing_and_terminal_background() {
+        let (_, mut view) = loaded();
+        let mut buf = CellBuffer::new(100, 24);
+        let area = buf.area();
+        buf.fill(
+            area,
+            &Cell {
+                bg: dmux_compositor::Color::Indexed(17),
+                ..Cell::default()
+            },
+        );
+        let theme = dmux_ui::Theme::default();
+        let ctx = ViewCtx {
+            theme: &theme,
+            anim: 0,
+        };
+        let mut clicks = ClickMap::new();
+        view.render(&mut buf, area, &ctx, &mut clicks);
+
+        let row_text = |y: u16| -> String { (0..100).map(|x| buf.get(x, y).ch).collect() };
+        let hint_y = (0..24)
+            .find(|y| row_text(*y).contains("toggle"))
+            .expect("hint bar rendered");
+        let button_y = (0..24)
+            .find(|y| row_text(*y).contains("Refresh"))
+            .expect("action row rendered");
+        // #42 spacing contract: action row, one blank row, then the hint bar.
+        assert_eq!(hint_y, button_y + 2);
+        let blank_inside = |y: u16| {
+            let row = row_text(y);
+            row.chars().skip(2).take(96).all(|c| c == ' ')
+        };
+        assert!(blank_inside(button_y + 1), "gap row below the action row");
+        // The list is separated from the action row by one blank row too.
+        assert!(blank_inside(button_y - 1), "gap row above the action row");
+        // Panel surface inherits the terminal background (#42); the second
+        // row is unfocused, so it carries the panel surface, not selection.
+        let list_y = (0..24)
+            .find(|y| row_text(*y).contains("Second"))
+            .expect("issue row rendered");
+        assert_eq!(buf.get(50, list_y).bg, dmux_compositor::Color::Default);
     }
 
     #[test]

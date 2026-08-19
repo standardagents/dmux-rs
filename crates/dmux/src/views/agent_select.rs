@@ -1,8 +1,8 @@
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
 use dmux_ui::{
-    centered, draw_button, draw_counter, draw_hint_bar, draw_panel, draw_select_value, ButtonStyle,
-    ClickMap, PanelStyle, TextInput,
+    centered, draw_button, draw_counter, draw_hint_bar, draw_panel, draw_select_value,
+    frame_height, panel_frame, ButtonStyle, ClickMap, PanelStyle, TextInput,
 };
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
@@ -144,7 +144,9 @@ impl AgentSelectView {
     }
 
     fn prompt_rows(&self, panel_width: u16, max_height: u16) -> u16 {
-        let capacity = max_height.saturating_sub(self.rows.len() as u16 + 9).max(1);
+        let capacity = max_height
+            .saturating_sub(self.rows.len() as u16 + 12)
+            .max(1);
         self.prompt
             .wrapped_line_count(panel_width.saturating_sub(4))
             .min(MAX_PROMPT_ROWS)
@@ -163,43 +165,47 @@ impl View for AgentSelectView {
         let panel_width = area.w.min(58);
         let max_h = area.h.saturating_sub(2);
         let prompt_rows = self.prompt_rows(panel_width, max_h);
-        let h = (self.rows.len() as u16 + prompt_rows + 9).min(max_h);
+        // Body: prompt label + prompt, blank, allocation label + rows,
+        // blank, permission row, blank, launch button.
+        let h = frame_height(self.rows.len() as u16 + prompt_rows + 7).min(max_h);
         let rect = centered(area, panel_width, h);
         let inner = draw_panel(buf, rect, t("agent.title"), ctx.theme, PanelStyle::Modal);
-        let bg = ctx.theme.bg_raised;
+        let frame = panel_frame(inner);
+        let content = frame.content;
+        let bg = ctx.theme.bg_panel;
 
         buf.draw_text(
-            inner.x + 1,
-            inner.y,
+            content.x + 1,
+            content.y,
             t("agent.prompt_label"),
             ctx.theme.text_dim,
             bg,
             AttrFlags::empty(),
             inner,
         );
-        let prompt_rect = Rect::new(inner.x, inner.y + 1, inner.w, prompt_rows);
+        let prompt_rect = Rect::new(content.x, content.y + 1, content.w, prompt_rows);
         let cursor = self
             .prompt
             .draw_wrapped(buf, prompt_rect, ctx.theme, self.focus == 0);
         clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
 
         buf.draw_text(
-            inner.x + 1,
-            inner.y + prompt_rows + 2,
+            content.x + 1,
+            content.y + prompt_rows + 2,
             t("agent.allocate"),
             ctx.theme.text_dim,
             bg,
             AttrFlags::empty(),
             inner,
         );
-        let rows_y = inner.y + prompt_rows + 3;
+        let rows_y = content.y + prompt_rows + 3;
         for (i, row) in self.rows.iter().enumerate() {
             let y = rows_y + i as u16;
-            if y >= inner.bottom().saturating_sub(3) {
+            if y >= content.bottom().saturating_sub(4) {
                 break;
             }
             let selected = self.focus == i + 1;
-            let row_rect = Rect::new(inner.x, y, inner.w, 1);
+            let row_rect = Rect::new(content.x, y, content.w, 1);
             let row_bg = if selected { ctx.theme.bg_selected } else { bg };
             buf.fill(
                 row_rect,
@@ -210,7 +216,7 @@ impl View for AgentSelectView {
             );
             let caret = if selected { "▸ " } else { "  " };
             buf.draw_text(
-                inner.x,
+                content.x,
                 y,
                 caret,
                 ctx.theme.accent,
@@ -226,7 +232,7 @@ impl View for AgentSelectView {
                 ctx.theme.text_dim
             };
             let x = buf.draw_text(
-                inner.x + 2,
+                content.x + 2,
                 y,
                 row.def.name,
                 name_fg,
@@ -250,7 +256,7 @@ impl View for AgentSelectView {
             if row.installed {
                 let (minus, plus) = draw_counter(
                     buf,
-                    inner.right().saturating_sub(9),
+                    content.right().saturating_sub(9),
                     y,
                     row.count,
                     ctx.theme,
@@ -262,7 +268,7 @@ impl View for AgentSelectView {
             } else {
                 let label = "not installed";
                 buf.draw_text(
-                    inner.right().saturating_sub(label.len() as u16 + 1),
+                    content.right().saturating_sub(label.len() as u16 + 1),
                     y,
                     label,
                     ctx.theme.text_faint,
@@ -278,9 +284,9 @@ impl View for AgentSelectView {
         }
 
         // Permission mode row.
-        let perm_y = inner.bottom().saturating_sub(3);
+        let perm_y = content.bottom().saturating_sub(3);
         let perm_selected = self.focus == self.rows.len() + 1;
-        let perm_rect = Rect::new(inner.x, perm_y, inner.w, 1);
+        let perm_rect = Rect::new(content.x, perm_y, content.w, 1);
         let perm_bg = if perm_selected {
             ctx.theme.bg_selected
         } else {
@@ -294,7 +300,7 @@ impl View for AgentSelectView {
             },
         );
         buf.draw_text(
-            inner.x + 1,
+            content.x + 1,
             perm_y,
             t("agent.permissions"),
             ctx.theme.text_dim,
@@ -304,7 +310,7 @@ impl View for AgentSelectView {
         );
         let value = draw_select_value(PERMISSION_MODES[self.permission_idx].1);
         buf.draw_text(
-            inner
+            content
                 .right()
                 .saturating_sub(value.chars().count() as u16 + 1),
             perm_y,
@@ -317,7 +323,7 @@ impl View for AgentSelectView {
         clicks.add(perm_rect, ClickTarget::Overlay(TAG_PERMISSION));
 
         // Launch button.
-        let launch_y = inner.bottom().saturating_sub(2);
+        let launch_y = content.bottom().saturating_sub(1);
         let total = self.total();
         let label = match total {
             0 => "Launch".to_string(),
@@ -327,7 +333,7 @@ impl View for AgentSelectView {
         let launch_focused = self.focus == self.rows.len() + 2;
         let btn = draw_button(
             buf,
-            inner.x + (inner.w.saturating_sub(label.len() as u16 + 2)) / 2,
+            content.x + (content.w.saturating_sub(label.len() as u16 + 2)) / 2,
             launch_y,
             &label,
             ctx.theme,
@@ -339,7 +345,7 @@ impl View for AgentSelectView {
 
         draw_hint_bar(
             buf,
-            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
+            frame.footer,
             &[
                 ("↑↓", "field"),
                 ("←→", "count"),

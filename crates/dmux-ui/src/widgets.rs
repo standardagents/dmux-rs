@@ -65,7 +65,7 @@ pub fn draw_kv_row(
     let bg = if selected {
         theme.bg_selected
     } else {
-        theme.bg_raised
+        theme.bg_panel
     };
     buf.fill(
         Rect::new(rect.x, rect.y, rect.w, 1),
@@ -141,7 +141,7 @@ pub fn draw_counter(
     let bg = if selected {
         theme.bg_selected
     } else {
-        theme.bg_raised
+        theme.bg_panel
     };
     let minus_fg = if value > 0 {
         theme.text
@@ -174,7 +174,7 @@ pub fn draw_hint_bar(buf: &mut CellBuffer, rect: Rect, hints: &[(&str, &str)], t
     if rect.is_empty() {
         return;
     }
-    let bg = theme.bg_raised;
+    let bg = theme.bg_panel;
     buf.fill(
         Rect::new(rect.x, rect.y, rect.w, 1),
         &Cell {
