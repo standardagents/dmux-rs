@@ -39,6 +39,8 @@ pub enum AppCmd {
     Quit,
     FocusPane(usize),
     OpenPaneMenu,
+    /// Execute the accepted session-recovery plans (#20).
+    RestoreSession,
     /// Row-anchored pane-actions flyout from the sidebar (#14): opens beside
     /// the clicked row, without activating the pane.
     OpenPaneFlyout { idx: usize, x: u16, y: u16 },

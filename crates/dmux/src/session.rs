@@ -301,6 +301,73 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
     out
 }
 
+/// One recoverable pane from a persisted config (#20): what to recreate
+/// after `tmux kill-server` wiped the live session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestorePlan {
+    /// Worktree agent pane: resume via the agent's session-resume path
+    /// (exact `agentSessionId` when recorded — the executor reads it from
+    /// the config record by slug).
+    Agent { slug: String, display: String, path: String, agent: String },
+    /// Terminal tab: reopen as a fresh shell (scrollback/process state died
+    /// with the server) in the saved cwd, or the project root fallback.
+    Shell { slug: String, display: String, cwd: String, project_root: Option<String> },
+}
+
+impl RestorePlan {
+    pub fn slug(&self) -> &str {
+        match self {
+            RestorePlan::Agent { slug, .. } | RestorePlan::Shell { slug, .. } => slug,
+        }
+    }
+}
+
+/// Build the recovery manifest from a TS-compatible config after the tmux
+/// server was reset (#20). Returns (plans, per-record skip notes). Legacy
+/// infra records are excluded; a missing worktree skips that record with a
+/// note instead of blocking the rest; a missing shell cwd falls back to the
+/// project root. `path_exists` is injected so tests need no filesystem.
+pub fn plan_session_restore(
+    config: &DmuxConfig,
+    project_root: &str,
+    path_exists: &dyn Fn(&str) -> bool,
+) -> (Vec<RestorePlan>, Vec<String>) {
+    let mut plans = Vec::new();
+    let mut skipped = Vec::new();
+    for rec in &config.panes {
+        let slug = rec.slug.clone();
+        if slug.is_empty()
+            || slug == "dmux"
+            || slug == "Welcome"
+            || slug.starts_with("dmux-spacer")
+            || slug.starts_with("dmux-hidden")
+        {
+            continue;
+        }
+        let display = rec.display_name.clone().unwrap_or_else(|| slug.clone());
+        match (rec.kind(), rec.agent.clone()) {
+            (PaneKind::Worktree, Some(agent)) => match rec.worktree_path.clone() {
+                Some(path) if path_exists(&path) => {
+                    plans.push(RestorePlan::Agent { slug, display, path, agent });
+                }
+                Some(path) => skipped.push(format!("{slug}: worktree missing ({path})")),
+                None => skipped.push(format!("{slug}: agent record without a worktree path")),
+            },
+            _ => {
+                let saved = rec.shell_cwd.clone().or_else(|| rec.worktree_path.clone());
+                let cwd = match saved {
+                    Some(dir) if path_exists(&dir) => dir,
+                    _ => project_root.to_string(),
+                };
+                let project_root_field =
+                    rec.project_root.clone().filter(|r| r != project_root && path_exists(r));
+                plans.push(RestorePlan::Shell { slug, display, cwd, project_root: project_root_field });
+            }
+        }
+    }
+    (plans, skipped)
+}
+
 /// Decide which tmux panes are content panes and pair them with config
 /// entries by slug (via the title contract). Config panes with no live tmux
 /// pane are skipped in Phase 0 (recreation is a Phase 1 concern); live panes
@@ -503,6 +570,69 @@ mod tests {
         assert!(!is_keepalive(&mk("sleep", "sleep 30")));
         // …and neither is an ordinary shell window.
         assert!(!is_keepalive(&mk("zsh", "")));
+    }
+
+    #[test]
+    fn restore_plan_covers_representative_ts_config() {
+        // #20: agent + shell + hidden + missing-path + multi-project +
+        // legacy-infra records from a TS-written config.
+        let config: DmuxConfig = serde_json::from_str(
+            r#"{
+              "projectName": "app",
+              "projectRoot": "/main",
+              "panes": [
+                {"id":"1","slug":"fix-auth","prompt":"","paneId":"%9","type":"worktree",
+                 "worktreePath":"/main/.wt/fix-auth","agent":"claude","agentSessionId":"sess-123"},
+                {"id":"2","slug":"gone-wt","prompt":"","paneId":"%10","type":"worktree",
+                 "worktreePath":"/main/.wt/deleted","agent":"claude"},
+                {"id":"3","slug":"terminal-1","prompt":"","paneId":"%11","type":"shell",
+                 "displayName":"logs","shellCwd":"/main/logs","hidden":true},
+                {"id":"4","slug":"terminal-2","prompt":"","paneId":"%12","type":"shell",
+                 "shellCwd":"/tmp/gone-dir"},
+                {"id":"5","slug":"other-term","prompt":"","paneId":"%13","type":"shell",
+                 "shellCwd":"/other","projectRoot":"/other"},
+                {"id":"6","slug":"dmux","prompt":"","paneId":"%1"},
+                {"id":"7","slug":"dmux-spacer-1","prompt":"","paneId":"%2"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let exists = |p: &str| matches!(p, "/main/.wt/fix-auth" | "/main/logs" | "/other" | "/main");
+        let (plans, skipped) = plan_session_restore(&config, "/main", &exists);
+        assert_eq!(
+            plans,
+            vec![
+                RestorePlan::Agent {
+                    slug: "fix-auth".into(),
+                    display: "fix-auth".into(),
+                    path: "/main/.wt/fix-auth".into(),
+                    agent: "claude".into(),
+                },
+                RestorePlan::Shell {
+                    slug: "terminal-1".into(),
+                    display: "logs".into(),
+                    cwd: "/main/logs".into(),
+                    project_root: None,
+                },
+                // Saved cwd is gone: falls back to the project root.
+                RestorePlan::Shell {
+                    slug: "terminal-2".into(),
+                    display: "terminal-2".into(),
+                    cwd: "/main".into(),
+                    project_root: None,
+                },
+                // Other project's terminal keeps its project association.
+                RestorePlan::Shell {
+                    slug: "other-term".into(),
+                    display: "other-term".into(),
+                    cwd: "/other".into(),
+                    project_root: Some("/other".into()),
+                },
+            ]
+        );
+        // The missing worktree is reported, not fatal; infra records vanish.
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("gone-wt"));
     }
 
     #[test]

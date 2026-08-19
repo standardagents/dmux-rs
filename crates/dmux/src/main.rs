@@ -265,9 +265,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         eprintln!("created session '{session_name}' for {}", project_root.display());
     }
+    let session_created = !exists;
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run(cli, config, project_root, session_name))
+    runtime.block_on(run(cli, config, project_root, session_name, session_created))
 }
 
 fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -412,6 +413,13 @@ struct App {
     /// A keepalive create command is in flight; never send another until
     /// its reply lands (#10 — unbounded keepalive spawn).
     keepalive_pending: bool,
+    /// The tmux session was created by THIS boot (fresh server): the config
+    /// is a recovery manifest, not a mirror of live panes (#20).
+    session_created: bool,
+    /// The one-shot session-recovery offer has been made (#20).
+    restore_offered: bool,
+    /// Plans accepted by the recovery dialog, executed by RestoreSession.
+    pending_restore: Vec<session::RestorePlan>,
     /// Server octal-escapes command-reply payloads (probed at attach, #19).
     /// None until the probe reply lands; no decoding happens before that,
     /// and the probe is the first tagged command so nothing races it.
@@ -446,6 +454,7 @@ async fn run(
     config: Option<DmuxConfig>,
     project_root: PathBuf,
     session_name: String,
+    session_created: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<String> = Vec::new();
     if let Some(socket) = &cli.socket {
@@ -578,6 +587,9 @@ async fn run(
         welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
         keepalive_present: false,
         keepalive_pending: false,
+        session_created,
+        restore_offered: false,
+        pending_restore: Vec::new(),
         replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
@@ -1817,6 +1829,41 @@ impl App {
             }
         }
         self.refresh_welcome_cards();
+        // Fresh server + persisted config: offer ONE explicit recovery
+        // action (#20). Agent restarts can have external side effects, so
+        // nothing restarts without this confirmation.
+        if self.session_created && !self.restore_offered && self.own_sizing {
+            self.restore_offered = true;
+            let root = self.project_root.to_string_lossy().into_owned();
+            let (plans, skipped) =
+                session::plan_session_restore(&self.config, &root, &|p| std::path::Path::new(p).is_dir());
+            let live: std::collections::HashSet<String> =
+                self.panes.iter().map(|p| p.slug.clone()).collect();
+            let plans: Vec<_> = plans.into_iter().filter(|pl| !live.contains(pl.slug())).collect();
+            if !skipped.is_empty() {
+                tracing::info!(?skipped, "session restore: unrecoverable records");
+            }
+            if !plans.is_empty() {
+                let agents = plans.iter().filter(|p| matches!(p, session::RestorePlan::Agent { .. })).count();
+                let shells = plans.len() - agents;
+                let mut msg = format!(
+                    "Last session had {} agent pane(s) and {} terminal(s). Restore them?",
+                    agents, shells
+                );
+                if !skipped.is_empty() {
+                    msg.push_str(&format!(" ({} unrecoverable skipped)", skipped.len()));
+                }
+                self.pending_restore = plans;
+                self.views.push(Box::new(ConfirmView::new(
+                    "Restore session",
+                    msg,
+                    "Restore",
+                    false,
+                    AppCmd::RestoreSession,
+                )));
+                self.dirty = true;
+            }
+        }
         // The session must never be one process-exit away from vanishing.
         self.ensure_keepalive();
     }
@@ -2807,6 +2854,63 @@ impl App {
                     project_root: None,
                 });
                 self.toast("Resuming agent session…");
+            }
+            AppCmd::RestoreSession => {
+                let plans = std::mem::take(&mut self.pending_restore);
+                let n = plans.len();
+                for plan in plans {
+                    match plan {
+                        session::RestorePlan::Agent { slug, display, path, agent } => {
+                            let mode = {
+                                let s = self.settings.lock().unwrap();
+                                s.get_str("permissionMode").unwrap_or("").to_string()
+                            };
+                            // Exact recorded session when tracked; agent
+                            // default resume otherwise (same path as the
+                            // welcome resume cards).
+                            let session_id = self
+                                .config
+                                .panes
+                                .iter()
+                                .find(|r| r.slug == slug)
+                                .and_then(|r| r.extra.get("agentSessionId"))
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            let cmd = agents::agent(&agent)
+                                .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
+                                .unwrap_or_else(|| agent.clone());
+                            self.create_window(NewWindowCtx {
+                                bootstrap: None,
+                                prompt: String::new(),
+                                display,
+                                slug,
+                                kind: PaneKind::Worktree,
+                                agent: Some(agent),
+                                launch_cmd: Some(format!("clear; {cmd}")),
+                                injection: None,
+                                worktree_path: Some(path.clone()),
+                                cwd: Some(path),
+                                project_root: None,
+                            });
+                        }
+                        session::RestorePlan::Shell { slug, display, cwd, project_root } => {
+                            self.create_window(NewWindowCtx {
+                                bootstrap: None,
+                                prompt: String::new(),
+                                display,
+                                slug,
+                                kind: PaneKind::Shell,
+                                agent: None,
+                                launch_cmd: None,
+                                injection: None,
+                                worktree_path: None,
+                                cwd: Some(cwd),
+                                project_root,
+                            });
+                        }
+                    }
+                }
+                self.toast(format!("Restoring {n} pane(s) from the last session…"));
             }
             AppCmd::NewTerminalAt { path, name } => {
                 let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
