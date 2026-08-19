@@ -74,16 +74,30 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         pane.term.render_into(buf, rect);
         clicks.add(rect, ClickTarget::PaneBody(i));
         // Right-edge border in the gutter column: separates neighboring panes
-        // and marks the pane's edge against the empty background, colored by
-        // the pane's project.
+        // and marks the pane's edge against the empty background. Ownership
+        // (#38): the FOCUSED pane claims every border segment it touches —
+        // including its left edge, which is drawn by the left neighbor —
+        // so the active pane is outlined in its own project color all round.
         let border_x = rect.right();
         if border_x < buf.cols() {
+            let focused_rect = scene.panes.get(scene.focused).and_then(|p| p.rect);
             let (pa, ps) = scene
                 .pane_accents
                 .get(i)
                 .copied()
                 .unwrap_or((scene.theme.accent, scene.theme.border));
-            let border_fg = if i == scene.focused { pa } else { ps };
+            let border_fg = if i == scene.focused {
+                pa
+            } else if focused_claims_edge(rect, scene.focused == i, focused_rect) {
+                scene
+                    .pane_accents
+                    .get(scene.focused)
+                    .copied()
+                    .map(|(fa, _)| fa)
+                    .unwrap_or(scene.theme.accent)
+            } else {
+                ps
+            };
             for row in rect.y.saturating_sub(TITLE_ROWS)..rect.bottom() {
                 buf.set(
                     border_x,
@@ -502,6 +516,24 @@ fn title_bar_style(
     }
 }
 
+/// Does the focused pane touch the right-edge border drawn by the pane at
+/// `rect` (#38)? True when the focused pane sits directly right of that
+/// border column and their vertical extents (title row included) overlap —
+/// the focused pane then owns the segment's color.
+fn focused_claims_edge(rect: Rect, is_focused: bool, focused_rect: Option<Rect>) -> bool {
+    if is_focused {
+        return true;
+    }
+    let Some(fr) = focused_rect else { return false };
+    let border_x = rect.right();
+    if fr.x != border_x + 1 {
+        return false;
+    }
+    let a_top = rect.y.saturating_sub(TITLE_ROWS);
+    let f_top = fr.y.saturating_sub(TITLE_ROWS);
+    a_top < fr.bottom() && f_top < rect.bottom()
+}
+
 /// Sidebar row annotation: an in-flight close (#29) outranks hidden.
 fn row_tag(closing: bool, hidden: bool) -> &'static str {
     if closing {
@@ -741,6 +773,33 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_pane_owns_every_touching_border() {
+        // Two side-by-side panes: left pane's right edge is the focused
+        // right pane's LEFT edge — the focused pane claims it (#38).
+        let left = Rect::new(41, 1, 48, 38);
+        let right = Rect::new(90, 1, 48, 38);
+        // Focused pane itself always claims its own edge.
+        assert!(focused_claims_edge(left, true, Some(left)));
+        // Right neighbor focused: it claims the shared border column.
+        assert!(focused_claims_edge(left, false, Some(right)));
+        // Not adjacent (gap of more than the gutter): no claim.
+        let far = Rect::new(95, 1, 40, 38);
+        assert!(!focused_claims_edge(left, false, Some(far)));
+        // Adjacent horizontally but no vertical overlap: no claim.
+        let below = Rect::new(90, 60, 48, 20);
+        assert!(!focused_claims_edge(left, false, Some(below)));
+        // Stacked layouts: a pane BELOW does not touch the right border of
+        // one above it, so unrelated borders keep their own colors.
+        let stacked_top = Rect::new(41, 1, 98, 18);
+        let stacked_bottom = Rect::new(41, 21, 98, 18);
+        assert!(!focused_claims_edge(
+            stacked_top,
+            false,
+            Some(stacked_bottom)
+        ));
+    }
 
     #[test]
     fn closing_state_outranks_hidden_in_row_tags() {
