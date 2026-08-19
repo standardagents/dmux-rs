@@ -39,6 +39,9 @@ pub enum AppCmd {
     Quit,
     FocusPane(usize),
     OpenPaneMenu,
+    /// Row-anchored pane-actions flyout from the sidebar (#14): opens beside
+    /// the clicked row, without activating the pane.
+    OpenPaneFlyout { idx: usize, x: u16, y: u16 },
     OpenSettings,
     OpenNewAgent,
     OpenShortcuts,

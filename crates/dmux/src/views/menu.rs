@@ -29,11 +29,20 @@ pub struct MenuView {
     title: String,
     items: Vec<MenuItem>,
     list: ListState,
+    /// Anchor cell for a row-attached flyout (#14); None = centered modal.
+    anchor: Option<(u16, u16)>,
 }
 
 impl MenuView {
     pub fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
-        Self { title: title.into(), items, list: ListState::default() }
+        Self { title: title.into(), items, list: ListState::default(), anchor: None }
+    }
+
+    /// Render as a flyout whose top-left sits at (x, y), clamped to the
+    /// terminal so edge rows stay fully usable.
+    pub fn anchored(mut self, x: u16, y: u16) -> Self {
+        self.anchor = Some((x, y));
+        self
     }
 
     fn activate(&mut self, idx: usize) -> ViewResult {
@@ -42,6 +51,17 @@ impl MenuView {
             None => ViewResult::Stay,
         }
     }
+}
+
+/// Clamp a `w`×`h` flyout anchored at (x, y) into `area` — shifted left/up
+/// as needed so rows near the right or bottom edge keep the whole panel on
+/// screen.
+pub fn flyout_rect(area: Rect, (x, y): (u16, u16), w: u16, h: u16) -> Rect {
+    let w = w.min(area.w);
+    let h = h.min(area.h);
+    let x = x.min(area.right().saturating_sub(w)).max(area.x);
+    let y = y.min(area.bottom().saturating_sub(h)).max(area.y);
+    Rect::new(x, y, w, h)
 }
 
 impl View for MenuView {
@@ -61,7 +81,10 @@ impl View for MenuView {
             .max(self.title.chars().count() + 6) as u16)
             .clamp(28, area.w);
         let h = (self.items.len() as u16 + 4).min(area.h);
-        let rect = centered(area, w, h);
+        let rect = match self.anchor {
+            Some(anchor) => flyout_rect(area, anchor, w, h),
+            None => centered(area, w, h),
+        };
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
 
         let visible = inner.h.saturating_sub(1) as usize;
@@ -150,5 +173,44 @@ impl View for MenuView {
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.items.len());
         ViewResult::Stay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmux_host::Modifiers;
+
+    #[test]
+    fn flyout_placement_stays_in_bounds() {
+        let area = Rect::new(0, 0, 120, 40);
+        // Interior anchor: exact position.
+        assert_eq!(flyout_rect(area, (30, 5), 30, 10), Rect::new(30, 5, 30, 10));
+        // Bottom-edge row: shifted up so the panel stays on screen.
+        let r = flyout_rect(area, (30, 38), 30, 10);
+        assert_eq!(r.bottom(), 40);
+        assert_eq!(r.y, 30);
+        // Right-edge anchor: shifted left.
+        let r = flyout_rect(area, (118, 5), 30, 10);
+        assert_eq!(r.right(), 120);
+        // Panel larger than the terminal: clamped to it.
+        let r = flyout_rect(area, (10, 10), 200, 200);
+        assert_eq!((r.w, r.h), (120, 40));
+    }
+
+    #[test]
+    fn escape_dismisses_the_flyout() {
+        let mut v = MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)])
+            .anchored(30, 5);
+        let esc = KeyEvent { key: KeyCode::Escape, modifiers: Modifiers::NONE };
+        assert!(matches!(v.on_key(&esc), ViewResult::Close));
+    }
+
+    #[test]
+    fn enter_runs_the_selected_item() {
+        let mut v = MenuView::new("pane", vec![MenuItem::new("Rename", "", AppCmd::Quit)])
+            .anchored(30, 5);
+        let enter = KeyEvent { key: KeyCode::Enter, modifiers: Modifiers::NONE };
+        assert!(matches!(v.on_key(&enter), ViewResult::CloseAnd(_)));
     }
 }

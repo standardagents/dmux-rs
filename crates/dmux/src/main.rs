@@ -1476,6 +1476,44 @@ impl App {
         }
     }
 
+    /// Pane-scoped menu items (rename, hide, worktree actions, autopilot,
+    /// hooks, copy path, editor, close) — shared by the leader-key pane menu
+    /// and the sidebar flyout (#14).
+    fn pane_menu_items(&self, idx: usize) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        if let Some(p) = self.panes.get(idx) {
+            let hide_label = if p.hidden { t("menu.show") } else { t("menu.hide") };
+            items.push(MenuItem::new(t("menu.rename"), "^b r", AppCmd::PromptRename(idx)));
+            items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
+            if p.worktree_path.is_some() {
+                items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
+                items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
+                items.push(MenuItem::new(t("menu.diff"), "", AppCmd::ShowDiff(idx)));
+                if p.agent.is_some() {
+                    items.push(MenuItem::new(t("menu.duplicate"), "", AppCmd::DuplicatePane(idx)));
+                }
+            }
+            if p.agent.is_some() {
+                let ap = if p.autopilot { t("menu.autopilot_off") } else { t("menu.autopilot_on") };
+                items.push(MenuItem::new(ap, "", AppCmd::ToggleAutopilot(idx)));
+            }
+            let hook_root = p
+                .project_root
+                .clone()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| self.project_root.clone());
+            for (hook, label) in [("run_test", t("menu.run_test")), ("run_dev", t("menu.run_dev"))] {
+                if hooks::hook_path(&hook_root, hook).is_some() {
+                    items.push(MenuItem::new(label, "", AppCmd::RunHook { idx, name: hook.into() }));
+                }
+            }
+            items.push(MenuItem::new(t("menu.copy_path"), "", AppCmd::CopyPath(idx)));
+            items.push(MenuItem::new(t("menu.editor"), "", AppCmd::OpenInEditor(idx)));
+            items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
+        }
+        items
+    }
+
     /// Rebuild the sidebar project groups + per-pane colors (TS contract:
     /// main project first, then config `sidebarProjects` order, then
     /// pane-derived; colors from `colorTheme` with TS auto-assignment for
@@ -2074,15 +2112,13 @@ impl App {
             }
             MouseKind::LeftHeld if is_press => match target {
                 Some(ClickTarget::SidebarRow(i)) => {
-                    // TS semantics: click selects (sidebar keeps the
-                    // keyboard); double-click activates the pane.
+                    // Click selects (sidebar keeps the keyboard);
+                    // double-click opens the row-anchored pane flyout (#14)
+                    // WITHOUT activating the pane — Enter still activates.
                     self.selected = i;
                     if is_double {
-                        self.sidebar_focused = false;
-                        if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
-                            return self.execute_cmd(AppCmd::ToggleHidden(i));
-                        }
-                        return self.execute_cmd(AppCmd::FocusPane(i));
+                        let anchor_x = self.layout.sidebar.right() + 1;
+                        return self.execute_cmd(AppCmd::OpenPaneFlyout { idx: i, x: anchor_x, y: row });
                     }
                     self.sidebar_focused = true;
                     self.dirty = true;
@@ -2283,39 +2319,19 @@ impl App {
                     self.dirty = true;
                 }
             }
+            AppCmd::OpenPaneFlyout { idx, x, y } => {
+                // Row-anchored pane actions (#14): pane items only, beside
+                // the sidebar row, without touching focus/activation.
+                if let Some(p) = self.panes.get(idx) {
+                    let title = p.display_title().to_string();
+                    let items = self.pane_menu_items(idx);
+                    self.views.push(Box::new(MenuView::new(title, items).anchored(x, y)));
+                    self.dirty = true;
+                }
+            }
             AppCmd::OpenPaneMenu => {
                 let idx = self.selected.min(self.panes.len().saturating_sub(1));
-                let mut items = Vec::new();
-                if let Some(p) = self.panes.get(idx) {
-                    let hide_label = if p.hidden { t("menu.show") } else { t("menu.hide") };
-                    items.push(MenuItem::new(t("menu.rename"), "^b r", AppCmd::PromptRename(idx)));
-                    items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
-                    if p.worktree_path.is_some() {
-                        items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
-                        items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
-                        items.push(MenuItem::new(t("menu.diff"), "", AppCmd::ShowDiff(idx)));
-                        if p.agent.is_some() {
-                            items.push(MenuItem::new(t("menu.duplicate"), "", AppCmd::DuplicatePane(idx)));
-                        }
-                    }
-                    if p.agent.is_some() {
-                        let ap = if p.autopilot { t("menu.autopilot_off") } else { t("menu.autopilot_on") };
-                        items.push(MenuItem::new(ap, "", AppCmd::ToggleAutopilot(idx)));
-                    }
-                    let hook_root = p
-                        .project_root
-                        .clone()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| self.project_root.clone());
-                    for (hook, label) in [("run_test", t("menu.run_test")), ("run_dev", t("menu.run_dev"))] {
-                        if hooks::hook_path(&hook_root, hook).is_some() {
-                            items.push(MenuItem::new(label, "", AppCmd::RunHook { idx, name: hook.into() }));
-                        }
-                    }
-                    items.push(MenuItem::new(t("menu.copy_path"), "", AppCmd::CopyPath(idx)));
-                    items.push(MenuItem::new(t("menu.editor"), "", AppCmd::OpenInEditor(idx)));
-                    items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
-                }
+                let mut items = self.pane_menu_items(idx);
                 items.push(MenuItem::new(t("menu.new_agents"), "^b n", AppCmd::OpenNewAgent));
                 items.push(MenuItem::new(t("menu.new_terminal"), "^b t", AppCmd::NewTerminal));
                 items.push(MenuItem::new(t("menu.add_project"), "^b p", AppCmd::PromptAddProject));
