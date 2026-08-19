@@ -130,14 +130,13 @@ pub fn parse_remote_url(remote: &str) -> Option<RepoRef> {
             return None;
         }
         path
-    } else if let Some(rest) = strip_prefix_ascii_case(remote, "https://") {
+    } else {
+        let rest = strip_prefix_ascii_case(remote, "https://")?;
         let (authority, path) = rest.split_once('/')?;
         if !authority.eq_ignore_ascii_case("github.com") {
             return None;
         }
         path
-    } else {
-        return None;
     };
 
     parse_slug(path)
