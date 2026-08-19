@@ -83,17 +83,19 @@ Loop rules:
 - **One issue per iteration.** Reproduce → fix → corpus-lock → validate →
   push to `main` → close the issue with the commit sha. Never batch
   half-finished fixes.
-- **Claim by self-assigning.** When you pick up an issue, assign yourself
-  (`gh issue edit <n> --add-assignee @me`) before starting work, so humans
-  and other agents can see it's taken.
-- **Move the card to "In Progress".** When you claim an issue, move it on
-  the org Project board: `scripts/board.sh <n> "In Progress"`. It uses the
-  issue CLI's GitHub App credentials (no gh scopes needed) and no-ops with
-  a note when they're absent. Closing the issue moves the card to Done via
-  the board's own workflow.
+- **Stay current with the issue tooling.** When the loop boots, run
+  `issue upgrade` (and `issue skill install` if the skill changed) so the
+  claim/close flow matches the current `@standardagents/issues` contract,
+  and follow the skill's own instructions for claiming and progressing
+  issues when they differ from this list.
+- **Claim with `issue start <n>`.** It self-assigns and moves the card to
+  "In Progress" through the GitHub App. (`scripts/board.sh <n> <status>`
+  remains as a fallback for manual card moves.)
 - **Auto-closing commits.** Include `Fixes #<n>` in the fix commit message
   so GitHub closes the issue automatically when the commit lands on
   `main`.
+- **Close with `issue finish <n> "<message>"`.** It posts the explanation,
+  closes if still open, and moves the card to Done.
 - **Explain every fix on its issue.** When you fix and push, comment on
   the issue (through the `issue` CLI) with what the problem actually was
   (root cause, not just symptom) and how you fixed it, plus the commit
