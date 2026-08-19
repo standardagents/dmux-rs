@@ -23,5 +23,5 @@ pub use theme::{
 };
 pub use widgets::{
     draw_button, draw_checkbox, draw_counter, draw_hint_bar, draw_kv_row, draw_radio,
-    draw_select_value, spinner_frame, ButtonStyle,
+    draw_select_value, spinner_frame, ButtonStyle, CounterHighlight,
 };

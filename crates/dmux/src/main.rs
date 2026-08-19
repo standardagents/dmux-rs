@@ -44,8 +44,10 @@ use dmux_ui::{ClickMap, Theme};
 use github::{IssueLoadState, SharedIssueState};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
-use sidebar::{key_action as sidebar_key_action, ProjectActivation, ProjectSelection};
-use sidebar::{SidebarKeyAction, SidebarNavTarget};
+use sidebar::{
+    key_action as sidebar_key_action, ProjectActivation, ProjectSelection, SidebarDrag,
+    SidebarKeyAction, SidebarNavTarget,
+};
 use views::{
     AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
     MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx,
@@ -82,39 +84,6 @@ fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux
     };
     let tx = x.min(area.right().saturating_sub(w)).max(area.x);
     dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
-}
-
-/// Sidebar drag-reorder gesture (#26). A press on a row arms a candidate;
-/// crossing onto a different terminal row enters reorder mode (an ordinary
-/// click never does); release commits over a sidebar row or cancels
-/// anywhere else, leaving the order unchanged.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SidebarDrag {
-    Armed { src: usize, start_row: u16 },
-    Reordering { src: usize, pointer_row: u16 },
-}
-
-impl SidebarDrag {
-    fn motion(self, row: u16) -> SidebarDrag {
-        match self {
-            SidebarDrag::Armed { src, start_row } if row != start_row => SidebarDrag::Reordering {
-                src,
-                pointer_row: row,
-            },
-            SidebarDrag::Armed { .. } => self,
-            SidebarDrag::Reordering { src, .. } => SidebarDrag::Reordering {
-                src,
-                pointer_row: row,
-            },
-        }
-    }
-
-    fn reordering(&self) -> Option<(usize, u16)> {
-        match self {
-            SidebarDrag::Reordering { src, pointer_row } => Some((*src, *pointer_row)),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -548,9 +517,9 @@ struct App {
     drag_select: Option<usize>,
     /// Pane index receiving forwarded mouse-drag events (app mouse mode).
     mouse_forward: Option<usize>,
-    /// Physical button state: SGR 1002 reports press and drag identically,
-    /// so clicks fire only on the press edge.
+    /// Physical button state disambiguates press, drag, release, and hover.
     mouse_down: bool,
+    hovered: Option<ClickTarget>,
     /// The current drag actually moved (a plain click must not copy).
     drag_moved: bool,
     /// Last press (time, col, row) for double-click detection.
@@ -738,6 +707,7 @@ async fn run(
         drag_select: None,
         mouse_forward: None,
         mouse_down: false,
+        hovered: None,
         drag_moved: false,
         last_press: None,
         last_search: None,
@@ -2378,6 +2348,7 @@ impl App {
         self.back = CellBuffer::new(new_size.0, new_size.1);
         self.emitter.invalidate();
         self.emitter.clear_screen();
+        self.hovered = None;
         let _ = self
             .client
             .send(format!("refresh-client -C {}x{}", new_size.0, new_size.1));
@@ -2385,11 +2356,13 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Input
     /// Returns false to quit.
     fn handle_input(&mut self, ev: InputEvent) -> bool {
         match ev {
             InputEvent::Key(key) => {
+                if self.hovered.take().is_some() {
+                    self.dirty = true;
+                }
                 if let Some(top) = self.views.last_mut() {
                     let result = top.on_key(&key);
                     self.dirty = true;
@@ -2400,13 +2373,11 @@ impl App {
                     self.leader_armed = false;
                     self.dirty = true;
                 }
-                // Welcome screen owns navigation keys when no panes are visible.
                 if !leader_was_armed && self.welcome_active() {
                     if let Some(handled) = self.handle_welcome_key(&key) {
                         return handled;
                     }
                 }
-                // Then the sidebar, while it holds focus.
                 if !leader_was_armed && self.sidebar_focused {
                     if let Some(handled) = self.handle_sidebar_key(&key) {
                         return handled;
@@ -2417,10 +2388,13 @@ impl App {
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
-                let (col, row, kind, shift) = input::classify_mouse(&m);
+                let (col, row, kind, shift) = input::classify_mouse(&m, self.mouse_down);
                 self.handle_mouse(col, row, kind, shift)
             }
             InputEvent::Paste(text) => {
+                if self.hovered.take().is_some() {
+                    self.dirty = true;
+                }
                 if let Some(top) = self.views.last_mut() {
                     let result = top.on_paste(&text);
                     self.dirty = true;
@@ -2573,6 +2547,29 @@ impl App {
 
     fn handle_mouse(&mut self, col: u16, row: u16, kind: MouseKind, shift: bool) -> bool {
         let target = self.click_map.hit(col, row).copied();
+        if kind == MouseKind::Hover {
+            let next = views::hover_target(target, !self.views.is_empty());
+            if views::update_hover(&mut self.hovered, next) {
+                self.dirty = true;
+            }
+            if let Some(ClickTarget::PaneBody(i)) = target {
+                if let Some(p) = self.panes.get(i) {
+                    let modes = p.term.input_modes();
+                    if modes.mouse_motion && modes.sgr_mouse {
+                        if let Some(rect) = p.rect {
+                            let motion = input::encode_sgr_mouse(
+                                35,
+                                true,
+                                col.saturating_sub(rect.x),
+                                row.saturating_sub(rect.y),
+                            );
+                            let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &motion));
+                        }
+                    }
+                }
+            }
+            return true;
+        }
         let is_press = kind == MouseKind::LeftHeld && !self.mouse_down;
         match kind {
             MouseKind::LeftHeld => self.mouse_down = true,
@@ -2712,7 +2709,7 @@ impl App {
                         self.dirty = true;
                     }
                 },
-                MouseKind::LeftHeld | MouseKind::Release => {}
+                MouseKind::LeftHeld | MouseKind::Hover | MouseKind::Release => {}
             }
             return true;
         }
@@ -2920,7 +2917,7 @@ impl App {
                     }
                 }
             },
-            MouseKind::LeftHeld | MouseKind::Release => {}
+            MouseKind::LeftHeld | MouseKind::Hover | MouseKind::Release => {}
         }
         true
     }
@@ -4481,6 +4478,7 @@ impl App {
             groups: &self.sidebar_groups,
             pane_accents: &self.pane_accents,
             reorder: self.sidebar_drag.as_ref().and_then(|d| d.reordering()),
+            hovered: self.hovered,
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 
@@ -4504,6 +4502,7 @@ impl App {
                 session_name: &self.session_name,
                 project_root: &self.project_root.to_string_lossy(),
                 installed: &self.installed_agents,
+                hovered: self.hovered,
             };
             welcome::draw(
                 &mut self.back,
@@ -4525,6 +4524,7 @@ impl App {
             let ctx = ViewCtx {
                 theme: &self.theme,
                 anim: self.anim,
+                hovered: self.hovered,
             };
             let full = Rect::new(0, 0, self.size.0, self.size.1);
             let last = self.views.len() - 1;

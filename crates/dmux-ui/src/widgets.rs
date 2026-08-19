@@ -128,6 +128,14 @@ pub fn draw_radio(on: bool) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CounterHighlight {
+    None,
+    Row,
+    Minus,
+    Plus,
+}
+
 /// `[-] n [+]` counter control; returns (minus_rect, plus_rect).
 pub fn draw_counter(
     buf: &mut CellBuffer,
@@ -135,20 +143,37 @@ pub fn draw_counter(
     y: u16,
     value: u8,
     theme: &Theme,
-    selected: bool,
+    highlight: CounterHighlight,
     clip: Rect,
 ) -> (Rect, Rect) {
-    let bg = if selected {
+    let bg = if highlight == CounterHighlight::Row {
         theme.bg_selected
     } else {
         theme.bg_panel
     };
-    let minus_fg = if value > 0 {
+    let minus_hovered = highlight == CounterHighlight::Minus;
+    let plus_hovered = highlight == CounterHighlight::Plus;
+    let minus_fg = if minus_hovered && value > 0 {
+        theme.accent
+    } else if value > 0 {
         theme.text
     } else {
         theme.text_faint
     };
-    let mut cx = buf.draw_text(x, y, "[-]", minus_fg, bg, AttrFlags::empty(), clip);
+    let minus_bg = if minus_hovered { theme.bg_selected } else { bg };
+    let mut cx = buf.draw_text(
+        x,
+        y,
+        "[-]",
+        minus_fg,
+        minus_bg,
+        if minus_hovered {
+            AttrFlags::BOLD
+        } else {
+            AttrFlags::empty()
+        },
+        clip,
+    );
     let minus = Rect::new(x, y, cx - x, 1);
     let val_fg = if value > 0 {
         theme.accent
@@ -165,7 +190,24 @@ pub fn draw_counter(
         clip,
     );
     let plus_x = cx;
-    cx = buf.draw_text(cx, y, "[+]", theme.text, bg, AttrFlags::empty(), clip);
+    let plus_bg = if plus_hovered { theme.bg_selected } else { bg };
+    cx = buf.draw_text(
+        cx,
+        y,
+        "[+]",
+        if plus_hovered {
+            theme.accent
+        } else {
+            theme.text
+        },
+        plus_bg,
+        if plus_hovered {
+            AttrFlags::BOLD
+        } else {
+            AttrFlags::empty()
+        },
+        clip,
+    );
     (minus, Rect::new(plus_x, y, cx - plus_x, 1))
 }
 
@@ -206,5 +248,21 @@ pub fn draw_hint_bar(buf: &mut CellBuffer, rect: Rect, hints: &[(&str, &str)], t
             AttrFlags::empty(),
             rect,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counter_hover_highlights_only_the_targeted_control() {
+        let theme = Theme::named("violet");
+        let mut buf = CellBuffer::new(20, 1);
+        let clip = buf.area();
+        let (minus, plus) = draw_counter(&mut buf, 1, 0, 1, &theme, CounterHighlight::Plus, clip);
+        assert_ne!(buf.get(minus.x, 0).bg, theme.bg_selected);
+        assert_eq!(buf.get(plus.x, 0).bg, theme.bg_selected);
+        assert!(buf.get(plus.x, 0).attrs.contains(AttrFlags::BOLD));
     }
 }

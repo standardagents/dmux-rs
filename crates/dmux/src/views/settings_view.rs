@@ -295,7 +295,7 @@ impl View for SettingsView {
             .enumerate()
         {
             let y = inner.y + row as u16;
-            let selected = i == self.list.selected;
+            let selected = ctx.active_overlay(i as u64, i == self.list.selected);
             let value_text = match &def.kind {
                 Kind::Bool => {
                     let on = values[i].as_bool().unwrap_or(false);

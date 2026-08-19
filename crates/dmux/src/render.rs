@@ -46,6 +46,7 @@ pub struct Scene<'a> {
     pub pane_accents: &'a [(Color, Color)],
     /// Active sidebar reorder drag (#26): (source pane index, pointer row).
     pub reorder: Option<(usize, u16)>,
+    pub hovered: Option<ClickTarget>,
 }
 
 /// One sidebar project group, precomputed by the app.
@@ -205,7 +206,11 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 break;
             }
             let pane = &scene.panes[i];
-            let selected = pane_is_selected(i, scene.selected, scene.sidebar_project.is_some());
+            let selected = active_target(
+                scene.hovered,
+                ClickTarget::SidebarRow(i),
+                pane_is_selected(i, scene.selected, scene.sidebar_project.is_some()),
+            );
             let focused = i == scene.focused;
             let caret = if selected { "▸" } else { " " };
             let glyph = if pane.closing {
@@ -316,7 +321,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 t.text_faint
             };
-            let selected_action = scene
+            let keyboard_action = scene
                 .sidebar_project
                 .filter(|project| project.root == group.root)
                 .map(|project| project.action);
@@ -325,12 +330,17 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 issue_action_label(&group.issue_label, group.active, scene.sidebar_focused);
             let issue_label = truncate(&issue_action, issue_max);
             let ix = area.x + 1;
+            let issue_target = ClickTarget::SidebarGroupIssues(gi);
             let issue_end = draw_sidebar_action(
                 buf,
                 ix,
                 row,
                 &issue_label,
-                selected_action == Some(ProjectAction::Issues),
+                active_target(
+                    scene.hovered,
+                    issue_target,
+                    keyboard_action == Some(ProjectAction::Issues),
+                ),
                 color,
                 group.accent,
                 sb_bg,
@@ -339,40 +349,44 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             );
             clicks.add(
                 Rect::new(ix, row, issue_end.saturating_sub(ix), 1),
-                ClickTarget::SidebarGroupIssues(gi),
+                issue_target,
             );
+            let agent_target = ClickTarget::SidebarGroupNewAgent(gi);
             let ax = draw_sidebar_action(
                 buf,
                 x0,
                 row,
                 &na,
-                selected_action == Some(ProjectAction::NewAgent),
+                active_target(
+                    scene.hovered,
+                    agent_target,
+                    keyboard_action == Some(ProjectAction::NewAgent),
+                ),
                 color,
                 group.accent,
                 sb_bg,
                 t,
                 area,
             );
-            clicks.add(
-                Rect::new(x0, row, ax - x0, 1),
-                ClickTarget::SidebarGroupNewAgent(gi),
-            );
+            clicks.add(Rect::new(x0, row, ax - x0, 1), agent_target);
+            let terminal_target = ClickTarget::SidebarGroupNewTerminal(gi);
             let tx = draw_sidebar_action(
                 buf,
                 ax + 2,
                 row,
                 &term,
-                selected_action == Some(ProjectAction::NewTerminal),
+                active_target(
+                    scene.hovered,
+                    terminal_target,
+                    keyboard_action == Some(ProjectAction::NewTerminal),
+                ),
                 color,
                 group.accent,
                 sb_bg,
                 t,
                 area,
             );
-            clicks.add(
-                Rect::new(ax + 2, row, tx - ax - 2, 1),
-                ClickTarget::SidebarGroupNewTerminal(gi),
-            );
+            clicks.add(Rect::new(ax + 2, row, tx - ax - 2, 1), terminal_target);
             row += 1;
         }
         // Breathing room between groups.
@@ -431,45 +445,54 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         );
 
         let utility_row = area.bottom().saturating_sub(3);
-        let px = buf.draw_text(
+        let project_target = ClickTarget::SidebarNewProject;
+        let px = draw_sidebar_action(
+            buf,
             area.x + 1,
             utility_row,
             "+ project",
+            scene.hovered == Some(project_target),
+            t.accent,
             t.accent,
             sb_bg,
-            AttrFlags::BOLD,
+            t,
             area,
         );
         clicks.add(
             Rect::new(area.x + 1, utility_row, px - area.x - 1, 1),
-            ClickTarget::SidebarNewProject,
+            project_target,
         );
-        let sx = buf.draw_text(
+        let settings_target = ClickTarget::SidebarSettings;
+        let sx = draw_sidebar_action(
+            buf,
             px + 2,
             utility_row,
             "⚙ settings",
+            scene.hovered == Some(settings_target),
             t.text_dim,
+            t.accent,
             sb_bg,
-            AttrFlags::empty(),
+            t,
             area,
         );
         clicks.add(
             Rect::new(px + 2, utility_row, sx - px - 2, 1),
-            ClickTarget::SidebarSettings,
+            settings_target,
         );
-        let hx = buf.draw_text(
+        let help_target = ClickTarget::SidebarHelp;
+        let hx = draw_sidebar_action(
+            buf,
             sx + 2,
             utility_row,
             "? shortcuts",
+            scene.hovered == Some(help_target),
             t.text_dim,
+            t.accent,
             sb_bg,
-            AttrFlags::empty(),
+            t,
             area,
         );
-        clicks.add(
-            Rect::new(sx + 2, utility_row, hx - sx - 2, 1),
-            ClickTarget::SidebarHelp,
-        );
+        clicks.add(Rect::new(sx + 2, utility_row, hx - sx - 2, 1), help_target);
     }
 
     // Build + auto-filed issues (first-party diagnostics ring).
@@ -491,11 +514,20 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             format!(" · 🐛 {total}")
         };
         let color = if fresh > 0 { t.warn } else { t.text_faint };
-        let ix = buf.draw_text(vx, ver_row, &label, color, sb_bg, AttrFlags::empty(), area);
-        clicks.add(
-            Rect::new(vx, ver_row, ix.saturating_sub(vx), 1),
-            ClickTarget::SidebarIssues,
+        let target = ClickTarget::SidebarIssues;
+        let ix = draw_sidebar_action(
+            buf,
+            vx,
+            ver_row,
+            &label,
+            scene.hovered == Some(target),
+            color,
+            t.accent,
+            sb_bg,
+            t,
+            area,
         );
+        clicks.add(Rect::new(vx, ver_row, ix.saturating_sub(vx), 1), target);
     }
 
     // Footer: leader hint or status.
@@ -545,6 +577,14 @@ fn draw_sidebar_action(
 fn pane_is_selected(index: usize, selected: usize, project_selected: bool) -> bool {
     !project_selected && index == selected
 }
+
+fn active_target(hovered: Option<ClickTarget>, target: ClickTarget, selected: bool) -> bool {
+    match hovered {
+        Some(hovered) if hovered.is_hoverable() => hovered == target,
+        _ => selected,
+    }
+}
+
 fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
     match pane.status {
         PaneStatus::Working => spinner_frame(anim).to_string(),
@@ -567,7 +607,11 @@ fn draw_pane_title(
         return;
     }
     let focused = idx == scene.focused;
-    let selected = pane_is_selected(idx, scene.selected, scene.sidebar_project.is_some());
+    let selected = active_target(
+        scene.hovered,
+        ClickTarget::PaneTitle(idx),
+        pane_is_selected(idx, scene.selected, scene.sidebar_project.is_some()),
+    );
     let (pa, ps) = scene
         .pane_accents
         .get(idx)
@@ -651,10 +695,34 @@ fn draw_pane_title(
     );
     x += 2;
     for (target, vivid, dim) in dots {
-        let fg = if focused { vivid } else { dim };
+        let hovered = scene.hovered == Some(target);
+        let fg = if focused || hovered { vivid } else { dim };
         let bx = x;
-        x = buf.draw_text(x, bar.y, "●", fg, bg, AttrFlags::empty(), bar);
-        clicks.add(Rect::new(bx, bar.y, 2, 1), target);
+        let hit = Rect::new(bx, bar.y, 2, 1);
+        let dot_bg = if hovered { t.bg_selected } else { bg };
+        if hovered {
+            buf.fill(
+                hit,
+                &Cell {
+                    bg: dot_bg,
+                    ..Cell::default()
+                },
+            );
+        }
+        x = buf.draw_text(
+            x,
+            bar.y,
+            "●",
+            fg,
+            dot_bg,
+            if hovered {
+                AttrFlags::BOLD
+            } else {
+                AttrFlags::empty()
+            },
+            bar,
+        );
+        clicks.add(hit, target);
         x += 1;
     }
 }
@@ -756,6 +824,7 @@ mod tests {
             pane_accents: &[],
             reorder: None,
             sidebar_project: None,
+            hovered: None,
         }
     }
 
@@ -817,5 +886,46 @@ mod tests {
         let text = buffer_text(&buf, 40, 8);
         assert!(!text.contains("+ project"));
         assert!(!text.contains("⚙ settings"));
+    }
+
+    #[test]
+    fn hover_highlights_exact_sidebar_actions() {
+        let theme = Theme::named("violet");
+        let layout = Layout {
+            sidebar: Rect::new(0, 0, 40, 20),
+            ..Default::default()
+        };
+        let groups = [SidebarGroup {
+            name: "repo".into(),
+            root: "/repo".into(),
+            accent: theme.accent,
+            accent_soft: theme.accent_soft,
+            pane_indices: vec![],
+            issue_label: "2 issues".into(),
+            active: true,
+        }];
+        let mut scene = footer_scene(&layout, &groups, &theme);
+        scene.hovered = Some(ClickTarget::SidebarGroupNewAgent(0));
+        let mut buf = CellBuffer::new(40, 20);
+        let mut clicks = ClickMap::new();
+        draw_sidebar(&mut buf, &scene, &mut clicks);
+
+        let agent_x = (0..40)
+            .find(|x| clicks.hit(*x, 2) == Some(&ClickTarget::SidebarGroupNewAgent(0)))
+            .unwrap();
+        let issue_x = (0..40)
+            .find(|x| clicks.hit(*x, 2) == Some(&ClickTarget::SidebarGroupIssues(0)))
+            .unwrap();
+        assert_eq!(buf.get(agent_x, 2).bg, theme.bg_selected);
+        assert_ne!(buf.get(issue_x, 2).bg, theme.bg_selected);
+
+        scene.hovered = Some(ClickTarget::SidebarSettings);
+        let mut footer = CellBuffer::new(40, 20);
+        clicks.clear();
+        draw_sidebar(&mut footer, &scene, &mut clicks);
+        let settings_x = (0..40)
+            .find(|x| clicks.hit(*x, 17) == Some(&ClickTarget::SidebarSettings))
+            .unwrap();
+        assert_eq!(footer.get(settings_x, 17).bg, theme.bg_selected);
     }
 }

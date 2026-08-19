@@ -92,15 +92,8 @@ impl View for EnabledAgentsView {
             let on = enabled.iter().any(|id| id == def.id);
             let label = format!("{} {}  [{}]", draw_checkbox(on), def.name, def.short);
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(
-                buf,
-                row_rect,
-                &label,
-                "",
-                ctx.theme,
-                i == self.list.selected,
-                true,
-            );
+            let active = ctx.active_overlay(i as u64, i == self.list.selected);
+            draw_kv_row(buf, row_rect, &label, "", ctx.theme, active, true);
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
         draw_hint_bar(

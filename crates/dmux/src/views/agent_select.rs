@@ -2,7 +2,7 @@ use dmux_compositor::{AttrFlags, Cell, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
 use dmux_ui::{
     centered, draw_button, draw_counter, draw_hint_bar, draw_panel, draw_select_value,
-    frame_height, panel_frame, ButtonStyle, ClickMap, PanelStyle, TextInput,
+    frame_height, panel_frame, ButtonStyle, ClickMap, CounterHighlight, PanelStyle, TextInput,
 };
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
@@ -184,9 +184,10 @@ impl View for AgentSelectView {
             inner,
         );
         let prompt_rect = Rect::new(content.x, content.y + 1, content.w, prompt_rows);
+        let prompt_active = ctx.active_overlay(TAG_PROMPT, self.focus == 0);
         let cursor = self
             .prompt
-            .draw_wrapped(buf, prompt_rect, ctx.theme, self.focus == 0);
+            .draw_wrapped(buf, prompt_rect, ctx.theme, prompt_active);
         clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
 
         buf.draw_text(
@@ -204,7 +205,7 @@ impl View for AgentSelectView {
             if y >= content.bottom().saturating_sub(4) {
                 break;
             }
-            let selected = self.focus == i + 1;
+            let selected = ctx.active_overlay(TAG_ROW + i as u64, self.focus == i + 1);
             let row_rect = Rect::new(content.x, y, content.w, 1);
             let row_bg = if selected { ctx.theme.bg_selected } else { bg };
             buf.fill(
@@ -254,13 +255,22 @@ impl View for AgentSelectView {
                 row_rect,
             );
             if row.installed {
+                let counter_highlight = if ctx.hovered_overlay(TAG_MINUS + i as u64) {
+                    CounterHighlight::Minus
+                } else if ctx.hovered_overlay(TAG_PLUS + i as u64) {
+                    CounterHighlight::Plus
+                } else if selected {
+                    CounterHighlight::Row
+                } else {
+                    CounterHighlight::None
+                };
                 let (minus, plus) = draw_counter(
                     buf,
                     content.right().saturating_sub(9),
                     y,
                     row.count,
                     ctx.theme,
-                    selected,
+                    counter_highlight,
                     row_rect,
                 );
                 clicks.add(minus, ClickTarget::Overlay(TAG_MINUS + i as u64));
@@ -285,7 +295,7 @@ impl View for AgentSelectView {
 
         // Permission mode row.
         let perm_y = content.bottom().saturating_sub(3);
-        let perm_selected = self.focus == self.rows.len() + 1;
+        let perm_selected = ctx.active_overlay(TAG_PERMISSION, self.focus == self.rows.len() + 1);
         let perm_rect = Rect::new(content.x, perm_y, content.w, 1);
         let perm_bg = if perm_selected {
             ctx.theme.bg_selected
@@ -330,7 +340,8 @@ impl View for AgentSelectView {
             1 => "Launch 1 pane".to_string(),
             n => format!("Launch {n} panes"),
         };
-        let launch_focused = self.focus == self.rows.len() + 2;
+        let launch_focused =
+            ctx.active_overlay(TAG_LAUNCH, self.focus == self.rows.len() + 2 || total > 0);
         let btn = draw_button(
             buf,
             content.x + (content.w.saturating_sub(label.len() as u16 + 2)) / 2,
@@ -338,7 +349,7 @@ impl View for AgentSelectView {
             &label,
             ctx.theme,
             ButtonStyle::Primary,
-            launch_focused || total > 0,
+            launch_focused,
             inner,
         );
         clicks.add(btn, ClickTarget::Overlay(TAG_LAUNCH));

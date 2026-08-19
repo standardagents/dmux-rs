@@ -160,6 +160,7 @@ mod tests {
         let ctx = ViewCtx {
             theme: &theme,
             anim: 0,
+            hovered: None,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);

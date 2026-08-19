@@ -303,6 +303,7 @@ pub struct WelcomeScene<'a> {
     pub session_name: &'a str,
     pub project_root: &'a str,
     pub installed: &'a std::collections::HashSet<&'static str>,
+    pub hovered: Option<ClickTarget>,
 }
 
 pub fn draw(
@@ -365,7 +366,12 @@ pub fn draw(
         let col = (i % 2) as u16;
         let row = (i / 2) as u16;
         let rect = Rect::new(grid_x + col * (card_w + 2), grid_top + row * 5, card_w, 4);
-        draw_card(buf, rect, theme, card, i == scene.selected, content);
+        let selected = match scene.hovered {
+            Some(ClickTarget::WelcomeCard(hovered)) => hovered == i,
+            Some(target) if target.is_hoverable() => false,
+            _ => i == scene.selected,
+        };
+        draw_card(buf, rect, theme, card, selected, content);
         clicks.add(rect, ClickTarget::WelcomeCard(i));
     }
 
@@ -618,6 +624,7 @@ mod tests {
             session_name: "sess",
             project_root: "/tmp/proj",
             installed: &installed,
+            hovered: None,
         };
         let mut clicks = ClickMap::new();
         // Tall terminal: the footer must sit on the bottom content row, not
@@ -632,5 +639,33 @@ mod tests {
         );
         let right_ok = bottom.contains("/tmp/proj");
         assert!(right_ok, "project path shares the bottom row: {bottom:?}");
+    }
+
+    #[test]
+    fn hovered_card_replaces_keyboard_selected_card() {
+        let theme = Theme::named("violet");
+        let installed = std::collections::HashSet::new();
+        let cards = build_cards(&installed, "proj", &[]);
+        let scene = WelcomeScene {
+            cards: &cards,
+            selected: 0,
+            session_name: "sess",
+            project_root: "/tmp/proj",
+            installed: &installed,
+            hovered: Some(ClickTarget::WelcomeCard(1)),
+        };
+        let (w, h) = (120u16, 60u16);
+        let mut buf = CellBuffer::new(w, h);
+        let mut clicks = ClickMap::new();
+        draw(&mut buf, Rect::new(0, 0, w, h), &theme, &scene, &mut clicks);
+        let card_cell = |target| {
+            (0..h)
+                .flat_map(|row| (0..w).map(move |col| (col, row)))
+                .find(|(col, row)| clicks.hit(*col, *row) == Some(&target))
+                .map(|(col, row)| buf.get(col, row).bg)
+                .unwrap()
+        };
+        assert_ne!(card_cell(ClickTarget::WelcomeCard(0)), theme.bg_selected);
+        assert_eq!(card_cell(ClickTarget::WelcomeCard(1)), theme.bg_selected);
     }
 }

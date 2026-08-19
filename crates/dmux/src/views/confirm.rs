@@ -79,7 +79,7 @@ impl View for ConfirmView {
             &self.yes_label,
             ctx.theme,
             style,
-            self.yes_focused,
+            ctx.active_overlay(TAG_YES, self.yes_focused),
             inner,
         );
         clicks.add(yes, ClickTarget::Overlay(TAG_YES));
@@ -90,7 +90,7 @@ impl View for ConfirmView {
             "Cancel",
             ctx.theme,
             ButtonStyle::Quiet,
-            !self.yes_focused,
+            ctx.active_overlay(TAG_NO, !self.yes_focused),
             inner,
         );
         clicks.add(no, ClickTarget::Overlay(TAG_NO));
@@ -172,5 +172,30 @@ mod tests {
     fn plain_danger_dialogs_still_default_to_cancel() {
         let mut v = ConfirmView::new("t", "m", "Do it", true, AppCmd::Quit);
         assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Close));
+    }
+
+    #[test]
+    fn hovered_button_owns_the_visible_active_treatment() {
+        let mut view = close_dialog();
+        let theme = dmux_ui::Theme::named("violet");
+        let ctx = ViewCtx {
+            theme: &theme,
+            anim: 0,
+            hovered: Some(ClickTarget::Overlay(TAG_NO)),
+        };
+        let mut buf = CellBuffer::new(60, 12);
+        let area = buf.area();
+        let mut clicks = ClickMap::new();
+        view.render(&mut buf, area, &ctx, &mut clicks);
+        let point = |target| {
+            (0..area.h)
+                .flat_map(|row| (0..area.w).map(move |col| (col, row)))
+                .find(|(col, row)| clicks.hit(*col, *row) == Some(&target))
+                .unwrap()
+        };
+        let yes = point(ClickTarget::Overlay(TAG_YES));
+        let no = point(ClickTarget::Overlay(TAG_NO));
+        assert!(!buf.get(yes.0, yes.1).attrs.contains(AttrFlags::BOLD));
+        assert!(buf.get(no.0, no.1).attrs.contains(AttrFlags::BOLD));
     }
 }

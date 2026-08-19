@@ -119,7 +119,7 @@ impl View for MenuView {
             .enumerate()
         {
             let y = inner.y + row as u16;
-            let selected = i == self.list.selected;
+            let selected = ctx.active_overlay(i as u64, i == self.list.selected);
             let line_rect = Rect::new(inner.x, y, inner.w, 1);
             let bg = if selected {
                 ctx.theme.bg_selected

@@ -89,15 +89,8 @@ impl View for SoundsView {
             let label = format!("{} {}", draw_checkbox(on), def.label);
             let value = if def.resource.is_some() { "" } else { "system" };
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(
-                buf,
-                row_rect,
-                &label,
-                value,
-                ctx.theme,
-                i == self.list.selected,
-                true,
-            );
+            let active = ctx.active_overlay(i as u64, i == self.list.selected);
+            draw_kv_row(buf, row_rect, &label, value, ctx.theme, active, true);
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
         draw_hint_bar(

@@ -34,8 +34,8 @@ pub struct HostCaps {
 // ?7l disables autowrap while we own the screen: the compositor addresses
 // every cell explicitly, and wrap-pending state after last-column writes
 // would otherwise let a stray byte scroll the whole host screen.
-const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[?2004h";
-const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[0m";
+const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1003h\x1b[?1006h\x1b[?2004h";
+const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[0m";
 
 /// Owns the tty state. Restores the terminal on `Drop` (including panics that
 /// unwind) and via the explicit `restore` on clean shutdown paths.
@@ -288,5 +288,12 @@ mod tests {
         assert!(find_decrpm_2026(b"\x1b[?2026;2$y"));
         assert!(!find_decrpm_2026(b"\x1b[?2026;0$y"));
         assert!(!find_decrpm_2026(b"\x1b[?1;2c"));
+    }
+
+    #[test]
+    fn host_lifecycle_requests_buttonless_mouse_motion() {
+        assert!(ENTER.windows(8).any(|window| window == b"\x1b[?1003h"));
+        assert!(LEAVE.windows(8).any(|window| window == b"\x1b[?1003l"));
+        assert!(ENTER.windows(8).any(|window| window == b"\x1b[?1006h"));
     }
 }

@@ -206,18 +206,19 @@ pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8
     .into_bytes()
 }
 
-/// Classify a mouse event: (col, row, kind, shift), 0-based. SGR 1002 mode
-/// reports press and drag identically (LEFT held); the app distinguishes them
-/// by tracking drag state. An event with no buttons is the release.
+/// Classify a mouse event: (col, row, kind, shift), 0-based. termwiz erases
+/// the SGR distinction between a release and buttonless motion, so the app's
+/// tracked physical-button state disambiguates those events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseKind {
     LeftHeld,
     WheelUp,
     WheelDown,
+    Hover,
     Release,
 }
 
-pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind, bool) {
+pub fn classify_mouse(ev: &MouseEvent, button_down: bool) -> (u16, u16, MouseKind, bool) {
     let col = ev.x.saturating_sub(1);
     let row = ev.y.saturating_sub(1);
     let shift = ev.modifiers.contains(Modifiers::SHIFT);
@@ -229,8 +230,10 @@ pub fn classify_mouse(ev: &MouseEvent) -> (u16, u16, MouseKind, bool) {
         }
     } else if ev.mouse_buttons.contains(MouseButtons::LEFT) {
         MouseKind::LeftHeld
-    } else {
+    } else if button_down {
         MouseKind::Release
+    } else {
+        MouseKind::Hover
     };
     (col, row, kind, shift)
 }
@@ -253,6 +256,15 @@ mod tests {
         KeyEvent {
             key: code,
             modifiers: mods,
+        }
+    }
+
+    fn mouse(buttons: MouseButtons) -> MouseEvent {
+        MouseEvent {
+            x: 7,
+            y: 4,
+            mouse_buttons: buttons,
+            modifiers: Modifiers::SHIFT,
         }
     }
 
@@ -453,5 +465,34 @@ mod tests {
             encode_key(&key(KeyCode::Char('c'), Modifiers::CTRL), m).unwrap(),
             b"\x03"
         );
+    }
+
+    #[test]
+    fn buttonless_motion_and_release_use_physical_button_state() {
+        assert_eq!(
+            classify_mouse(&mouse(MouseButtons::NONE), false),
+            (6, 3, MouseKind::Hover, true)
+        );
+        assert_eq!(
+            classify_mouse(&mouse(MouseButtons::NONE), true),
+            (6, 3, MouseKind::Release, true)
+        );
+        assert_eq!(
+            classify_mouse(&mouse(MouseButtons::LEFT), false).2,
+            MouseKind::LeftHeld
+        );
+        assert_eq!(
+            classify_mouse(
+                &mouse(MouseButtons::VERT_WHEEL | MouseButtons::WHEEL_POSITIVE),
+                true,
+            )
+            .2,
+            MouseKind::WheelUp
+        );
+    }
+
+    #[test]
+    fn pane_mouse_motion_uses_sgr_buttonless_motion_code() {
+        assert_eq!(encode_sgr_mouse(35, true, 4, 2), b"\x1b[<35;5;3M");
     }
 }

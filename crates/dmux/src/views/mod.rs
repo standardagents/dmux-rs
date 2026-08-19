@@ -178,11 +178,45 @@ pub enum ClickTarget {
     Overlay(u64),
 }
 
+impl ClickTarget {
+    pub fn is_hoverable(self) -> bool {
+        !matches!(self, Self::PaneBody(_))
+    }
+}
+
+pub fn hover_target(target: Option<ClickTarget>, overlay_open: bool) -> Option<ClickTarget> {
+    target.filter(|target| {
+        target.is_hoverable() && (!overlay_open || matches!(target, ClickTarget::Overlay(_)))
+    })
+}
+
+pub fn update_hover(current: &mut Option<ClickTarget>, next: Option<ClickTarget>) -> bool {
+    if *current == next {
+        return false;
+    }
+    *current = next;
+    true
+}
+
 pub struct ViewCtx<'a> {
     pub theme: &'a Theme,
     /// Shared animation tick for view spinners (loading states).
     #[allow(dead_code)]
     pub anim: u64,
+    pub hovered: Option<ClickTarget>,
+}
+
+impl ViewCtx<'_> {
+    pub fn active_overlay(&self, tag: u64, selected: bool) -> bool {
+        match self.hovered {
+            Some(ClickTarget::Overlay(hovered)) => hovered == tag,
+            _ => selected,
+        }
+    }
+
+    pub fn hovered_overlay(&self, tag: u64) -> bool {
+        self.hovered == Some(ClickTarget::Overlay(tag))
+    }
 }
 
 pub trait View {
@@ -287,5 +321,47 @@ pub mod vkeys {
             (KeyCode::Delete, ..) => InputKey::Delete,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod hover_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_hover_replaces_keyboard_selection_until_pointer_exits() {
+        let theme = Theme::named("violet");
+        let hovered = ViewCtx {
+            theme: &theme,
+            anim: 0,
+            hovered: Some(ClickTarget::Overlay(7)),
+        };
+        assert!(hovered.active_overlay(7, false));
+        assert!(!hovered.active_overlay(3, true));
+
+        let exited = ViewCtx {
+            hovered: None,
+            ..hovered
+        };
+        assert!(exited.active_overlay(3, true));
+    }
+
+    #[test]
+    fn hover_resolution_ignores_pane_bodies_and_covered_base_targets() {
+        assert_eq!(hover_target(Some(ClickTarget::PaneBody(2)), false), None);
+        assert_eq!(
+            hover_target(Some(ClickTarget::SidebarSettings), false),
+            Some(ClickTarget::SidebarSettings)
+        );
+        assert_eq!(hover_target(Some(ClickTarget::SidebarSettings), true), None);
+        assert_eq!(
+            hover_target(Some(ClickTarget::Overlay(9)), true),
+            Some(ClickTarget::Overlay(9))
+        );
+
+        let mut current = Some(ClickTarget::Overlay(9));
+        assert!(!update_hover(&mut current, Some(ClickTarget::Overlay(9))));
+        assert!(update_hover(&mut current, None));
+        assert_eq!(current, None);
     }
 }

@@ -342,7 +342,8 @@ impl View for IssueBrowserView {
                         }
                     }
                     let row_rect = Rect::new(content.x, y, content.w, 1);
-                    let focused = idx == self.list.selected;
+                    let focused =
+                        ctx.active_overlay(TAG_ROW + idx as u64, idx == self.list.selected);
                     let selected = self
                         .selected
                         .contains(&(issue.repository.clone(), issue.number));
@@ -418,7 +419,7 @@ impl View for IssueBrowserView {
             "Refresh",
             ctx.theme,
             ButtonStyle::Quiet,
-            false,
+            ctx.active_overlay(TAG_REFRESH, false),
             inner,
         );
         clicks.add(refresh, ClickTarget::Overlay(TAG_REFRESH));
@@ -429,7 +430,7 @@ impl View for IssueBrowserView {
             "Open",
             ctx.theme,
             ButtonStyle::Quiet,
-            false,
+            ctx.active_overlay(TAG_OPEN, false),
             inner,
         );
         clicks.add(open, ClickTarget::Overlay(TAG_OPEN));
@@ -445,7 +446,7 @@ impl View for IssueBrowserView {
             "Continue",
             ctx.theme,
             continue_style,
-            !self.selected.is_empty(),
+            ctx.active_overlay(TAG_CONTINUE, !self.selected.is_empty()),
             inner,
         );
         clicks.add(continue_button, ClickTarget::Overlay(TAG_CONTINUE));
@@ -666,6 +667,7 @@ mod tests {
         let ctx = ViewCtx {
             theme: &theme,
             anim: 0,
+            hovered: None,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);
@@ -717,6 +719,7 @@ mod tests {
             let ctx = ViewCtx {
                 theme: &theme,
                 anim: 0,
+                hovered: None,
             };
             let mut clicks = ClickMap::new();
             let area = buf.area();

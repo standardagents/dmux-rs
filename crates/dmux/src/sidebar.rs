@@ -2,6 +2,37 @@
 
 use crate::{keys, render};
 
+/// Sidebar drag-reorder gesture (#26). A press arms a row; crossing onto a
+/// different row begins reordering, and release commits or cancels it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SidebarDrag {
+    Armed { src: usize, start_row: u16 },
+    Reordering { src: usize, pointer_row: u16 },
+}
+
+impl SidebarDrag {
+    pub(crate) fn motion(self, row: u16) -> Self {
+        match self {
+            Self::Armed { src, start_row } if row != start_row => Self::Reordering {
+                src,
+                pointer_row: row,
+            },
+            Self::Armed { .. } => self,
+            Self::Reordering { src, .. } => Self::Reordering {
+                src,
+                pointer_row: row,
+            },
+        }
+    }
+
+    pub(crate) fn reordering(&self) -> Option<(usize, u16)> {
+        match self {
+            Self::Reordering { src, pointer_row } => Some((*src, *pointer_row)),
+            _ => None,
+        }
+    }
+}
+
 /// What a key does while the sidebar owns the keyboard (#27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarKeyAction {

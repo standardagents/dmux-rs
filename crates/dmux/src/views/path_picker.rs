@@ -279,7 +279,7 @@ impl View for PathPickerView {
                 .skip(self.list.scroll)
                 .take(visible)
         {
-            let selected = row_i == self.list.selected;
+            let selected = ctx.active_overlay(row_i as u64, row_i == self.list.selected);
             let line = Rect::new(content.x, y, content.w, 1);
             let bg = if selected {
                 ctx.theme.bg_selected
