@@ -36,8 +36,6 @@ pub struct DmuxPane {
     pub agent_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs_attention: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub autopilot: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -121,7 +119,6 @@ impl DmuxPane {
             agent: None,
             agent_status: None,
             needs_attention: None,
-            autopilot: None,
             extra: Map::new(),
         }
     }
@@ -157,8 +154,10 @@ impl DmuxConfig {
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
-        let bytes = std::fs::read(path).map_err(|e| ConfigError::Io(path.display().to_string(), e))?;
-        serde_json::from_slice(&bytes).map_err(|e| ConfigError::Parse(path.display().to_string(), e))
+        let bytes =
+            std::fs::read(path).map_err(|e| ConfigError::Io(path.display().to_string(), e))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ConfigError::Parse(path.display().to_string(), e))
     }
 
     /// Default config path for a project root: `<root>/.dmux/dmux.config.json`.
@@ -229,6 +228,10 @@ mod tests {
         // Fields we don't model must survive serialization.
         let out = serde_json::to_value(&cfg).unwrap();
         assert_eq!(out["panes"][0]["prompt"], "fix the auth bug");
+        // Migration note (#31): `autopilot` is no longer a product field —
+        // legacy TS configs carry it as an unknown field through `extra`,
+        // preserved byte-for-byte on write-back so TS installs are never
+        // disturbed. dmux-rs itself never reads it.
         assert_eq!(out["panes"][0]["autopilot"], true);
         assert_eq!(out["settings"]["defaultAgent"], "claude");
         assert_eq!(out["controlPaneSize"], 40);

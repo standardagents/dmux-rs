@@ -38,10 +38,16 @@ const CATALOG: &[(&str, &str, &str)] = &[
     ("menu.copy_path", "Copy path", "パスをコピー"),
     ("menu.diff", "View diff…", "差分を表示…"),
     ("menu.duplicate", "Duplicate pane", "ペインを複製"),
-    ("menu.autopilot_on", "Autopilot: off → on", "オートパイロット: オフ → オン"),
-    ("menu.autopilot_off", "Autopilot: on → off", "オートパイロット: オン → オフ"),
-    ("menu.run_test", "Run tests (hook)", "テストを実行（フック）"),
-    ("menu.run_dev", "Run dev server (hook)", "開発サーバーを実行（フック）"),
+    (
+        "menu.run_test",
+        "Run tests (hook)",
+        "テストを実行（フック）",
+    ),
+    (
+        "menu.run_dev",
+        "Run dev server (hook)",
+        "開発サーバーを実行（フック）",
+    ),
     ("menu.editor", "Open in editor", "エディタで開く"),
     ("menu.close", "Close pane", "ペインを閉じる"),
     ("menu.new_agents", "New agents…", "新しいエージェント…"),
@@ -53,19 +59,43 @@ const CATALOG: &[(&str, &str, &str)] = &[
     ("menu.detach", "Detach", "デタッチ"),
     ("dialog.rename_title", "Rename pane", "ペインの名前を変更"),
     ("dialog.close_title", "Close pane", "ペインを閉じる"),
-    ("dialog.close_body", "Close '{}'? The process will be killed.", "'{}' を閉じますか？プロセスは終了されます。"),
+    (
+        "dialog.close_body",
+        "Close '{}'? The process will be killed.",
+        "'{}' を閉じますか？プロセスは終了されます。",
+    ),
     ("dialog.close_confirm", "Close", "閉じる"),
     ("dialog.cancel", "Cancel", "キャンセル"),
-    ("dialog.merge_title", "Merge worktree", "ワークツリーをマージ"),
+    (
+        "dialog.merge_title",
+        "Merge worktree",
+        "ワークツリーをマージ",
+    ),
     ("dialog.merge_confirm", "Merge", "マージ"),
-    ("dialog.add_project_title", "Add project", "プロジェクトを追加"),
+    (
+        "dialog.add_project_title",
+        "Add project",
+        "プロジェクトを追加",
+    ),
     ("welcome.new_agents", "New agents", "新しいエージェント"),
     ("welcome.new_terminal", "New terminal", "新しいターミナル"),
     ("welcome.settings", "Settings", "設定"),
     ("welcome.shortcuts", "Shortcuts", "ショートカット"),
-    ("welcome.tagline", "The Agent Multiplexer", "The Agent Multiplexer"),
-    ("toast.settings_saved", "Settings saved", "設定が保存されました"),
-    ("toast.pane_hidden", "Pane hidden (still running)", "ペインを非表示にしました（実行中）"),
+    (
+        "welcome.tagline",
+        "The Agent Multiplexer",
+        "The Agent Multiplexer",
+    ),
+    (
+        "toast.settings_saved",
+        "Settings saved",
+        "設定が保存されました",
+    ),
+    (
+        "toast.pane_hidden",
+        "Pane hidden (still running)",
+        "ペインを非表示にしました（実行中）",
+    ),
     ("toast.pane_shown", "Pane shown", "ペインを表示しました"),
     ("hint.select", "select", "選択"),
     ("hint.run", "run", "実行"),
@@ -109,7 +139,10 @@ mod tests {
         assert_eq!(t("menu.close"), "Close pane");
         set_locale("ja");
         assert_eq!(t("menu.close"), "ペインを閉じる");
-        assert_eq!(tf("dialog.close_body", "x"), "'x' を閉じますか？プロセスは終了されます。");
+        assert_eq!(
+            tf("dialog.close_body", "x"),
+            "'x' を閉じますか？プロセスは終了されます。"
+        );
         // Unknown locale falls back to English.
         set_locale("fr");
         assert_eq!(t("menu.settings"), "Settings…");

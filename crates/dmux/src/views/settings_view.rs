@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use dmux_compositor::{CellBuffer, Rect};
-use dmux_host::{KeyEvent, Modifiers};
 use dmux_core::{SettingsScope, SettingsStore};
+use dmux_host::{KeyEvent, Modifiers};
 use dmux_ui::{
     centered, draw_hint_bar, draw_kv_row, draw_panel, draw_select_value, ClickMap, ListState,
     PanelStyle,
@@ -14,7 +14,10 @@ use super::{vkeys, AppCmd, ClickTarget, InputPurpose, InputView, View, ViewCtx, 
 enum Kind {
     Bool,
     Select(Vec<(String, String)>),
-    Number { min: i64, max: i64 },
+    Number {
+        min: i64,
+        max: i64,
+    },
     Text,
     /// Opens a dedicated sub-view (checklists, status pages).
     Sub,
@@ -27,16 +30,24 @@ struct Def {
 }
 
 fn definitions() -> Vec<Def> {
-    let themes = ["violet", "cyan", "green", "amber", "rose", "blue", "slate", "ember"]
-        .iter()
-        .map(|t| (t.to_string(), {
+    let themes = [
+        "violet", "cyan", "green", "amber", "rose", "blue", "slate", "ember",
+    ]
+    .iter()
+    .map(|t| {
+        (t.to_string(), {
             let mut s = t.to_string();
             s[..1].make_ascii_uppercase();
             s
-        }))
-        .collect();
+        })
+    })
+    .collect();
     let mut agent_options = vec![(String::new(), "Ask each time".to_string())];
-    agent_options.extend(crate::agents::AGENTS.iter().map(|a| (a.id.to_string(), a.name.to_string())));
+    agent_options.extend(
+        crate::agents::AGENTS
+            .iter()
+            .map(|a| (a.id.to_string(), a.name.to_string())),
+    );
 
     vec![
         Def {
@@ -49,13 +60,36 @@ fn definitions() -> Vec<Def> {
                 ("bypassPermissions".into(), "Bypass permissions".into()),
             ]),
         },
-        Def { key: "defaultAgent", label: "Default Agent", kind: Kind::Select(agent_options) },
-        Def { key: "enableAutopilotByDefault", label: "Autopilot by Default", kind: Kind::Bool },
-        Def { key: "enableGoalModeByDefault", label: "Goal Mode by Default", kind: Kind::Bool },
-        Def { key: "enableNotifications", label: "Notifications", kind: Kind::Bool },
-        Def { key: "showFooterTips", label: "Footer Tips", kind: Kind::Bool },
-        Def { key: "colorTheme", label: "Color Theme", kind: Kind::Select(themes) },
-        Def { key: "baseBranch", label: "Base Branch", kind: Kind::Text },
+        Def {
+            key: "defaultAgent",
+            label: "Default Agent",
+            kind: Kind::Select(agent_options),
+        },
+        Def {
+            key: "enableGoalModeByDefault",
+            label: "Goal Mode by Default",
+            kind: Kind::Bool,
+        },
+        Def {
+            key: "enableNotifications",
+            label: "Notifications",
+            kind: Kind::Bool,
+        },
+        Def {
+            key: "showFooterTips",
+            label: "Footer Tips",
+            kind: Kind::Bool,
+        },
+        Def {
+            key: "colorTheme",
+            label: "Color Theme",
+            kind: Kind::Select(themes),
+        },
+        Def {
+            key: "baseBranch",
+            label: "Base Branch",
+            kind: Kind::Text,
+        },
         Def {
             key: "branchPrefix",
             label: "Branch Name Prefix",
@@ -66,18 +100,49 @@ fn definitions() -> Vec<Def> {
                 ("chore/".into(), "chore/".into()),
             ]),
         },
-        Def { key: "promptForGitOptionsOnCreate", label: "Ask Git Options on Create", kind: Kind::Bool },
-        Def { key: "minPaneWidth", label: "Min Pane Width", kind: Kind::Number { min: 40, max: 120 } },
-        Def { key: "maxPaneWidth", label: "Max Pane Width", kind: Kind::Number { min: 60, max: 240 } },
+        Def {
+            key: "promptForGitOptionsOnCreate",
+            label: "Ask Git Options on Create",
+            kind: Kind::Bool,
+        },
+        Def {
+            key: "minPaneWidth",
+            label: "Min Pane Width",
+            kind: Kind::Number { min: 40, max: 120 },
+        },
+        Def {
+            key: "maxPaneWidth",
+            label: "Max Pane Width",
+            kind: Kind::Number { min: 60, max: 240 },
+        },
         Def {
             key: "language",
             label: "Language",
-            kind: Kind::Select(vec![("en".into(), "English".into()), ("ja".into(), "日本語".into())]),
+            kind: Kind::Select(vec![
+                ("en".into(), "English".into()),
+                ("ja".into(), "日本語".into()),
+            ]),
         },
-        Def { key: "enabledAgents", label: "Enabled Agents…", kind: Kind::Sub },
-        Def { key: "enabledNotificationSounds", label: "Notification Sounds…", kind: Kind::Sub },
-        Def { key: "inferenceProviders", label: "Inference Providers…", kind: Kind::Sub },
-        Def { key: "hooks", label: "Project Hooks…", kind: Kind::Sub },
+        Def {
+            key: "enabledAgents",
+            label: "Enabled Agents…",
+            kind: Kind::Sub,
+        },
+        Def {
+            key: "enabledNotificationSounds",
+            label: "Notification Sounds…",
+            kind: Kind::Sub,
+        },
+        Def {
+            key: "inferenceProviders",
+            label: "Inference Providers…",
+            kind: Kind::Sub,
+        },
+        Def {
+            key: "hooks",
+            label: "Project Hooks…",
+            kind: Kind::Sub,
+        },
     ]
 }
 
@@ -102,7 +167,11 @@ impl SettingsView {
             settings,
             defs: definitions(),
             list: ListState::default(),
-            scope: if has_project { SettingsScope::Project } else { SettingsScope::Global },
+            scope: if has_project {
+                SettingsScope::Project
+            } else {
+                SettingsScope::Global
+            },
             has_project,
             project_root,
         }
@@ -114,7 +183,11 @@ impl SettingsView {
     }
 
     fn set(&self, def: &Def, value: Value) -> ViewResult {
-        ViewResult::Cmd(AppCmd::SetSetting { key: def.key.to_string(), value, scope: self.scope })
+        ViewResult::Cmd(AppCmd::SetSetting {
+            key: def.key.to_string(),
+            value,
+            scope: self.scope,
+        })
     }
 
     /// Cycle a select/bool/number by `dir`, or open the text editor.
@@ -133,7 +206,10 @@ impl SettingsView {
                 self.set(def, Value::String(options[next].0.clone()))
             }
             Kind::Number { min, max } => {
-                let cur = self.current_value(def).as_i64().unwrap_or((*min + *max) / 2);
+                let cur = self
+                    .current_value(def)
+                    .as_i64()
+                    .unwrap_or((*min + *max) / 2);
                 let step = if big { 5 } else { 1 };
                 let next = (cur + dir * step).clamp(*min, *max);
                 self.set(def, Value::from(next))
@@ -144,7 +220,10 @@ impl SettingsView {
                     def.label,
                     cur.as_str().unwrap_or(""),
                     "empty to unset",
-                    InputPurpose::SetTextSetting { key: def.key.to_string(), scope: self.scope },
+                    InputPurpose::SetTextSetting {
+                        key: def.key.to_string(),
+                        scope: self.scope,
+                    },
                 )))
             }
             Kind::Sub => match def.key {
@@ -156,10 +235,12 @@ impl SettingsView {
                     self.settings.clone(),
                     self.has_project,
                 ))),
-                "inferenceProviders" => {
-                    ViewResult::Push(Box::new(super::InferProvidersView::new(self.settings.clone())))
+                "inferenceProviders" => ViewResult::Push(Box::new(super::InferProvidersView::new(
+                    self.settings.clone(),
+                ))),
+                "hooks" => {
+                    ViewResult::Push(Box::new(super::HooksView::new(self.project_root.clone())))
                 }
-                "hooks" => ViewResult::Push(Box::new(super::HooksView::new(self.project_root.clone()))),
                 _ => ViewResult::Stay,
             },
         }
@@ -180,7 +261,13 @@ impl View for SettingsView {
             SettingsScope::Project => "project scope",
             SettingsScope::Global => "global scope",
         };
-        let inner = draw_panel(buf, rect, &format!("Settings — {scope_label}"), ctx.theme, PanelStyle::Modal);
+        let inner = draw_panel(
+            buf,
+            rect,
+            &format!("Settings — {scope_label}"),
+            ctx.theme,
+            PanelStyle::Modal,
+        );
 
         let visible = inner.h.saturating_sub(2) as usize;
         self.list.clamp(self.defs.len());
@@ -190,17 +277,33 @@ impl View for SettingsView {
             let store = self.settings.lock().unwrap();
             self.defs
                 .iter()
-                .map(|d| (store.get(d.key).cloned().unwrap_or(Value::Null), store.effective_scope(d.key)))
+                .map(|d| {
+                    (
+                        store.get(d.key).cloned().unwrap_or(Value::Null),
+                        store.effective_scope(d.key),
+                    )
+                })
                 .unzip()
         };
 
-        for (row, (i, def)) in self.defs.iter().enumerate().skip(self.list.scroll).take(visible).enumerate() {
+        for (row, (i, def)) in self
+            .defs
+            .iter()
+            .enumerate()
+            .skip(self.list.scroll)
+            .take(visible)
+            .enumerate()
+        {
             let y = inner.y + row as u16;
             let selected = i == self.list.selected;
             let value_text = match &def.kind {
                 Kind::Bool => {
                     let on = values[i].as_bool().unwrap_or(false);
-                    if on { "◼ on".to_string() } else { "◻ off".to_string() }
+                    if on {
+                        "◼ on".to_string()
+                    } else {
+                        "◻ off".to_string()
+                    }
                 }
                 Kind::Select(options) => {
                     let cur = values[i].as_str().unwrap_or("");
@@ -217,7 +320,11 @@ impl View for SettingsView {
                 }
                 Kind::Text => {
                     let cur = values[i].as_str().unwrap_or("");
-                    if cur.is_empty() { "(unset) ✎".to_string() } else { format!("{cur} ✎") }
+                    if cur.is_empty() {
+                        "(unset) ✎".to_string()
+                    } else {
+                        format!("{cur} ✎")
+                    }
                 }
                 Kind::Sub => "›".to_string(),
             };
@@ -228,15 +335,29 @@ impl View for SettingsView {
             };
             let label = format!("{scope_mark}{}", def.label);
             let row_rect = Rect::new(inner.x, y, inner.w, 1);
-            draw_kv_row(buf, row_rect, &label, &value_text, ctx.theme, selected, true);
+            draw_kv_row(
+                buf,
+                row_rect,
+                &label,
+                &value_text,
+                ctx.theme,
+                selected,
+                true,
+            );
             clicks.add(row_rect, ClickTarget::Overlay(i as u64));
         }
 
-        let mut hints: Vec<(&str, &str)> = vec![("↑↓", "row"), ("←→/⏎", "change"), ("esc", "close")];
+        let mut hints: Vec<(&str, &str)> =
+            vec![("↑↓", "row"), ("←→/⏎", "change"), ("esc", "close")];
         if self.has_project {
             hints.insert(2, ("tab", "scope"));
         }
-        draw_hint_bar(buf, Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1), &hints, ctx.theme);
+        draw_hint_bar(
+            buf,
+            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
+            &hints,
+            ctx.theme,
+        );
         None
     }
 

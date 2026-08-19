@@ -43,49 +43,82 @@ pub enum AppCmd {
     RestoreSession,
     /// Row-anchored pane-actions flyout from the sidebar (#14): opens beside
     /// the clicked row, without activating the pane.
-    OpenPaneFlyout { idx: usize, x: u16, y: u16 },
+    OpenPaneFlyout {
+        idx: usize,
+        x: u16,
+        y: u16,
+    },
     OpenSettings,
     OpenNewAgent,
     OpenShortcuts,
     OpenLogs,
     PromptRename(usize),
     ConfirmClose(usize),
-    RenamePane { idx: usize, name: String },
+    RenamePane {
+        idx: usize,
+        name: String,
+    },
     ToggleHidden(usize),
     ClosePane(usize),
     CopyPath(usize),
     OpenInEditor(usize),
     NewTerminal,
     /// Terminal in a specific directory (welcome-screen worktree cards).
-    NewTerminalAt { path: String, name: String },
+    NewTerminalAt {
+        path: String,
+        name: String,
+    },
     /// Ask for a project path, then open it.
     PromptAddProject,
     OpenProjectAt(String),
     /// Reopen a worktree and resume its agent's most recent session.
-    ResumeWorktree { path: String, slug: String, agent: String },
+    ResumeWorktree {
+        path: String,
+        slug: String,
+        agent: String,
+    },
     /// Merge flow: entry point, then execution (message = commit-first), then
     /// post-merge cleanup.
     MergeStart(usize),
-    MergeExec { slug: String, message: Option<String> },
-    MergeCleanup { slug: String },
+    MergeExec {
+        slug: String,
+        message: Option<String>,
+    },
+    MergeCleanup {
+        slug: String,
+    },
     /// Re-establish merge conflicts at the root and launch an agent to
     /// resolve them.
-    ResolveConflicts { branch: String },
+    ResolveConflicts {
+        branch: String,
+    },
     /// Auto-resolve the conflicts with the configured inference provider.
-    AiMerge { branch: String },
+    AiMerge {
+        branch: String,
+    },
     Noop,
     SearchScrollback(String),
     /// Diff peek for a worktree pane.
     ShowDiff(usize),
     /// New worktree pane with the same agent + prompt as this one.
     DuplicatePane(usize),
-    ToggleAutopilot(usize),
     /// Run a project hook (`run_test` / `run_dev`) in a new terminal pane.
-    RunHook { idx: usize, name: String },
+    RunHook {
+        idx: usize,
+        name: String,
+    },
     /// Push the worktree branch and open `gh pr create` in a terminal pane.
     CreatePr(usize),
-    LaunchAgents { prompt: String, allocations: Vec<(String, u8)>, mode: String },
-    SetSetting { key: String, value: serde_json::Value, scope: dmux_core::SettingsScope },
+    LaunchAgents {
+        prompt: String,
+        allocations: Vec<(String, u8)>,
+        mode: String,
+    },
+    SetSetting {
+        key: String,
+        value: serde_json::Value,
+        scope: dmux_core::SettingsScope,
+    },
 }
 
 /// What a view wants after handling an event.
@@ -180,11 +213,13 @@ pub mod vkeys {
     }
 
     pub fn is_up(k: &KeyEvent) -> bool {
-        matches!(k.key, KeyCode::UpArrow) || (matches!(k.key, KeyCode::Char('k')) && k.modifiers.is_empty())
+        matches!(k.key, KeyCode::UpArrow)
+            || (matches!(k.key, KeyCode::Char('k')) && k.modifiers.is_empty())
     }
 
     pub fn is_down(k: &KeyEvent) -> bool {
-        matches!(k.key, KeyCode::DownArrow) || (matches!(k.key, KeyCode::Char('j')) && k.modifiers.is_empty())
+        matches!(k.key, KeyCode::DownArrow)
+            || (matches!(k.key, KeyCode::Char('j')) && k.modifiers.is_empty())
     }
 
     pub fn is_left(k: &KeyEvent) -> bool {
@@ -220,7 +255,9 @@ pub mod vkeys {
             (KeyCode::Home, ..) => InputKey::Home,
             (KeyCode::End, ..) => InputKey::End,
             (KeyCode::Backspace, false, false) => InputKey::Backspace,
-            (KeyCode::Backspace, _, true) | (KeyCode::Backspace, true, _) => InputKey::DeleteWordBack,
+            (KeyCode::Backspace, _, true) | (KeyCode::Backspace, true, _) => {
+                InputKey::DeleteWordBack
+            }
             (KeyCode::Delete, ..) => InputKey::Delete,
             _ => return None,
         })

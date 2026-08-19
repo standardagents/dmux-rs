@@ -38,7 +38,11 @@ pub const KEEPALIVE_CMD: &str = "sleep 2147483647";
 pub fn is_keepalive(info: &TmuxPaneInfo) -> bool {
     info.window_name == KEEPALIVE_NAME
         || info.title == KEEPALIVE_NAME
-        || info.start_command.trim().trim_matches(|c| c == '\'' || c == '"') == KEEPALIVE_CMD
+        || info
+            .start_command
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            == KEEPALIVE_CMD
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,8 +104,6 @@ pub struct LogicalPane {
     pub engine: dmux_status::PaneStatusEngine,
     /// An LLM classification is in flight for this pane.
     pub analysis_inflight: bool,
-    /// Auto-accept option dialogs when the LLM classifies one (TS autopilot).
-    pub autopilot: bool,
     /// Record the pane's byte stream for the shadow verifier (set when
     /// DMUX_VERIFY is on). The recording is anchored at the last seed so a
     /// replay from empty state reproduces the live grid deterministically.
@@ -205,7 +207,10 @@ impl LogicalPane {
             // just the visible screen so the seed matches what tmux shows.
             format!("capture-pane -epqN -t {}", self.tmux_pane)
         } else {
-            format!("capture-pane -epqN -t {} -S -{}", self.tmux_pane, SEED_HISTORY_LINES)
+            format!(
+                "capture-pane -epqN -t {} -S -{}",
+                self.tmux_pane, SEED_HISTORY_LINES
+            )
         }
     }
 
@@ -284,8 +289,14 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
         }
         let pane_pid = parts.get(8).and_then(|s| s.parse().ok()).unwrap_or(0);
         let (Some(pane), Some(window)) = (
-            parts[0].strip_prefix('%').and_then(|s| s.parse().ok()).map(PaneId),
-            parts[1].strip_prefix('@').and_then(|s| s.parse().ok()).map(WindowId),
+            parts[0]
+                .strip_prefix('%')
+                .and_then(|s| s.parse().ok())
+                .map(PaneId),
+            parts[1]
+                .strip_prefix('@')
+                .and_then(|s| s.parse().ok())
+                .map(WindowId),
         ) else {
             continue;
         };
@@ -312,10 +323,20 @@ pub enum RestorePlan {
     /// Worktree agent pane: resume via the agent's session-resume path
     /// (exact `agentSessionId` when recorded — the executor reads it from
     /// the config record by slug).
-    Agent { slug: String, display: String, path: String, agent: String },
+    Agent {
+        slug: String,
+        display: String,
+        path: String,
+        agent: String,
+    },
     /// Terminal tab: reopen as a fresh shell (scrollback/process state died
     /// with the server) in the saved cwd, or the project root fallback.
-    Shell { slug: String, display: String, cwd: String, project_root: Option<String> },
+    Shell {
+        slug: String,
+        display: String,
+        cwd: String,
+        project_root: Option<String>,
+    },
 }
 
 impl RestorePlan {
@@ -352,7 +373,12 @@ pub fn plan_session_restore(
         match (rec.kind(), rec.agent.clone()) {
             (PaneKind::Worktree, Some(agent)) => match rec.worktree_path.clone() {
                 Some(path) if path_exists(&path) => {
-                    plans.push(RestorePlan::Agent { slug, display, path, agent });
+                    plans.push(RestorePlan::Agent {
+                        slug,
+                        display,
+                        path,
+                        agent,
+                    });
                 }
                 Some(path) => skipped.push(format!("{slug}: worktree missing ({path})")),
                 None => skipped.push(format!("{slug}: agent record without a worktree path")),
@@ -363,9 +389,16 @@ pub fn plan_session_restore(
                     Some(dir) if path_exists(&dir) => dir,
                     _ => project_root.to_string(),
                 };
-                let project_root_field =
-                    rec.project_root.clone().filter(|r| r != project_root && path_exists(r));
-                plans.push(RestorePlan::Shell { slug, display, cwd, project_root: project_root_field });
+                let project_root_field = rec
+                    .project_root
+                    .clone()
+                    .filter(|r| r != project_root && path_exists(r));
+                plans.push(RestorePlan::Shell {
+                    slug,
+                    display,
+                    cwd,
+                    project_root: project_root_field,
+                });
             }
         }
     }
@@ -392,14 +425,24 @@ pub fn move_pane(panes: &mut Vec<LogicalPane>, src: usize, dst: usize) -> bool {
 /// records for live slugs sort into that order, everything else keeps its
 /// relative position after them.
 pub fn order_records(records: &mut [DmuxPane], slug_order: &[String]) {
-    records.sort_by_key(|r| slug_order.iter().position(|s| *s == r.slug).unwrap_or(usize::MAX));
+    records.sort_by_key(|r| {
+        slug_order
+            .iter()
+            .position(|s| *s == r.slug)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 /// Stable-order live panes by the persisted record order (#26): slugs the
 /// config knows sort first in config order; unknown panes keep adoption
 /// order after them.
 pub fn order_panes(panes: &mut [LogicalPane], slug_order: &[String]) {
-    panes.sort_by_key(|p| slug_order.iter().position(|s| *s == p.slug).unwrap_or(usize::MAX));
+    panes.sort_by_key(|p| {
+        slug_order
+            .iter()
+            .position(|s| *s == p.slug)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 /// Decide which tmux panes are content panes and pair them with config
@@ -419,7 +462,9 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
                 .iter()
                 .find(|p| p.slug == parsed.slug || p.pane_id == info.pane.to_string())
         });
-        let slug = config_pane.map(|p| p.slug.clone()).unwrap_or_else(|| parsed.slug.clone());
+        let slug = config_pane
+            .map(|p| p.slug.clone())
+            .unwrap_or_else(|| parsed.slug.clone());
         let title = config_pane
             .map(|p| p.display_title().to_string())
             .filter(|t| !t.is_empty())
@@ -460,7 +505,6 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             llm_named_at: None,
             engine: dmux_status::PaneStatusEngine::new(),
             analysis_inflight: false,
-            autopilot: config_pane.and_then(|p| p.autopilot).unwrap_or(false),
             record_stream: false,
             recent_output: Vec::new(),
             ring_truncated: false,
@@ -519,27 +563,40 @@ mod tests {
         let band_pad = format!("\u{1b}[48;5;236m{}", " ".repeat(30));
         let band_text = format!("> say hello to me{}", " ".repeat(13));
         let seed = reply_of(&[
-            &band_pad,             // banded blank padding row (row 0)
-            &band_text,            // banded text row, SGR carried over (row 1)
-            "",                    // default blank row (row 2)
+            &band_pad,                          // banded blank padding row (row 0)
+            &band_text,                         // banded text row, SGR carried over (row 1)
+            "",                                 // default blank row (row 2)
             "\u{1b}[49mplain\u{1b}[48;5;236mX", // row 3: default text, one banded X, rest default
         ]);
         pane.finish_reseed(&seed, None);
 
         let mut buf = dmux_compositor::CellBuffer::new(30, 5);
-        pane.term.render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 30, 5));
+        pane.term
+            .render_into(&mut buf, dmux_compositor::Rect::new(0, 0, 30, 5));
         let band = dmux_compositor::Color::Indexed(236);
         let default = dmux_compositor::Color::Default;
         // Padding row and text row: banded edge to edge.
         assert_eq!(buf.get(0, 0).bg, band, "padding row must be banded");
-        assert_eq!(buf.get(29, 0).bg, band, "padding row must span the full width");
+        assert_eq!(
+            buf.get(29, 0).bg,
+            band,
+            "padding row must span the full width"
+        );
         assert_eq!(buf.get(5, 1).bg, band);
-        assert_eq!(buf.get(29, 1).bg, band, "text row band must span the full width");
+        assert_eq!(
+            buf.get(29, 1).bg,
+            band,
+            "text row band must span the full width"
+        );
         // Default blank row stays default despite band rows around it.
         assert_eq!(buf.get(29, 2).bg, default, "blank row must not be banded");
         // Open SGR at end-of-line must not band unused trailing cells.
         assert_eq!(buf.get(5, 3).bg, band, "the X itself is banded");
-        assert_eq!(buf.get(29, 3).bg, default, "unused trailing cells stay default");
+        assert_eq!(
+            buf.get(29, 3).bg,
+            default,
+            "unused trailing cells stay default"
+        );
     }
 
     #[test]
@@ -551,7 +608,10 @@ mod tests {
         pane.reseed_buffer.as_mut().unwrap().push(b" live".to_vec());
         pane.finish_reseed(&reply_of(&["seeded line"]), Some((5, 0)));
         let tail = pane.term.read_tail_text(4);
-        assert!(tail.contains("seede live") || tail.contains("seeded"), "tail: {tail:?}");
+        assert!(
+            tail.contains("seede live") || tail.contains("seeded"),
+            "tail: {tail:?}"
+        );
         assert!(pane.reseed_buffer.is_none());
     }
 
@@ -568,7 +628,10 @@ mod tests {
         assert!(pane.alt_screen);
         pane.begin_reseed();
         pane.finish_reseed(&reply_of(&["transcript row"]), None);
-        assert!(pane.term.input_modes().alt_screen, "seed must land on the alt grid");
+        assert!(
+            pane.term.input_modes().alt_screen,
+            "seed must land on the alt grid"
+        );
         // Repaint churn must not accumulate history…
         for i in 0..50 {
             pane.advance_recorded(format!("frame {i}\r\n").as_bytes());
@@ -683,7 +746,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let exists = |p: &str| matches!(p, "/main/.wt/fix-auth" | "/main/logs" | "/other" | "/main");
+        let exists =
+            |p: &str| matches!(p, "/main/.wt/fix-auth" | "/main/logs" | "/other" | "/main");
         let (plans, skipped) = plan_session_restore(&config, "/main", &exists);
         assert_eq!(
             plans,
@@ -739,7 +803,11 @@ mod tests {
             })
             .collect();
         assert_eq!(lines.len(), 1, "one payload line, got {events:?}");
-        let mut reply = Reply { lines, ok: true, rtt: std::time::Duration::ZERO };
+        let mut reply = Reply {
+            lines,
+            ok: true,
+            rtt: std::time::Duration::ZERO,
+        };
         // Undecoded, the reply yields no records (the pre-fix failure that
         // blinded the keepalive guards and re-leaked #10).
         assert!(parse_pane_list(&reply).is_empty());
@@ -754,15 +822,24 @@ mod tests {
 
     #[test]
     fn pane_list_parses_start_command() {
-        let line = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}sleep\u{1}sleep\u{1}9\u{1}sleep 2147483647";
-        let reply = Reply { lines: vec![line.as_bytes().to_vec()], ok: true, rtt: std::time::Duration::ZERO };
+        let line =
+            "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}sleep\u{1}sleep\u{1}9\u{1}sleep 2147483647";
+        let reply = Reply {
+            lines: vec![line.as_bytes().to_vec()],
+            ok: true,
+            rtt: std::time::Duration::ZERO,
+        };
         let infos = parse_pane_list(&reply);
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].start_command, "sleep 2147483647");
         assert!(is_keepalive(&infos[0]));
         // Older 9-field listings still parse (start_command empty).
         let line9 = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w\u{1}9";
-        let reply9 = Reply { lines: vec![line9.as_bytes().to_vec()], ok: true, rtt: std::time::Duration::ZERO };
+        let reply9 = Reply {
+            lines: vec![line9.as_bytes().to_vec()],
+            ok: true,
+            rtt: std::time::Duration::ZERO,
+        };
         assert_eq!(parse_pane_list(&reply9)[0].start_command, "");
     }
 }

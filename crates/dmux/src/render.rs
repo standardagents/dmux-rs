@@ -59,7 +59,13 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
     // canvas; pane bodies repaint their own rects over it.
     if scene.panes.iter().any(|p| p.rect.is_some()) {
         let content = content_area(buf, scene.layout);
-        buf.fill(content, &Cell { bg: scene.theme.canvas, ..Cell::default() });
+        buf.fill(
+            content,
+            &Cell {
+                bg: scene.theme.canvas,
+                ..Cell::default()
+            },
+        );
     }
     for (i, pane) in scene.panes.iter().enumerate() {
         let Some(rect) = pane.rect else { continue };
@@ -71,17 +77,30 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         // the pane's project.
         let border_x = rect.right();
         if border_x < buf.cols() {
-            let (pa, ps) = scene.pane_accents.get(i).copied().unwrap_or((scene.theme.accent, scene.theme.border));
+            let (pa, ps) = scene
+                .pane_accents
+                .get(i)
+                .copied()
+                .unwrap_or((scene.theme.accent, scene.theme.border));
             let border_fg = if i == scene.focused { pa } else { ps };
             for row in rect.y.saturating_sub(TITLE_ROWS)..rect.bottom() {
                 buf.set(
                     border_x,
                     row,
-                    Cell { ch: '│', fg: border_fg, bg: scene.theme.canvas, ..Cell::default() },
+                    Cell {
+                        ch: '│',
+                        fg: border_fg,
+                        bg: scene.theme.canvas,
+                        ..Cell::default()
+                    },
                 );
             }
         }
-        if pane.paused || pane.throttled || pane.status == PaneStatus::Dead || pane.term.display_offset() > 0 {
+        if pane.paused
+            || pane.throttled
+            || pane.status == PaneStatus::Dead
+            || pane.term.display_offset() > 0
+        {
             draw_pane_badge(buf, scene.theme, pane, rect);
         }
     }
@@ -105,10 +124,19 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     // Focused sidebar reads as the active input area: the whole surface
     // lifts to the raised background, not just the selected row (#15).
     let sb_bg = sidebar_surface(t, scene.sidebar_focused);
-    buf.fill(area, &Cell { bg: sb_bg, ..Cell::default() });
+    buf.fill(
+        area,
+        &Cell {
+            bg: sb_bg,
+            ..Cell::default()
+        },
+    );
 
     // Header: session name between braille fills.
-    let header = format!("⣿⣿ {} ", truncate(scene.session_name, area.w.saturating_sub(6) as usize));
+    let header = format!(
+        "⣿⣿ {} ",
+        truncate(scene.session_name, area.w.saturating_sub(6) as usize)
+    );
     let end = buf.draw_text(area.x, 0, &header, t.accent, sb_bg, AttrFlags::BOLD, area);
     let mut fill = String::new();
     for _ in end..area.right() {
@@ -126,13 +154,32 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             break;
         }
         if multi {
-            let text = format!("⣿ {} ", truncate(&group.name, area.w.saturating_sub(8) as usize));
-            let end = buf.draw_text(area.x, row, &text, group.accent, sb_bg, AttrFlags::BOLD, area);
+            let text = format!(
+                "⣿ {} ",
+                truncate(&group.name, area.w.saturating_sub(8) as usize)
+            );
+            let end = buf.draw_text(
+                area.x,
+                row,
+                &text,
+                group.accent,
+                sb_bg,
+                AttrFlags::BOLD,
+                area,
+            );
             let mut fill = String::new();
             for _ in end..area.right() {
                 fill.push('⣿');
             }
-            buf.draw_text(end, row, &fill, group_fill_color(group), sb_bg, AttrFlags::empty(), area);
+            buf.draw_text(
+                end,
+                row,
+                &fill,
+                group_fill_color(group),
+                sb_bg,
+                AttrFlags::empty(),
+                area,
+            );
             row += 1;
         }
         for &i in &group.pane_indices {
@@ -148,12 +195,15 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 status_glyph(pane, scene.anim)
             };
-            let attn = if pane.needs_attention && !pane.closing { "!" } else { " " };
+            let attn = if pane.needs_attention && !pane.closing {
+                "!"
+            } else {
+                " "
+            };
             let hidden_tag = row_tag(pane.closing, pane.hidden);
-            let ap_tag = if pane.autopilot { " (ap)" } else { "" };
             let name = truncate(
                 pane.display_title(),
-                area.w.saturating_sub(14 + hidden_tag.len() as u16 + ap_tag.len() as u16) as usize,
+                area.w.saturating_sub(14 + hidden_tag.len() as u16) as usize,
             );
             let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
             // Reorder drag (#26): the row under the pointer is the insertion
@@ -174,29 +224,66 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 (t.text_dim, AttrFlags::empty())
             };
-            let fg = if reorder_src && !reorder_target { t.text_faint } else { fg };
-            let bg = if selected || reorder_target { t.bg_selected } else { sb_bg };
+            let fg = if reorder_src && !reorder_target {
+                t.text_faint
+            } else {
+                fg
+            };
+            let bg = if selected || reorder_target {
+                t.bg_selected
+            } else {
+                sb_bg
+            };
             let row_rect = Rect::new(area.x, row, area.w, 1);
             if selected || reorder_target {
-                buf.fill(row_rect, &Cell { bg, ..Cell::default() });
+                buf.fill(
+                    row_rect,
+                    &Cell {
+                        bg,
+                        ..Cell::default()
+                    },
+                );
             }
             let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
-            if !ap_tag.is_empty() {
-                buf.draw_text(end, row, ap_tag, group.accent, bg, AttrFlags::empty(), area);
-            }
             if selected && scene.sidebar_focused {
-                buf.set(area.x, row, Cell { ch: '▍', fg: group.accent, bg, ..Cell::default() });
+                buf.set(
+                    area.x,
+                    row,
+                    Cell {
+                        ch: '▍',
+                        fg: group.accent,
+                        bg,
+                        ..Cell::default()
+                    },
+                );
             }
             // Reorder drag (#26): accent marker on the insertion target row.
             if reorder_target {
-                buf.set(area.x, row, Cell { ch: '➤', fg: group.accent, bg, ..Cell::default() });
+                buf.set(
+                    area.x,
+                    row,
+                    Cell {
+                        ch: '➤',
+                        fg: group.accent,
+                        bg,
+                        ..Cell::default()
+                    },
+                );
             }
             if let Some(agent) = &pane.agent {
                 let short = crate::agents::agent(agent).map(|d| d.short).unwrap_or("??");
                 let tag = format!("[{short}]");
                 let tag_x = area.right().saturating_sub(tag.len() as u16 + 1);
                 if tag_x > end {
-                    buf.draw_text(tag_x, row, &tag, agent_tag_color(t), bg, AttrFlags::empty(), area);
+                    buf.draw_text(
+                        tag_x,
+                        row,
+                        &tag,
+                        agent_tag_color(t),
+                        bg,
+                        AttrFlags::empty(),
+                        area,
+                    );
                 }
             }
             clicks.add(row_rect, ClickTarget::SidebarRow(i));
@@ -208,11 +295,21 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             let (na, term) = action_labels(group.active, scene.sidebar_focused);
             let total = na.chars().count() as u16 + term.chars().count() as u16 + 2;
             let x0 = area.right().saturating_sub(total + 1);
-            let color = if group.active { group.accent } else { t.text_faint };
+            let color = if group.active {
+                group.accent
+            } else {
+                t.text_faint
+            };
             let ax = buf.draw_text(x0, row, &na, color, sb_bg, AttrFlags::empty(), area);
-            clicks.add(Rect::new(x0, row, ax - x0, 1), ClickTarget::SidebarGroupNewAgent(gi));
+            clicks.add(
+                Rect::new(x0, row, ax - x0, 1),
+                ClickTarget::SidebarGroupNewAgent(gi),
+            );
             let tx = buf.draw_text(ax + 2, row, &term, color, sb_bg, AttrFlags::empty(), area);
-            clicks.add(Rect::new(ax + 2, row, tx - ax - 2, 1), ClickTarget::SidebarGroupNewTerminal(gi));
+            clicks.add(
+                Rect::new(ax + 2, row, tx - ax - 2, 1),
+                ClickTarget::SidebarGroupNewTerminal(gi),
+            );
             row += 1;
         }
         // Breathing room between groups.
@@ -225,28 +322,100 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     let border_x = area.right();
     if border_x < buf.cols() {
         for y in 0..area.bottom() {
-            buf.set(border_x, y, Cell { ch: '│', fg: t.border, bg: sb_bg, ..Cell::default() });
+            buf.set(
+                border_x,
+                y,
+                Cell {
+                    ch: '│',
+                    fg: t.border,
+                    bg: sb_bg,
+                    ..Cell::default()
+                },
+            );
         }
     }
 
     // Action rows: always-visible click targets so nothing needs a manual.
     let actions_row = area.bottom().saturating_sub(4);
-    let x = buf.draw_text(area.x + 1, actions_row, "+ agent", t.accent, sb_bg, AttrFlags::BOLD, area);
-    clicks.add(Rect::new(area.x + 1, actions_row, x - area.x - 1, 1), ClickTarget::SidebarNewAgent);
-    let x2 = buf.draw_text(x + 2, actions_row, "+ terminal", t.text_dim, sb_bg, AttrFlags::empty(), area);
-    clicks.add(Rect::new(x + 2, actions_row, x2 - x - 2, 1), ClickTarget::SidebarNewTerminal);
-    let x3 = buf.draw_text(x2 + 2, actions_row, "+ proj", t.text_dim, sb_bg, AttrFlags::empty(), area);
-    clicks.add(Rect::new(x2 + 2, actions_row, x3 - x2 - 2, 1), ClickTarget::SidebarNewProject);
+    let x = buf.draw_text(
+        area.x + 1,
+        actions_row,
+        "+ agent",
+        t.accent,
+        sb_bg,
+        AttrFlags::BOLD,
+        area,
+    );
+    clicks.add(
+        Rect::new(area.x + 1, actions_row, x - area.x - 1, 1),
+        ClickTarget::SidebarNewAgent,
+    );
+    let x2 = buf.draw_text(
+        x + 2,
+        actions_row,
+        "+ terminal",
+        t.text_dim,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
+    clicks.add(
+        Rect::new(x + 2, actions_row, x2 - x - 2, 1),
+        ClickTarget::SidebarNewTerminal,
+    );
+    let x3 = buf.draw_text(
+        x2 + 2,
+        actions_row,
+        "+ proj",
+        t.text_dim,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
+    clicks.add(
+        Rect::new(x2 + 2, actions_row, x3 - x2 - 2, 1),
+        ClickTarget::SidebarNewProject,
+    );
 
     let tools_row = area.bottom().saturating_sub(3);
-    let sx = buf.draw_text(area.x + 1, tools_row, "⚙ settings", t.text_dim, sb_bg, AttrFlags::empty(), area);
-    clicks.add(Rect::new(area.x + 1, tools_row, sx - area.x - 1, 1), ClickTarget::SidebarSettings);
-    let hx = buf.draw_text(sx + 2, tools_row, "? shortcuts", t.text_dim, sb_bg, AttrFlags::empty(), area);
-    clicks.add(Rect::new(sx + 2, tools_row, hx - sx - 2, 1), ClickTarget::SidebarHelp);
+    let sx = buf.draw_text(
+        area.x + 1,
+        tools_row,
+        "⚙ settings",
+        t.text_dim,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
+    clicks.add(
+        Rect::new(area.x + 1, tools_row, sx - area.x - 1, 1),
+        ClickTarget::SidebarSettings,
+    );
+    let hx = buf.draw_text(
+        sx + 2,
+        tools_row,
+        "? shortcuts",
+        t.text_dim,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
+    clicks.add(
+        Rect::new(sx + 2, tools_row, hx - sx - 2, 1),
+        ClickTarget::SidebarHelp,
+    );
 
     // Build + auto-filed issues (first-party diagnostics ring).
     let ver_row = area.bottom().saturating_sub(2);
-    let vx = buf.draw_text(area.x + 1, ver_row, scene.version, t.text_faint, sb_bg, AttrFlags::empty(), area);
+    let vx = buf.draw_text(
+        area.x + 1,
+        ver_row,
+        scene.version,
+        t.text_faint,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
     let (total, fresh) = scene.issues;
     if total > 0 {
         let label = if fresh > 0 {
@@ -256,7 +425,10 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         };
         let color = if fresh > 0 { t.warn } else { t.text_faint };
         let ix = buf.draw_text(vx, ver_row, &label, color, sb_bg, AttrFlags::empty(), area);
-        clicks.add(Rect::new(vx, ver_row, ix.saturating_sub(vx), 1), ClickTarget::SidebarIssues);
+        clicks.add(
+            Rect::new(vx, ver_row, ix.saturating_sub(vx), 1),
+            ClickTarget::SidebarIssues,
+        );
     }
 
     // Footer: leader hint or status.
@@ -266,8 +438,20 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     } else {
         scene.status_line
     };
-    let footer_fg = if scene.leader_armed { t.warn } else { t.text_faint };
-    buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, sb_bg, AttrFlags::empty(), area);
+    let footer_fg = if scene.leader_armed {
+        t.warn
+    } else {
+        t.text_faint
+    };
+    buf.draw_text(
+        area.x,
+        footer_row,
+        &truncate(footer, area.w as usize),
+        footer_fg,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
 }
 
 /// Whether a pane header renders with the full active treatment: actual
@@ -362,21 +546,47 @@ fn draw_pane_title(
     }
     let focused = idx == scene.focused;
     let selected = idx == scene.selected;
-    let (pa, ps) = scene.pane_accents.get(idx).copied().unwrap_or((t.accent, t.accent_soft));
+    let (pa, ps) = scene
+        .pane_accents
+        .get(idx)
+        .copied()
+        .unwrap_or((t.accent, t.accent_soft));
     let bar = Rect::new(body.x, body.y - TITLE_ROWS, body.w, TITLE_ROWS);
     // #21: sidebar navigation previews the full active header on the
     // selected pane — input focus doesn't move until Enter.
     let full = header_shows_active(focused, selected, scene.sidebar_focused);
     let (fg, bg) = title_bar_style(t, (pa, ps), full, selected);
-    buf.fill(bar, &Cell { bg, ..Cell::default() });
+    buf.fill(
+        bar,
+        &Cell {
+            bg,
+            ..Cell::default()
+        },
+    );
 
     let glyph = status_glyph(pane, scene.anim);
-    let label = format!(" {glyph} {} ", truncate(pane.display_title(), bar.w.saturating_sub(16) as usize));
-    let attrs = if full || selected { AttrFlags::BOLD } else { AttrFlags::empty() };
+    let label = format!(
+        " {glyph} {} ",
+        truncate(pane.display_title(), bar.w.saturating_sub(16) as usize)
+    );
+    let attrs = if full || selected {
+        AttrFlags::BOLD
+    } else {
+        AttrFlags::empty()
+    };
     buf.draw_text(bar.x, bar.y, &label, fg, bg, attrs, bar);
     if selected && !focused {
         // Mirror the sidebar's selection bar so the eye can pair them (#13).
-        buf.set(bar.x, bar.y, Cell { ch: '▍', fg: pa, bg, ..Cell::default() });
+        buf.set(
+            bar.x,
+            bar.y,
+            Cell {
+                ch: '▍',
+                fg: pa,
+                bg,
+                ..Cell::default()
+            },
+        );
     }
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
@@ -385,14 +595,38 @@ fn draw_pane_title(
     // dots elsewhere; each gets a 2-cell click target.
     let size = format!("{}×{}", pane.cols, pane.rows);
     let dots = [
-        (ClickTarget::TitleRename(idx), Color::Rgb(0x2e, 0xc2, 0x4e), Color::Indexed(65)),
-        (ClickTarget::TitleHide(idx), Color::Rgb(0xfe, 0xbc, 0x2e), Color::Indexed(136)),
-        (ClickTarget::TitleClose(idx), Color::Rgb(0xff, 0x5f, 0x57), Color::Indexed(131)),
+        (
+            ClickTarget::TitleRename(idx),
+            Color::Rgb(0x2e, 0xc2, 0x4e),
+            Color::Indexed(65),
+        ),
+        (
+            ClickTarget::TitleHide(idx),
+            Color::Rgb(0xfe, 0xbc, 0x2e),
+            Color::Indexed(136),
+        ),
+        (
+            ClickTarget::TitleClose(idx),
+            Color::Rgb(0xff, 0x5f, 0x57),
+            Color::Indexed(131),
+        ),
     ];
     let dots_w = dots.len() as u16 * 2 + 1;
     let total_w = size.chars().count() as u16 + 2 + dots_w;
     let mut x = bar.right().saturating_sub(total_w);
-    x = buf.draw_text(x, bar.y, &size, if focused { Color::Indexed(255) } else { t.text_faint }, bg, AttrFlags::empty(), bar);
+    x = buf.draw_text(
+        x,
+        bar.y,
+        &size,
+        if focused {
+            Color::Indexed(255)
+        } else {
+            t.text_faint
+        },
+        bg,
+        AttrFlags::empty(),
+        bar,
+    );
     x += 2;
     for (target, vivid, dim) in dots {
         let fg = if focused { vivid } else { dim };
@@ -414,7 +648,15 @@ fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body
         format!(" scroll +{} ", pane.term.display_offset())
     };
     let x = body.right().saturating_sub(text.len() as u16 + 1);
-    buf.draw_text(x, body.y, &text, Color::Indexed(0), theme.warn, AttrFlags::BOLD, body);
+    buf.draw_text(
+        x,
+        body.y,
+        &text,
+        Color::Indexed(0),
+        theme.warn,
+        AttrFlags::BOLD,
+        body,
+    );
 }
 
 fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {
@@ -423,8 +665,22 @@ fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {
     let h = lines.len() as u16 + 1;
     let area = buf.area();
     let rect = Rect::new(area.w.saturating_sub(w + 1), 1, w, h).intersect(&area);
-    buf.fill(rect, &Cell { bg: Color::Indexed(17), ..Cell::default() });
-    buf.draw_text(rect.x + 1, rect.y, "── perf ──", Color::Indexed(45), Color::Indexed(17), AttrFlags::BOLD, rect);
+    buf.fill(
+        rect,
+        &Cell {
+            bg: Color::Indexed(17),
+            ..Cell::default()
+        },
+    );
+    buf.draw_text(
+        rect.x + 1,
+        rect.y,
+        "── perf ──",
+        Color::Indexed(45),
+        Color::Indexed(17),
+        AttrFlags::BOLD,
+        rect,
+    );
     for (i, line) in lines.iter().enumerate() {
         buf.draw_text(
             rect.x + 1,
@@ -489,24 +745,46 @@ mod tests {
         let theme = Theme::named("violet");
         assert_eq!(sidebar_surface(&theme, true), Color::Default);
         assert_eq!(sidebar_surface(&theme, false), Color::Default);
-        assert_eq!(theme.canvas, Color::Default, "content area is transparent too");
+        assert_eq!(
+            theme.canvas,
+            Color::Default,
+            "content area is transparent too"
+        );
         assert_eq!(
             action_labels(true, true),
             ("[n]ew agent".to_string(), "[t]erminal".to_string())
         );
         // Unfocused (or inactive group): plain labels — hotkeys aren't live.
-        assert_eq!(action_labels(true, false), ("new agent".to_string(), "terminal".to_string()));
-        assert_eq!(action_labels(false, true), ("new agent".to_string(), "terminal".to_string()));
+        assert_eq!(
+            action_labels(true, false),
+            ("new agent".to_string(), "terminal".to_string())
+        );
+        assert_eq!(
+            action_labels(false, true),
+            ("new agent".to_string(), "terminal".to_string())
+        );
     }
 
     #[test]
     fn sidebar_selection_previews_the_active_header() {
         // #21: full treatment follows focus — or selection while the
         // sidebar owns the keyboard; never a stale preview afterwards.
-        assert!(header_shows_active(true, false, false), "focused is always active");
-        assert!(header_shows_active(false, true, true), "sidebar navigation previews");
-        assert!(!header_shows_active(false, true, false), "no preview once sidebar unfocused");
-        assert!(!header_shows_active(false, false, true), "unselected panes stay plain");
+        assert!(
+            header_shows_active(true, false, false),
+            "focused is always active"
+        );
+        assert!(
+            header_shows_active(false, true, true),
+            "sidebar navigation previews"
+        );
+        assert!(
+            !header_shows_active(false, true, false),
+            "no preview once sidebar unfocused"
+        );
+        assert!(
+            !header_shows_active(false, false, true),
+            "unselected panes stay plain"
+        );
     }
 
     #[test]

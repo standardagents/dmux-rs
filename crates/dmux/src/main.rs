@@ -68,9 +68,24 @@ struct Tooltip {
 /// stays inside `area` even for releases at the edges.
 fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux_compositor::Rect {
     let w = w.min(area.w);
-    let ty = if y > area.y { y - 1 } else { y.min(area.bottom().saturating_sub(1)) };
+    let ty = if y > area.y {
+        y - 1
+    } else {
+        y.min(area.bottom().saturating_sub(1))
+    };
     let tx = x.min(area.right().saturating_sub(w)).max(area.x);
     dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
+}
+
+/// Pane status for an LLM verdict. Option dialogs ALWAYS land on Waiting —
+/// dmux never auto-accepts one (#31); the agent's own autonomous mode is
+/// the only thing allowed to press Enter.
+fn verdict_pane_status(v: &dmux_infer::PaneVerdict) -> PaneStatus {
+    match v {
+        dmux_infer::PaneVerdict::OptionDialog => PaneStatus::Waiting,
+        dmux_infer::PaneVerdict::OpenPrompt => PaneStatus::Idle,
+        dmux_infer::PaneVerdict::InProgress => PaneStatus::Working,
+    }
 }
 
 /// What a key does while the sidebar owns the keyboard (#27). Pure so the
@@ -133,11 +148,15 @@ enum SidebarDrag {
 impl SidebarDrag {
     fn motion(self, row: u16) -> SidebarDrag {
         match self {
-            SidebarDrag::Armed { src, start_row } if row != start_row => {
-                SidebarDrag::Reordering { src, pointer_row: row }
-            }
+            SidebarDrag::Armed { src, start_row } if row != start_row => SidebarDrag::Reordering {
+                src,
+                pointer_row: row,
+            },
             SidebarDrag::Armed { .. } => self,
-            SidebarDrag::Reordering { src, .. } => SidebarDrag::Reordering { src, pointer_row: row },
+            SidebarDrag::Reordering { src, .. } => SidebarDrag::Reordering {
+                src,
+                pointer_row: row,
+            },
         }
     }
 
@@ -185,7 +204,10 @@ const FLOOD_RESEED_EVERY: Duration = Duration::from_millis(500);
 fn tracking_interval() -> Duration {
     static SECS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     Duration::from_secs(*SECS.get_or_init(|| {
-        std::env::var("DMUX_TRACKING_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30)
+        std::env::var("DMUX_TRACKING_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30)
     }))
 }
 
@@ -249,11 +271,18 @@ struct BootstrapSpec {
 /// into the main loop.
 #[derive(Debug)]
 enum AppMsg {
-    MergeDone { slug: String, branch: String, result: Result<String, String> },
+    MergeDone {
+        slug: String,
+        branch: String,
+        result: Result<String, String>,
+    },
     /// Async filesystem work finished; recompute anything derived from disk.
     RefreshDerived,
     /// LLM pane classification finished.
-    AnalysisDone { pane: PaneId, verdict: Result<dmux_infer::PaneVerdict, String> },
+    AnalysisDone {
+        pane: PaneId,
+        verdict: Result<dmux_infer::PaneVerdict, String>,
+    },
     /// LLM terminal naming produced a candidate name.
     NamingDone { pane: PaneId, name: String },
     /// Native worktree bootstrap progress for a pane (keyed by slug).
@@ -265,11 +294,17 @@ enum AppMsg {
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
     /// Conflicted merge state re-established; launch the resolution pane.
-    ConflictsReady { branch: String, files: Result<Vec<String>, String> },
+    ConflictsReady {
+        branch: String,
+        files: Result<Vec<String>, String>,
+    },
     /// A newer published version exists.
     UpdateAvailable(String),
     /// AI auto-merge finished (Ok = files resolved, merge committed).
-    AiMergeDone { branch: String, result: Result<usize, String> },
+    AiMergeDone {
+        branch: String,
+        result: Result<usize, String>,
+    },
 }
 
 /// Reply tags: every command whose reply matters is matched in stream order.
@@ -358,15 +393,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .status()?;
         if !status.success() {
-            eprintln!("failed to create tmux session '{session_name}' in {}", project_root.display());
+            eprintln!(
+                "failed to create tmux session '{session_name}' in {}",
+                project_root.display()
+            );
             std::process::exit(1);
         }
-        eprintln!("created session '{session_name}' for {}", project_root.display());
+        eprintln!(
+            "created session '{session_name}' for {}",
+            project_root.display()
+        );
     }
     let session_created = !exists;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(run(cli, config, project_root, session_name, session_created))
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run(
+        cli,
+        config,
+        project_root,
+        session_name,
+        session_created,
+    ))
 }
 
 fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -375,7 +424,10 @@ fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::create_dir_all(&dir);
         dir.join("dmux-rs.log")
     });
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -388,7 +440,9 @@ fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 /// Resolve (config, project root, session name). Precedence for the root:
@@ -561,10 +615,18 @@ async fn run(
     if let Some(socket) = &cli.socket {
         args.extend(["-L".into(), socket.clone()]);
     }
-    args.extend(["-C".into(), "attach-session".into(), "-t".into(), session_name.clone()]);
+    args.extend([
+        "-C".into(),
+        "attach-session".into(),
+        "-t".into(),
+        session_name.clone(),
+    ]);
     let (client, mut events, router, mut child) = Client::<Tag>::spawn(&cli.tmux, &args)?;
 
-    let settings = Arc::new(Mutex::new(SettingsStore::load(&dirs_home(), Some(&project_root))));
+    let settings = Arc::new(Mutex::new(SettingsStore::load(
+        &dirs_home(),
+        Some(&project_root),
+    )));
     let installed_agents = agents::detect_installed();
     let is_git = git_main_worktree_root(&project_root).is_some();
 
@@ -596,18 +658,28 @@ async fn run(
     // and never reaches capture-pane grids, so the verifier and seed path
     // are unaffected.
     let (default_fg, default_bg) = dmux_vt::palette::default_fg_bg_hex();
-    let _ = client.send(format!("set -g window-style 'fg={default_fg},bg={default_bg}'"));
+    let _ = client.send(format!(
+        "set -g window-style 'fg={default_fg},bg={default_bg}'"
+    ));
     // window-active-style MERGES OVER window-style for the active pane —
     // where a focused TUI actually runs — so a stale or user-config value
     // there (observed live: bg=colour231, near-white) silently overrides
     // the answer above and re-breaks theme detection (#4 follow-up). Own
     // both options.
-    let _ = client.send(format!("set -g window-active-style 'fg={default_fg},bg={default_bg}'"));
+    let _ = client.send(format!(
+        "set -g window-active-style 'fg={default_fg},bg={default_bg}'"
+    ));
     // Reply-escaping probe must be the FIRST tagged command: its verdict
     // gates decoding of every later reply, and tmux answers in order (#19).
-    client.send_tagged("display-message -p 'dmuxprobe\u{1}end'".to_string(), Tag::EscapeProbe)?;
     client.send_tagged(
-        format!("show-options -t {} -qv @dmux_controller_pid", dmux_cc::quote_arg(&session_name)),
+        "display-message -p 'dmuxprobe\u{1}end'".to_string(),
+        Tag::EscapeProbe,
+    )?;
+    client.send_tagged(
+        format!(
+            "show-options -t {} -qv @dmux_controller_pid",
+            dmux_cc::quote_arg(&session_name)
+        ),
         Tag::ControllerPid,
     )?;
     client.send_tagged(session::list_panes_command(), Tag::ListPanes)?;
@@ -672,8 +744,13 @@ async fn run(
         anim_clock: AnimClock::default(),
         pending_injections: Vec::new(),
         bootstraps: std::collections::HashMap::new(),
-        verify_enabled: std::env::var("DMUX_VERIFY").map(|v| v != "0").unwrap_or(true),
-        fault_drop: std::env::var("DMUX_FAULT_DROP_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+        verify_enabled: std::env::var("DMUX_VERIFY")
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        fault_drop: std::env::var("DMUX_FAULT_DROP_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
         filed_issues: report::load_filed(&dirs_home()),
         new_issue_count: 0,
         version_line: updater::version_line(),
@@ -684,7 +761,10 @@ async fn run(
         own_sizing: false,
         welcome_cards: Vec::new(),
         welcome_sel: 0,
-        welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
+        welcome_rain: welcome::MatrixRain::new(
+            size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1),
+            size.1,
+        ),
         keepalive_present: false,
         keepalive_pending: false,
         session_created,
@@ -701,7 +781,10 @@ async fn run(
         drag_moved: false,
         last_press: None,
         last_search: None,
-        log_path: cli.log_file.clone().unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
+        log_path: cli
+            .log_file
+            .clone()
+            .unwrap_or_else(|| dirs_home().join(".dmux").join("logs").join("dmux-rs.log")),
         app_tx,
         inference_primary: None,
         inference_backup: None,
@@ -711,8 +794,12 @@ async fn run(
     };
     {
         let s = app.settings.lock().unwrap();
-        app.inference_primary = s.get("inferencePrimary").and_then(dmux_infer::Target::from_value);
-        app.inference_backup = s.get("inferenceBackup").and_then(dmux_infer::Target::from_value);
+        app.inference_primary = s
+            .get("inferencePrimary")
+            .and_then(dmux_infer::Target::from_value);
+        app.inference_backup = s
+            .get("inferenceBackup")
+            .and_then(dmux_infer::Target::from_value);
         dmux_core::i18n::set_locale(s.get_str("language").unwrap_or("en"));
     }
     // Update check (daily, off-loop, best-effort).
@@ -726,7 +813,10 @@ async fn run(
             }
         });
     }
-    if std::env::var("DMUX_JUST_UPDATED").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("DMUX_JUST_UPDATED")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         app.toast(format!("⬆ updated to {}", updater::version_line()));
     }
     // First-party self-update loop: poll the dmux-rs repo's latest release
@@ -735,7 +825,9 @@ async fn run(
         let tx = app.app_tx.clone();
         let repo = {
             let s = app.settings.lock().unwrap();
-            s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
+            s.get_str("dmuxRsRepo")
+                .unwrap_or(report::DEFAULT_REPO)
+                .to_string()
         };
         // Test-ring cadence: super frequent by design — a fresh release
         // should reach every head within about a minute.
@@ -799,7 +891,9 @@ async fn run(
             .filter_map(|p| p.last_output)
             .min()
             .map(|t| tokio::time::Instant::from_std(t + SETTLE_AFTER));
-        let hud_deadline = app.hud.then(|| tokio::time::Instant::from_std(now + HUD_REFRESH));
+        let hud_deadline = app
+            .hud
+            .then(|| tokio::time::Instant::from_std(now + HUD_REFRESH));
         let resume_deadline = app
             .panes
             .iter()
@@ -807,8 +901,14 @@ async fn run(
             .min()
             .map(tokio::time::Instant::from_std);
         let anim_deadline = if app.animating() {
-            let interval = if app.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
-            Some(tokio::time::Instant::from_std(app.anim_clock.deadline(now, interval)))
+            let interval = if app.welcome_active() {
+                RAIN_INTERVAL
+            } else {
+                ANIM_INTERVAL
+            };
+            Some(tokio::time::Instant::from_std(
+                app.anim_clock.deadline(now, interval),
+            ))
         } else {
             app.anim_clock.disarm();
             None
@@ -820,9 +920,15 @@ async fn run(
             .min()
             .map(tokio::time::Instant::from_std);
         let status_deadline = app.status_clear_at.map(tokio::time::Instant::from_std);
-        let tooltip_deadline = app.tooltip.as_ref().map(|t| tokio::time::Instant::from_std(t.until));
+        let tooltip_deadline = app
+            .tooltip
+            .as_ref()
+            .map(|t| tokio::time::Instant::from_std(t.until));
         let tracking_deadline = (!app.tracking_inflight
-            && app.panes.iter().any(|p| p.agent.is_some() && p.pane_pid > 0))
+            && app
+                .panes
+                .iter()
+                .any(|p| p.agent.is_some() && p.pane_pid > 0))
         .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking_interval()));
         let deadline = [
             render_deadline,
@@ -909,7 +1015,10 @@ async fn run(
 }
 
 impl App {
-    async fn shutdown(&mut self, child: &mut tokio::process::Child) -> Result<(), Box<dyn std::error::Error>> {
+    async fn shutdown(
+        &mut self,
+        child: &mut tokio::process::Child,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.host.restore();
         let _ = child.start_kill();
         let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
@@ -953,9 +1062,15 @@ impl App {
                                 .config
                                 .panes
                                 .iter()
-                                .find(|r| r.worktree_path.as_deref() == Some(p.as_str()) || r.slug == slug)
+                                .find(|r| {
+                                    r.worktree_path.as_deref() == Some(p.as_str()) || r.slug == slug
+                                })
                                 .and_then(|r| r.agent.clone());
-                            worktrees.push(welcome::WorktreeCard { slug, path: p, agent });
+                            worktrees.push(welcome::WorktreeCard {
+                                slug,
+                                path: p,
+                                agent,
+                            });
                         }
                     }
                 }
@@ -967,8 +1082,11 @@ impl App {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "project".into());
-        self.welcome_cards = welcome::build_cards(&self.installed_agents, &project_name, &worktrees);
-        self.welcome_sel = self.welcome_sel.min(self.welcome_cards.len().saturating_sub(1));
+        self.welcome_cards =
+            welcome::build_cards(&self.installed_agents, &project_name, &worktrees);
+        self.welcome_sel = self
+            .welcome_sel
+            .min(self.welcome_cards.len().saturating_sub(1));
     }
 
     /// Make sure the keepalive window exists so an empty session survives.
@@ -1020,9 +1138,10 @@ impl App {
         let path = std::env::temp_dir().join(format!("dmux-rs-clip-{}", std::process::id()));
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let _ = self
-                    .client
-                    .send(format!("load-buffer -b dmux {}", dmux_cc::quote_arg(&path.to_string_lossy())));
+                let _ = self.client.send(format!(
+                    "load-buffer -b dmux {}",
+                    dmux_cc::quote_arg(&path.to_string_lossy())
+                ));
             }
             Err(err) => tracing::warn!(%err, "clipboard buffer write failed"),
         }
@@ -1043,22 +1162,30 @@ impl App {
         incident: Option<std::path::PathBuf>,
         reply: &Reply,
     ) {
-        if std::env::var("DMUX_NO_REPORT").map(|v| v == "1").unwrap_or(false) {
+        if std::env::var("DMUX_NO_REPORT")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
             return;
         }
         let Some(incident) = incident else { return };
-        let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) else { return };
+        let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) else {
+            return;
+        };
         if p.issue_filed {
             return;
         }
         p.issue_filed = true;
         let repo = {
             let s = self.settings.lock().unwrap();
-            s.get_str("dmuxRsRepo").unwrap_or(report::DEFAULT_REPO).to_string()
+            s.get_str("dmuxRsRepo")
+                .unwrap_or(report::DEFAULT_REPO)
+                .to_string()
         };
         let diffs = verify::compare(p, reply);
-        let our_grid: String =
-            (0..p.rows).map(|r| p.term.row_text_public(r) + "\n").collect();
+        let our_grid: String = (0..p.rows)
+            .map(|r| p.term.row_text_public(r) + "\n")
+            .collect();
         let tmux_grid: String = reply
             .lines
             .iter()
@@ -1067,7 +1194,9 @@ impl App {
         let (slug, cols, rows, det) = (p.slug.clone(), p.cols, p.rows, !p.ring_truncated);
         let build = updater::version_line();
         let home = dirs_home();
-        let dry = std::env::var("DMUX_REPORT_DRY").ok().map(std::path::PathBuf::from);
+        let dry = std::env::var("DMUX_REPORT_DRY")
+            .ok()
+            .map(std::path::PathBuf::from);
         let tx = self.app_tx.clone();
         tokio::task::spawn_blocking(move || {
             let result = report::file_issue(
@@ -1192,9 +1321,13 @@ impl App {
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     p.paused = true;
                     p.begin_reseed();
-                    let _ = self.client.send(format!("refresh-client -A '{pane}:continue'"));
+                    let _ = self
+                        .client
+                        .send(format!("refresh-client -A '{pane}:continue'"));
                     let _ = self.client.send_tagged(p.seed_command(), Tag::Seed(pane));
-                    let _ = self.client.send_tagged(p.cursor_command(), Tag::Cursor(pane));
+                    let _ = self
+                        .client
+                        .send_tagged(p.cursor_command(), Tag::Cursor(pane));
                     self.dirty = true;
                 }
                 true
@@ -1225,12 +1358,19 @@ impl App {
                 self.request_reconcile();
                 true
             }
-            CcEvent::WindowAdd(_) | CcEvent::LayoutChange { .. } | CcEvent::WindowPaneChanged { .. } => {
+            CcEvent::WindowAdd(_)
+            | CcEvent::LayoutChange { .. }
+            | CcEvent::WindowPaneChanged { .. } => {
                 self.request_reconcile();
                 true
             }
-            CcEvent::WindowRenamed { window, name } | CcEvent::UnlinkedWindowRenamed { window, name } => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_window == window && p.title.is_empty()) {
+            CcEvent::WindowRenamed { window, name }
+            | CcEvent::UnlinkedWindowRenamed { window, name } => {
+                if let Some(p) = self
+                    .panes
+                    .iter_mut()
+                    .find(|p| p.tmux_window == window && p.title.is_empty())
+                {
                     p.title = name;
                     self.dirty = true;
                 }
@@ -1307,7 +1447,10 @@ impl App {
             Tag::Cursor(pane_id) => {
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
                     if let Some(seed) = p.pending_seed.take() {
-                        let cursor = reply.ok.then(|| session::parse_cursor_reply(&reply)).flatten();
+                        let cursor = reply
+                            .ok
+                            .then(|| session::parse_cursor_reply(&reply))
+                            .flatten();
                         p.finish_reseed(&seed, cursor);
                         self.dirty = true;
                     } else {
@@ -1333,8 +1476,13 @@ impl App {
                 tracing::info!(escaped, "reply-escaping probe");
             }
             Tag::ControllerPid => {
-                let pid = reply.text_lines().first().and_then(|l| l.trim().parse::<i32>().ok());
-                let controller_alive = pid.map(|pid| unsafe { libc::kill(pid, 0) == 0 }).unwrap_or(false);
+                let pid = reply
+                    .text_lines()
+                    .first()
+                    .and_then(|l| l.trim().parse::<i32>().ok());
+                let controller_alive = pid
+                    .map(|pid| unsafe { libc::kill(pid, 0) == 0 })
+                    .unwrap_or(false);
                 self.own_sizing = !controller_alive;
                 tracing::info!(?pid, own_sizing = self.own_sizing, "controller check");
                 if !self.own_sizing {
@@ -1374,46 +1522,59 @@ impl App {
 
     fn handle_app_msg(&mut self, msg: AppMsg) {
         match msg {
-            AppMsg::MergeDone { slug, branch, result } => match result {
-                Ok(target) => {
-                    self.views.push(Box::new(ConfirmView::new(
+            AppMsg::MergeDone {
+                slug,
+                branch,
+                result,
+            } => {
+                match result {
+                    Ok(target) => {
+                        self.views.push(Box::new(ConfirmView::new(
                         "Merge complete",
                         format!("'{branch}' merged into '{target}'. Remove worktree and close pane?"),
                         "Clean up",
                         false,
                         AppCmd::MergeCleanup { slug },
                     )));
-                    self.dirty = true;
-                }
-                Err(err) => {
-                    tracing::warn!(%err, %branch, "merge failed");
-                    if err.contains("conflict") || err.contains("CONFLICT") {
-                        let agent_label = self.default_agent_for_conflicts().map(|d| d.name).unwrap_or("an agent");
-                        let mut items = Vec::new();
-                        if self.inference_primary.is_some() {
-                            items.push(MenuItem::new(
-                                "AI merge (auto-resolve)",
-                                "",
-                                AppCmd::AiMerge { branch: branch.clone() },
-                            ));
-                        }
-                        items.push(MenuItem::new(
-                            format!("Resolve with {agent_label}…"),
-                            "",
-                            AppCmd::ResolveConflicts { branch: branch.clone() },
-                        ));
-                        items.push(MenuItem::new("Leave it (merge aborted)", "", AppCmd::Noop));
-                        self.views.push(Box::new(MenuView::new(
-                            format!("Merge conflict: {branch}"),
-                            items,
-                        )));
                         self.dirty = true;
-                    } else {
-                        let short: String = err.chars().take(80).collect();
-                        self.toast(format!("✗ {short}"));
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, %branch, "merge failed");
+                        if err.contains("conflict") || err.contains("CONFLICT") {
+                            let agent_label = self
+                                .default_agent_for_conflicts()
+                                .map(|d| d.name)
+                                .unwrap_or("an agent");
+                            let mut items = Vec::new();
+                            if self.inference_primary.is_some() {
+                                items.push(MenuItem::new(
+                                    "AI merge (auto-resolve)",
+                                    "",
+                                    AppCmd::AiMerge {
+                                        branch: branch.clone(),
+                                    },
+                                ));
+                            }
+                            items.push(MenuItem::new(
+                                format!("Resolve with {agent_label}…"),
+                                "",
+                                AppCmd::ResolveConflicts {
+                                    branch: branch.clone(),
+                                },
+                            ));
+                            items.push(MenuItem::new("Leave it (merge aborted)", "", AppCmd::Noop));
+                            self.views.push(Box::new(MenuView::new(
+                                format!("Merge conflict: {branch}"),
+                                items,
+                            )));
+                            self.dirty = true;
+                        } else {
+                            let short: String = err.chars().take(80).collect();
+                            self.toast(format!("✗ {short}"));
+                        }
                     }
                 }
-            },
+            }
             AppMsg::RefreshDerived => {
                 self.refresh_welcome_cards();
                 self.dirty = true;
@@ -1478,13 +1639,19 @@ impl App {
                     let _ = std::fs::write(&pf, &prompt);
                     let agent_cmd = agents::compose_launch(def, Some(&pf.to_string_lossy()), &mode);
                     let injection = match def.transport {
-                        agents::Transport::SendKeys { ready_delay_ms } => Some((prompt, ready_delay_ms)),
+                        agents::Transport::SendKeys { ready_delay_ms } => {
+                            Some((prompt, ready_delay_ms))
+                        }
                         _ => None,
                     };
-                    let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("conflicts-")).count();
+                    let n = 1 + self
+                        .panes
+                        .iter()
+                        .filter(|q| q.slug.starts_with("conflicts-"))
+                        .count();
                     self.create_window(NewWindowCtx {
-                    bootstrap: None,
-                    prompt: String::new(),
+                        bootstrap: None,
+                        prompt: String::new(),
                         slug: format!("conflicts-{n}"),
                         display: format!("conflicts: {branch}"),
                         kind: PaneKind::Shell,
@@ -1513,7 +1680,10 @@ impl App {
                                 changed = true;
                             }
                         };
-                        update("activeAgent", serde_json::Value::String(obs.agent_id.to_string()));
+                        update(
+                            "activeAgent",
+                            serde_json::Value::String(obs.agent_id.to_string()),
+                        );
                         update("agentProcessId", serde_json::Value::from(obs.agent_pid));
                         if let Some(session) = &obs.session_id {
                             update("agentSessionId", serde_json::Value::String(session.clone()));
@@ -1528,20 +1698,15 @@ impl App {
             AppMsg::AnalysisDone { pane, verdict } => {
                 let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
                 let mut attention: Option<String> = None;
-                let mut autopilot_fired = false;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     p.analysis_inflight = false;
                     let is_focused = focused_pane == Some(pane);
                     match verdict {
-                        Ok(dmux_infer::PaneVerdict::OptionDialog) if p.autopilot => {
-                            // Autopilot: accept the highlighted option so the
-                            // agent keeps moving; no attention needed.
-                            p.status = PaneStatus::Working;
-                            p.last_output = Some(Instant::now());
-                            autopilot_fired = true;
-                        }
+                        // Option dialogs always take the waiting/needs-input
+                        // path — dmux never auto-accepts one (#31; agents
+                        // bring their own autonomous modes).
                         Ok(dmux_infer::PaneVerdict::OptionDialog) => {
-                            p.status = PaneStatus::Waiting;
+                            p.status = verdict_pane_status(&dmux_infer::PaneVerdict::OptionDialog);
                             if !is_focused && !p.needs_attention {
                                 p.needs_attention = true;
                                 attention = Some(format!("△ {} needs input", p.display_title()));
@@ -1570,10 +1735,6 @@ impl App {
                     }
                     self.dirty = true;
                 }
-                if autopilot_fired {
-                    let _ = self.client.send(input::send_keys_hex(pane, b"\r"));
-                    self.toast("Autopilot accepted an option dialog");
-                }
                 if let Some(msg) = attention {
                     self.attention_toast(msg);
                 }
@@ -1583,10 +1744,13 @@ impl App {
                 let mut launch_now: Option<(PaneId, bootstrap::Launch)> = None;
                 if let Some(ui) = self.bootstraps.get_mut(&slug) {
                     match ev {
-                        bootstrap::Ev::Step(i) => ui.current = i.min(ui.steps.len().saturating_sub(1)),
+                        bootstrap::Ev::Step(i) => {
+                            ui.current = i.min(ui.steps.len().saturating_sub(1))
+                        }
                         bootstrap::Ev::Detail(line) => ui.detail = line,
                         bootstrap::Ev::Failed(err) => {
-                            fail_toast = Some(format!("Bootstrap failed for '{}': {err}", ui.title));
+                            fail_toast =
+                                Some(format!("Bootstrap failed for '{}': {err}", ui.title));
                             ui.failed = Some(err);
                             ui.done_at = Some(Instant::now());
                         }
@@ -1627,7 +1791,10 @@ impl App {
             AppMsg::IssueFiled(result) => {
                 match result {
                     Ok(issue) => {
-                        self.toast(format!("🐛 filed issue #{} — {}", issue.number, issue.title));
+                        self.toast(format!(
+                            "🐛 filed issue #{} — {}",
+                            issue.number, issue.title
+                        ));
                         self.filed_issues.push(issue);
                         self.new_issue_count += 1;
                     }
@@ -1638,19 +1805,17 @@ impl App {
                 }
                 self.dirty = true;
             }
-            AppMsg::UpdateStaged { tag, staged } => {
-                match updater::apply(&staged) {
-                    Ok(exe) => {
-                        self.toast(format!("⬆ updating to {tag}…"));
-                        self.reexec_after = Some(exe);
-                        self.want_exit = true;
-                    }
-                    Err(err) => {
-                        tracing::warn!(%err, "update apply failed");
-                        self.toast(format!("update failed: {err}"));
-                    }
+            AppMsg::UpdateStaged { tag, staged } => match updater::apply(&staged) {
+                Ok(exe) => {
+                    self.toast(format!("⬆ updating to {tag}…"));
+                    self.reexec_after = Some(exe);
+                    self.want_exit = true;
                 }
-            }
+                Err(err) => {
+                    tracing::warn!(%err, "update apply failed");
+                    self.toast(format!("update failed: {err}"));
+                }
+            },
             AppMsg::NamingDone { pane, name } => {
                 let mut apply = false;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
@@ -1661,9 +1826,11 @@ impl App {
                         if p.title != name {
                             p.title = name.clone();
                             let encoded = encode_pane_title(&name, &p.slug);
-                            let _ = self
-                                .client
-                                .send(format!("select-pane -t {} -T {}", p.tmux_pane, dmux_cc::quote_arg(&encoded)));
+                            let _ = self.client.send(format!(
+                                "select-pane -t {} -T {}",
+                                p.tmux_pane,
+                                dmux_cc::quote_arg(&encoded)
+                            ));
                             apply = true;
                         }
                     }
@@ -1703,39 +1870,65 @@ impl App {
         self.relayout();
     }
 
-    /// Pane-scoped menu items (rename, hide, worktree actions, autopilot,
-    /// hooks, copy path, editor, close) — shared by the leader-key pane menu
-    /// and the sidebar flyout (#14).
+    /// Pane-scoped menu items (rename, hide, worktree actions, hooks, copy
+    /// path, editor, close) — shared by the leader-key pane menu and the
+    /// sidebar flyout (#14).
     fn pane_menu_items(&self, idx: usize) -> Vec<MenuItem> {
         let mut items = Vec::new();
         if let Some(p) = self.panes.get(idx) {
-            let hide_label = if p.hidden { t("menu.show") } else { t("menu.hide") };
-            items.push(MenuItem::new(t("menu.rename"), "^b r", AppCmd::PromptRename(idx)));
+            let hide_label = if p.hidden {
+                t("menu.show")
+            } else {
+                t("menu.hide")
+            };
+            items.push(MenuItem::new(
+                t("menu.rename"),
+                "^b r",
+                AppCmd::PromptRename(idx),
+            ));
             items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
             if p.worktree_path.is_some() {
                 items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
                 items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
                 items.push(MenuItem::new(t("menu.diff"), "", AppCmd::ShowDiff(idx)));
                 if p.agent.is_some() {
-                    items.push(MenuItem::new(t("menu.duplicate"), "", AppCmd::DuplicatePane(idx)));
+                    items.push(MenuItem::new(
+                        t("menu.duplicate"),
+                        "",
+                        AppCmd::DuplicatePane(idx),
+                    ));
                 }
-            }
-            if p.agent.is_some() {
-                let ap = if p.autopilot { t("menu.autopilot_off") } else { t("menu.autopilot_on") };
-                items.push(MenuItem::new(ap, "", AppCmd::ToggleAutopilot(idx)));
             }
             let hook_root = p
                 .project_root
                 .clone()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| self.project_root.clone());
-            for (hook, label) in [("run_test", t("menu.run_test")), ("run_dev", t("menu.run_dev"))] {
+            for (hook, label) in [
+                ("run_test", t("menu.run_test")),
+                ("run_dev", t("menu.run_dev")),
+            ] {
                 if hooks::hook_path(&hook_root, hook).is_some() {
-                    items.push(MenuItem::new(label, "", AppCmd::RunHook { idx, name: hook.into() }));
+                    items.push(MenuItem::new(
+                        label,
+                        "",
+                        AppCmd::RunHook {
+                            idx,
+                            name: hook.into(),
+                        },
+                    ));
                 }
             }
-            items.push(MenuItem::new(t("menu.copy_path"), "", AppCmd::CopyPath(idx)));
-            items.push(MenuItem::new(t("menu.editor"), "", AppCmd::OpenInEditor(idx)));
+            items.push(MenuItem::new(
+                t("menu.copy_path"),
+                "",
+                AppCmd::CopyPath(idx),
+            ));
+            items.push(MenuItem::new(
+                t("menu.editor"),
+                "",
+                AppCmd::OpenInEditor(idx),
+            ));
             items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
         }
         items
@@ -1756,7 +1949,10 @@ impl App {
 
         // Ordered, deduped project entries.
         let mut order: Vec<(String, String, Option<String>)> = Vec::new();
-        let push = |root: String, name: Option<String>, theme: Option<String>, order: &mut Vec<(String, String, Option<String>)>| {
+        let push = |root: String,
+                    name: Option<String>,
+                    theme: Option<String>,
+                    order: &mut Vec<(String, String, Option<String>)>| {
             let root = norm(&root);
             if let Some(existing) = order.iter_mut().find(|(r, ..)| *r == root) {
                 if existing.2.is_none() {
@@ -1778,7 +1974,12 @@ impl App {
                 .color_theme
                 .clone()
                 .filter(|t| dmux_ui::PROJECT_THEME_NAMES.contains(&t.as_str()));
-            push(e.project_root.clone(), e.project_name.clone(), theme, &mut order);
+            push(
+                e.project_root.clone(),
+                e.project_name.clone(),
+                theme,
+                &mut order,
+            );
         }
         for p in &self.panes {
             let root = p.project_root.clone().unwrap_or_else(|| main_root.clone());
@@ -1815,16 +2016,24 @@ impl App {
             self.save_config();
         }
 
-        let active_root = norm(&self.active_project_root().unwrap_or_else(|| main_root.clone()));
+        let active_root = norm(
+            &self
+                .active_project_root()
+                .unwrap_or_else(|| main_root.clone()),
+        );
         self.sidebar_groups = order
             .iter()
             .map(|(root, name, theme)| {
-                let (accent, soft) = dmux_ui::project_theme(theme.as_deref().unwrap_or(dmux_ui::DEFAULT_PROJECT_THEME));
+                let (accent, soft) = dmux_ui::project_theme(
+                    theme.as_deref().unwrap_or(dmux_ui::DEFAULT_PROJECT_THEME),
+                );
                 let pane_indices: Vec<usize> = self
                     .panes
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| norm(&p.project_root.clone().unwrap_or_else(|| main_root.clone())) == *root)
+                    .filter(|(_, p)| {
+                        norm(&p.project_root.clone().unwrap_or_else(|| main_root.clone())) == *root
+                    })
                     .map(|(i, _)| i)
                     .collect();
                 render::SidebarGroup {
@@ -1854,7 +2063,9 @@ impl App {
     /// Project root that new panes should target: the selected pane's
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
-        self.panes.get(self.selected).and_then(|p| p.project_root.clone())
+        self.panes
+            .get(self.selected)
+            .and_then(|p| p.project_root.clone())
     }
 
     /// Best agent to hand conflict resolution to: the configured default if
@@ -1879,14 +2090,19 @@ impl App {
             return;
         }
         self.reconcile_in_flight = true;
-        let _ = self.client.send_tagged(session::list_panes_command(), Tag::ListPanes);
+        let _ = self
+            .client
+            .send_tagged(session::list_panes_command(), Tag::ListPanes);
     }
 
     fn apply_pane_list(&mut self, reply: &Reply) {
         let infos = session::parse_pane_list(reply);
         // Track (and dedupe) keepalive windows.
-        let keepalives: Vec<_> =
-            infos.iter().filter(|i| session::is_keepalive(i)).map(|i| i.window).collect();
+        let keepalives: Vec<_> = infos
+            .iter()
+            .filter(|i| session::is_keepalive(i))
+            .map(|i| i.window)
+            .collect();
         self.keepalive_present = !keepalives.is_empty();
         for extra in keepalives.iter().skip(1) {
             let _ = self.client.send(format!("kill-window -t {extra}"));
@@ -1910,12 +2126,19 @@ impl App {
         // Forget closing-markers for panes tmux no longer lists.
         let listed: std::collections::HashSet<PaneId> = infos.iter().map(|i| i.pane).collect();
         self.closing.retain(|p| listed.contains(p));
-        let infos: Vec<_> = infos.into_iter().filter(|i| !self.closing.contains(&i.pane)).collect();
+        let infos: Vec<_> = infos
+            .into_iter()
+            .filter(|i| !self.closing.contains(&i.pane))
+            .collect();
         let adopted = session::adopt_panes(Some(&self.config), &infos);
 
         for mut new_pane in adopted {
             new_pane.record_stream = self.verify_enabled;
-            match self.panes.iter_mut().find(|p| p.tmux_pane == new_pane.tmux_pane) {
+            match self
+                .panes
+                .iter_mut()
+                .find(|p| p.tmux_pane == new_pane.tmux_pane)
+            {
                 Some(existing) => {
                     existing.tmux_window = new_pane.tmux_window;
                     // Keep the alt-screen flag fresh: begin_reseed seeds
@@ -1931,16 +2154,27 @@ impl App {
                         existing.cols = new_pane.cols;
                         existing.rows = new_pane.rows;
                         existing.begin_reseed();
-                        let _ = self.client.send_tagged(existing.seed_command(), Tag::Seed(existing.tmux_pane));
-                        let _ = self.client.send_tagged(existing.cursor_command(), Tag::Cursor(existing.tmux_pane));
+                        let _ = self
+                            .client
+                            .send_tagged(existing.seed_command(), Tag::Seed(existing.tmux_pane));
+                        let _ = self.client.send_tagged(
+                            existing.cursor_command(),
+                            Tag::Cursor(existing.tmux_pane),
+                        );
                     }
                 }
                 None => {
                     new_pane.begin_reseed();
-                    let _ = self.client.send_tagged(new_pane.seed_command(), Tag::Seed(new_pane.tmux_pane));
-                    let _ = self.client.send_tagged(new_pane.cursor_command(), Tag::Cursor(new_pane.tmux_pane));
+                    let _ = self
+                        .client
+                        .send_tagged(new_pane.seed_command(), Tag::Seed(new_pane.tmux_pane));
+                    let _ = self
+                        .client
+                        .send_tagged(new_pane.cursor_command(), Tag::Cursor(new_pane.tmux_pane));
                     if new_pane.hidden {
-                        let _ = self.client.send(format!("refresh-client -A '{}:off'", new_pane.tmux_pane));
+                        let _ = self
+                            .client
+                            .send(format!("refresh-client -A '{}:off'", new_pane.tmux_pane));
                     }
                     self.panes.push(new_pane);
                 }
@@ -1997,16 +2231,23 @@ impl App {
         if self.session_created && !self.restore_offered && self.own_sizing {
             self.restore_offered = true;
             let root = self.project_root.to_string_lossy().into_owned();
-            let (plans, skipped) =
-                session::plan_session_restore(&self.config, &root, &|p| std::path::Path::new(p).is_dir());
+            let (plans, skipped) = session::plan_session_restore(&self.config, &root, &|p| {
+                std::path::Path::new(p).is_dir()
+            });
             let live: std::collections::HashSet<String> =
                 self.panes.iter().map(|p| p.slug.clone()).collect();
-            let plans: Vec<_> = plans.into_iter().filter(|pl| !live.contains(pl.slug())).collect();
+            let plans: Vec<_> = plans
+                .into_iter()
+                .filter(|pl| !live.contains(pl.slug()))
+                .collect();
             if !skipped.is_empty() {
                 tracing::info!(?skipped, "session restore: unrecoverable records");
             }
             if !plans.is_empty() {
-                let agents = plans.iter().filter(|p| matches!(p, session::RestorePlan::Agent { .. })).count();
+                let agents = plans
+                    .iter()
+                    .filter(|p| matches!(p, session::RestorePlan::Agent { .. }))
+                    .count();
                 let shells = plans.len() - agents;
                 let mut msg = format!(
                     "Last session had {} agent pane(s) and {} terminal(s). Restore them?",
@@ -2032,16 +2273,25 @@ impl App {
 
     fn comfort_band(&self) -> (u16, u16) {
         let s = self.settings.lock().unwrap();
-        let min = s.get_u64("minPaneWidth").map(|v| v as u16).unwrap_or(layout::DEFAULT_MIN_WIDTH);
-        let max = s.get_u64("maxPaneWidth").map(|v| v as u16).unwrap_or(layout::DEFAULT_MAX_WIDTH);
+        let min = s
+            .get_u64("minPaneWidth")
+            .map(|v| v as u16)
+            .unwrap_or(layout::DEFAULT_MIN_WIDTH);
+        let max = s
+            .get_u64("maxPaneWidth")
+            .map(|v| v as u16)
+            .unwrap_or(layout::DEFAULT_MAX_WIDTH);
         (min.clamp(20, 200), max.clamp(min, 400))
     }
 
     fn relayout(&mut self) {
         self.rebuild_sidebar_groups();
         let (min_w, max_w) = self.comfort_band();
-        let visible: Vec<usize> = (0..self.panes.len()).filter(|&i| !self.panes[i].hidden).collect();
-        self.layout = layout::compute_with_band(self.size.0, self.size.1, visible.len(), min_w, max_w);
+        let visible: Vec<usize> = (0..self.panes.len())
+            .filter(|&i| !self.panes[i].hidden)
+            .collect();
+        self.layout =
+            layout::compute_with_band(self.size.0, self.size.1, visible.len(), min_w, max_w);
         for p in self.panes.iter_mut() {
             p.rect = None;
             p.dirty = true;
@@ -2049,7 +2299,13 @@ impl App {
         for (slot, &idx) in visible.iter().enumerate() {
             self.panes[idx].rect = self.layout.panes.get(slot).copied();
         }
-        if self.focused >= self.panes.len() || self.panes.get(self.focused).map(|p| p.hidden).unwrap_or(true) {
+        if self.focused >= self.panes.len()
+            || self
+                .panes
+                .get(self.focused)
+                .map(|p| p.hidden)
+                .unwrap_or(true)
+        {
             self.focused = visible.first().copied().unwrap_or(0);
         }
         self.selected = self.selected.min(self.panes.len().saturating_sub(1));
@@ -2062,7 +2318,8 @@ impl App {
         if !self.own_sizing {
             return;
         }
-        let mut per_window: std::collections::HashMap<dmux_cc::WindowId, u32> = std::collections::HashMap::new();
+        let mut per_window: std::collections::HashMap<dmux_cc::WindowId, u32> =
+            std::collections::HashMap::new();
         for p in &self.panes {
             *per_window.entry(p.tmux_window).or_default() += 1;
         }
@@ -2083,15 +2340,22 @@ impl App {
             // latest-mode height = client minus status row). The commands
             // are idempotent and only sent while the size is wrong, so the
             // converged steady state sends nothing.
-            let _ = self.client.send(format!("set-option -w -t {} window-size manual", p.tmux_window));
+            let _ = self.client.send(format!(
+                "set-option -w -t {} window-size manual",
+                p.tmux_window
+            ));
             // User configs with `pane-border-status` steal a row INSIDE
             // the window, making the pane one row shorter than the window
             // we size — the bottom row of every pane would be invisible.
             // Scoped to our windows; the user's other sessions keep it.
-            let _ = self
-                .client
-                .send(format!("set-option -w -t {} pane-border-status off", p.tmux_window));
-            let _ = self.client.send(format!("resize-window -t {} -x {} -y {}", p.tmux_window, rect.w, rect.h));
+            let _ = self.client.send(format!(
+                "set-option -w -t {} pane-border-status off",
+                p.tmux_window
+            ));
+            let _ = self.client.send(format!(
+                "resize-window -t {} -x {} -y {}",
+                p.tmux_window, rect.w, rect.h
+            ));
         }
     }
 
@@ -2104,7 +2368,9 @@ impl App {
         self.back = CellBuffer::new(new_size.0, new_size.1);
         self.emitter.invalidate();
         self.emitter.clear_screen();
-        let _ = self.client.send(format!("refresh-client -C {}x{}", new_size.0, new_size.1));
+        let _ = self
+            .client
+            .send(format!("refresh-client -C {}x{}", new_size.0, new_size.1));
         self.relayout();
     }
 
@@ -2138,7 +2404,8 @@ impl App {
                         return handled;
                     }
                 }
-                let routed = input::route_key(&key, self.focused_modes(), leader_was_armed, &self.keymap);
+                let routed =
+                    input::route_key(&key, self.focused_modes(), leader_was_armed, &self.keymap);
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
@@ -2190,8 +2457,12 @@ impl App {
                 return Some(self.execute_cmd(AppCmd::FocusPane(i)));
             }
             SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
-            SidebarKeyAction::Hide => return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected))),
-            SidebarKeyAction::Close => return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected))),
+            SidebarKeyAction::Hide => {
+                return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected)))
+            }
+            SidebarKeyAction::Close => {
+                return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
+            }
             SidebarKeyAction::NewAgent => return Some(self.execute_cmd(AppCmd::OpenNewAgent)),
             SidebarKeyAction::NewTerminal => return Some(self.execute_cmd(AppCmd::NewTerminal)),
             SidebarKeyAction::LeaveFocus => {
@@ -2245,9 +2516,9 @@ impl App {
             _ => {}
         }
         let is_double = is_press
-            && self
-                .last_press
-                .is_some_and(|(t, c, r)| t.elapsed() < Duration::from_millis(400) && c == col && r == row);
+            && self.last_press.is_some_and(|(t, c, r)| {
+                t.elapsed() < Duration::from_millis(400) && c == col && r == row
+            });
         if is_press {
             self.last_press = Some((Instant::now(), col, row));
         }
@@ -2386,7 +2657,9 @@ impl App {
             MouseKind::WheelUp | MouseKind::WheelDown => {
                 let delta: i32 = if kind == MouseKind::WheelUp { 3 } else { -3 };
                 match target {
-                    Some(ClickTarget::SidebarRow(_)) | Some(ClickTarget::SidebarNewAgent) | Some(ClickTarget::SidebarNewTerminal) => {
+                    Some(ClickTarget::SidebarRow(_))
+                    | Some(ClickTarget::SidebarNewAgent)
+                    | Some(ClickTarget::SidebarNewTerminal) => {
                         let len = self.panes.len();
                         if len > 0 {
                             let step = if delta > 0 { -1i32 } else { 1 };
@@ -2401,18 +2674,28 @@ impl App {
                         // (Claude Code) get arrow keys — the alt screen has
                         // no history, so local view-scrolling there only
                         // shows garbage; everything else scrolls our view.
-                        if let Some(ClickTarget::PaneBody(i)) | Some(ClickTarget::PaneTitle(i)) = target {
+                        if let Some(ClickTarget::PaneBody(i)) | Some(ClickTarget::PaneTitle(i)) =
+                            target
+                        {
                             if let Some(p) = self.panes.get_mut(i) {
                                 let modes = p.term.input_modes();
-                                let app_mouse = (modes.mouse_click || modes.mouse_drag || modes.mouse_motion)
-                                    && modes.sgr_mouse;
+                                let app_mouse =
+                                    (modes.mouse_click || modes.mouse_drag || modes.mouse_motion)
+                                        && modes.sgr_mouse;
                                 let up = kind == MouseKind::WheelUp;
                                 if app_mouse {
                                     if let Some(rect) = p.rect {
                                         let c = col.saturating_sub(rect.x);
                                         let r = row.saturating_sub(rect.y);
-                                        let seq = input::encode_sgr_mouse(if up { 64 } else { 65 }, true, c, r);
-                                        let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
+                                        let seq = input::encode_sgr_mouse(
+                                            if up { 64 } else { 65 },
+                                            true,
+                                            c,
+                                            r,
+                                        );
+                                        let _ = self
+                                            .client
+                                            .send(input::send_keys_hex(p.tmux_pane, &seq));
                                     }
                                 } else if modes.alt_screen {
                                     // xterm "alternate scroll" / tmux behavior:
@@ -2425,7 +2708,8 @@ impl App {
                                         (false, true) => b"\x1bOB",
                                     };
                                     let seq = arrow.repeat(3);
-                                    let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
+                                    let _ =
+                                        self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
                                 } else {
                                     p.term.scroll_view(delta);
                                     p.dirty = true;
@@ -2444,29 +2728,52 @@ impl App {
                     self.selected = i;
                     if is_double {
                         let anchor_x = self.layout.sidebar.right() + 1;
-                        return self.execute_cmd(AppCmd::OpenPaneFlyout { idx: i, x: anchor_x, y: row });
+                        return self.execute_cmd(AppCmd::OpenPaneFlyout {
+                            idx: i,
+                            x: anchor_x,
+                            y: row,
+                        });
                     }
                     // Arm the reorder gesture (#26): it only engages if the
                     // pointer crosses onto another row before release.
-                    self.sidebar_drag = Some(SidebarDrag::Armed { src: i, start_row: row });
+                    self.sidebar_drag = Some(SidebarDrag::Armed {
+                        src: i,
+                        start_row: row,
+                    });
                     self.sidebar_focused = true;
                     self.dirty = true;
                     return true;
                 }
-                Some(ClickTarget::SidebarNewAgent) => return self.execute_cmd(AppCmd::OpenNewAgent),
-                Some(ClickTarget::SidebarNewTerminal) => return self.execute_cmd(AppCmd::NewTerminal),
-                Some(ClickTarget::SidebarNewProject) => return self.execute_cmd(AppCmd::PromptAddProject),
-                Some(ClickTarget::SidebarSettings) => return self.execute_cmd(AppCmd::OpenSettings),
+                Some(ClickTarget::SidebarNewAgent) => {
+                    return self.execute_cmd(AppCmd::OpenNewAgent)
+                }
+                Some(ClickTarget::SidebarNewTerminal) => {
+                    return self.execute_cmd(AppCmd::NewTerminal)
+                }
+                Some(ClickTarget::SidebarNewProject) => {
+                    return self.execute_cmd(AppCmd::PromptAddProject)
+                }
+                Some(ClickTarget::SidebarSettings) => {
+                    return self.execute_cmd(AppCmd::OpenSettings)
+                }
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
                 Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
-                    if let Some(&i) = self.sidebar_groups.get(gi).and_then(|g| g.pane_indices.first()) {
+                    if let Some(&i) = self
+                        .sidebar_groups
+                        .get(gi)
+                        .and_then(|g| g.pane_indices.first())
+                    {
                         self.selected = i;
                     }
                     self.rebuild_sidebar_groups();
                     return self.execute_cmd(AppCmd::OpenNewAgent);
                 }
                 Some(ClickTarget::SidebarGroupNewTerminal(gi)) => {
-                    if let Some(&i) = self.sidebar_groups.get(gi).and_then(|g| g.pane_indices.first()) {
+                    if let Some(&i) = self
+                        .sidebar_groups
+                        .get(gi)
+                        .and_then(|g| g.pane_indices.first())
+                    {
                         self.selected = i;
                     }
                     self.rebuild_sidebar_groups();
@@ -2490,9 +2797,15 @@ impl App {
                     }
                     return self.execute_cmd(AppCmd::FocusPane(i));
                 }
-                Some(ClickTarget::TitleRename(i)) => return self.execute_cmd(AppCmd::PromptRename(i)),
-                Some(ClickTarget::TitleHide(i)) => return self.execute_cmd(AppCmd::ToggleHidden(i)),
-                Some(ClickTarget::TitleClose(i)) => return self.execute_cmd(AppCmd::ConfirmClose(i)),
+                Some(ClickTarget::TitleRename(i)) => {
+                    return self.execute_cmd(AppCmd::PromptRename(i))
+                }
+                Some(ClickTarget::TitleHide(i)) => {
+                    return self.execute_cmd(AppCmd::ToggleHidden(i))
+                }
+                Some(ClickTarget::TitleClose(i)) => {
+                    return self.execute_cmd(AppCmd::ConfirmClose(i))
+                }
                 Some(ClickTarget::WelcomeCard(i)) => {
                     self.welcome_sel = i;
                     let cmd = self.welcome_cards.get(i).map(|c| c.cmd.clone());
@@ -2509,7 +2822,8 @@ impl App {
                     if let Some(p) = self.panes.get_mut(i) {
                         let modes = p.term.input_modes();
                         let app_mouse =
-                            (modes.mouse_click || modes.mouse_drag || modes.mouse_motion) && modes.sgr_mouse;
+                            (modes.mouse_click || modes.mouse_drag || modes.mouse_motion)
+                                && modes.sgr_mouse;
                         if let Some(rect) = p.rect {
                             let c = col - rect.x;
                             let r = row - rect.y;
@@ -2538,7 +2852,10 @@ impl App {
                     // A click on empty sidebar background still hands the
                     // sidebar the keyboard (#15) — the whole strip is the
                     // input area, not just its rows.
-                    if target.is_none() && col <= self.layout.sidebar.right() && !self.sidebar_focused {
+                    if target.is_none()
+                        && col <= self.layout.sidebar.right()
+                        && !self.sidebar_focused
+                    {
                         self.sidebar_focused = true;
                         self.dirty = true;
                     }
@@ -2607,7 +2924,9 @@ impl App {
     }
 
     fn focus_step(&mut self, dir: i32) -> bool {
-        let visible: Vec<usize> = (0..self.panes.len()).filter(|&i| !self.panes[i].hidden).collect();
+        let visible: Vec<usize> = (0..self.panes.len())
+            .filter(|&i| !self.panes[i].hidden)
+            .collect();
         if visible.is_empty() {
             return true;
         }
@@ -2663,20 +2982,41 @@ impl App {
                     let title = p.display_title().to_string();
                     let items = self.pane_menu_items(idx);
                     let row = Rect::new(self.layout.sidebar.x, y, self.layout.sidebar.w, 1);
-                    self.views
-                        .push(Box::new(MenuView::new(title, items).anchored(x, y).with_source(row)));
+                    self.views.push(Box::new(
+                        MenuView::new(title, items).anchored(x, y).with_source(row),
+                    ));
                     self.dirty = true;
                 }
             }
             AppCmd::OpenPaneMenu => {
                 let idx = self.selected.min(self.panes.len().saturating_sub(1));
                 let mut items = self.pane_menu_items(idx);
-                items.push(MenuItem::new(t("menu.new_agents"), "^b n", AppCmd::OpenNewAgent));
-                items.push(MenuItem::new(t("menu.new_terminal"), "^b t", AppCmd::NewTerminal));
-                items.push(MenuItem::new(t("menu.add_project"), "^b p", AppCmd::PromptAddProject));
-                items.push(MenuItem::new(t("menu.settings"), "^b s", AppCmd::OpenSettings));
+                items.push(MenuItem::new(
+                    t("menu.new_agents"),
+                    "^b n",
+                    AppCmd::OpenNewAgent,
+                ));
+                items.push(MenuItem::new(
+                    t("menu.new_terminal"),
+                    "^b t",
+                    AppCmd::NewTerminal,
+                ));
+                items.push(MenuItem::new(
+                    t("menu.add_project"),
+                    "^b p",
+                    AppCmd::PromptAddProject,
+                ));
+                items.push(MenuItem::new(
+                    t("menu.settings"),
+                    "^b s",
+                    AppCmd::OpenSettings,
+                ));
                 items.push(MenuItem::new(t("menu.logs"), "^b l", AppCmd::OpenLogs));
-                items.push(MenuItem::new(t("menu.shortcuts"), "^b ?", AppCmd::OpenShortcuts));
+                items.push(MenuItem::new(
+                    t("menu.shortcuts"),
+                    "^b ?",
+                    AppCmd::OpenShortcuts,
+                ));
                 items.push(MenuItem::new(t("menu.detach"), "^b d", AppCmd::Quit));
                 let title = self
                     .panes
@@ -2692,7 +3032,11 @@ impl App {
                     .active_project_root()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| self.project_root.clone());
-                self.views.push(Box::new(SettingsView::new(self.settings.clone(), has_project, root)));
+                self.views.push(Box::new(SettingsView::new(
+                    self.settings.clone(),
+                    has_project,
+                    root,
+                )));
                 self.dirty = true;
             }
             AppCmd::OpenNewAgent => {
@@ -2701,9 +3045,17 @@ impl App {
                     let enabled = s
                         .get("enabledAgents")
                         .and_then(|v| v.as_array().cloned())
-                        .map(|l| l.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                        .map(|l| {
+                            l.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_else(|| {
-                            agents::AGENTS.iter().filter(|a| a.default_enabled).map(|a| a.id.to_string()).collect()
+                            agents::AGENTS
+                                .iter()
+                                .filter(|a| a.default_enabled)
+                                .map(|a| a.id.to_string())
+                                .collect()
                         });
                     (
                         s.get_str("defaultAgent").map(|v| v.to_string()),
@@ -2727,7 +3079,8 @@ impl App {
                 self.dirty = true;
             }
             AppCmd::OpenLogs => {
-                self.views.push(Box::new(views::LogsView::new(self.log_path.clone())));
+                self.views
+                    .push(Box::new(views::LogsView::new(self.log_path.clone())));
                 self.dirty = true;
             }
             AppCmd::PromptRename(idx) => {
@@ -2777,10 +3130,14 @@ impl App {
                         .worktree_path
                         .clone()
                         .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
-                    let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("editor-")).count();
+                    let n = 1 + self
+                        .panes
+                        .iter()
+                        .filter(|q| q.slug.starts_with("editor-"))
+                        .count();
                     self.create_window(NewWindowCtx {
-                    bootstrap: None,
-                    prompt: String::new(),
+                        bootstrap: None,
+                        prompt: String::new(),
                         slug: format!("editor-{n}"),
                         display: format!("edit: {}", p.display_title()),
                         kind: PaneKind::Shell,
@@ -2794,12 +3151,17 @@ impl App {
                 }
             }
             AppCmd::MergeStart(idx) => {
-                let Some(p) = self.panes.get(idx) else { return true };
-                let Some(wt) = p.worktree_path.clone() else { return true };
+                let Some(p) = self.panes.get(idx) else {
+                    return true;
+                };
+                let Some(wt) = p.worktree_path.clone() else {
+                    return true;
+                };
                 let slug = p.slug.clone();
                 let wt_path = PathBuf::from(&wt);
                 let branch = git::current_branch(&wt_path).unwrap_or_else(|| slug.clone());
-                let root_branch = git::current_branch(&self.project_root).unwrap_or_else(|| "HEAD".into());
+                let root_branch =
+                    git::current_branch(&self.project_root).unwrap_or_else(|| "HEAD".into());
                 if git::worktree_dirty(&wt_path) {
                     self.views.push(Box::new(InputView::new(
                         format!("Commit & merge '{branch}' into '{root_branch}'"),
@@ -2813,34 +3175,53 @@ impl App {
                         format!("Merge '{branch}' into '{root_branch}'?"),
                         "Merge",
                         false,
-                        AppCmd::MergeExec { slug, message: None },
+                        AppCmd::MergeExec {
+                            slug,
+                            message: None,
+                        },
                     )));
                 }
                 self.dirty = true;
             }
             AppCmd::MergeExec { slug, message } => {
-                let Some(p) = self.panes.iter().find(|p| p.slug == slug) else { return true };
-                let Some(wt) = p.worktree_path.clone() else { return true };
+                let Some(p) = self.panes.iter().find(|p| p.slug == slug) else {
+                    return true;
+                };
+                let Some(wt) = p.worktree_path.clone() else {
+                    return true;
+                };
                 let wt_path = PathBuf::from(&wt);
                 let branch = git::current_branch(&wt_path).unwrap_or_else(|| slug.clone());
                 let root = self.project_root.clone();
                 let tx = self.app_tx.clone();
                 self.toast(format!("Merging '{branch}'…"));
                 tokio::task::spawn_blocking(move || {
-                    let result = git::commit_and_merge(&root, &wt_path, &branch, message.as_deref());
-                    let _ = tx.send(AppMsg::MergeDone { slug, branch, result });
+                    let result =
+                        git::commit_and_merge(&root, &wt_path, &branch, message.as_deref());
+                    let _ = tx.send(AppMsg::MergeDone {
+                        slug,
+                        branch,
+                        result,
+                    });
                 });
             }
             AppCmd::Noop => {}
             AppCmd::ShowDiff(idx) => {
-                let Some(p) = self.panes.get(idx) else { return true };
-                let Some(wt) = p.worktree_path.clone() else { return true };
+                let Some(p) = self.panes.get(idx) else {
+                    return true;
+                };
+                let Some(wt) = p.worktree_path.clone() else {
+                    return true;
+                };
                 let title = format!("Diff — {}", p.display_title());
-                self.views.push(Box::new(views::DiffView::new(title, PathBuf::from(wt))));
+                self.views
+                    .push(Box::new(views::DiffView::new(title, PathBuf::from(wt))));
                 self.dirty = true;
             }
             AppCmd::DuplicatePane(idx) => {
-                let Some(p) = self.panes.get(idx) else { return true };
+                let Some(p) = self.panes.get(idx) else {
+                    return true;
+                };
                 let (Some(agent), slug) = (p.agent.clone(), p.slug.clone()) else {
                     self.toast("Only agent panes can be duplicated");
                     return true;
@@ -2852,29 +3233,29 @@ impl App {
                     .find(|r| r.slug == slug)
                     .map(|r| r.prompt.clone())
                     .unwrap_or_default();
-                let mode = self.settings.lock().unwrap().get_str("permissionMode").unwrap_or("").to_string();
+                let mode = self
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .get_str("permissionMode")
+                    .unwrap_or("")
+                    .to_string();
                 self.launch_agents(prompt, vec![(agent, 1)], mode);
             }
-            AppCmd::ToggleAutopilot(idx) => {
-                let Some(p) = self.panes.get_mut(idx) else { return true };
-                p.autopilot = !p.autopilot;
-                let on = p.autopilot;
-                let slug = p.slug.clone();
-                let title = p.display_title().to_string();
-                if let Some(rec) = self.config.panes.iter_mut().find(|r| r.slug == slug) {
-                    rec.autopilot = on.then_some(true);
-                    self.save_config();
-                }
-                self.toast(format!("Autopilot {} for '{title}'", if on { "on" } else { "off" }));
-            }
             AppCmd::RunHook { idx, name } => {
-                let Some(p) = self.panes.get(idx) else { return true };
+                let Some(p) = self.panes.get(idx) else {
+                    return true;
+                };
                 let root = p
                     .project_root
                     .clone()
                     .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
                 let cwd = p.worktree_path.clone().unwrap_or_else(|| root.clone());
-                let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("hook-")).count();
+                let n = 1 + self
+                    .panes
+                    .iter()
+                    .filter(|q| q.slug.starts_with("hook-"))
+                    .count();
                 let label = if name == "run_test" { "tests" } else { "dev" };
                 self.create_window(NewWindowCtx {
                     bootstrap: None,
@@ -2901,14 +3282,19 @@ impl App {
                         Some(offset) => {
                             p.dirty = true;
                             self.dirty = true;
-                            self.toast(format!("Found '{query}' ({offset} lines back) — ⌥PgDn to return"));
+                            self.toast(format!(
+                                "Found '{query}' ({offset} lines back) — ⌥PgDn to return"
+                            ));
                         }
                         None => self.toast(format!("No match for '{query}' above")),
                     }
                 }
             }
             AppCmd::AiMerge { branch } => {
-                let (Some(primary), backup) = (self.inference_primary.clone(), self.inference_backup.clone()) else {
+                let (Some(primary), backup) = (
+                    self.inference_primary.clone(),
+                    self.inference_backup.clone(),
+                ) else {
                     self.toast("No inference provider configured");
                     return true;
                 };
@@ -2959,8 +3345,12 @@ impl App {
                 }
             }
             AppCmd::CreatePr(idx) => {
-                let Some(p) = self.panes.get(idx) else { return true };
-                let Some(wt) = p.worktree_path.clone() else { return true };
+                let Some(p) = self.panes.get(idx) else {
+                    return true;
+                };
+                let Some(wt) = p.worktree_path.clone() else {
+                    return true;
+                };
                 let wt_path = PathBuf::from(&wt);
                 let branch = git::current_branch(&wt_path).unwrap_or_else(|| p.slug.clone());
                 if git::worktree_dirty(&wt_path) {
@@ -2968,7 +3358,11 @@ impl App {
                     return true;
                 }
                 // Interactive in a pane so gh auth/questions stay visible.
-                let n = 1 + self.panes.iter().filter(|q| q.slug.starts_with("pr-")).count();
+                let n = 1 + self
+                    .panes
+                    .iter()
+                    .filter(|q| q.slug.starts_with("pr-"))
+                    .count();
                 self.create_window(NewWindowCtx {
                     bootstrap: None,
                     prompt: String::new(),
@@ -3016,19 +3410,19 @@ impl App {
                         .unwrap_or_else(|| raw.clone());
                     let root = expanded.to_string_lossy().into_owned();
                     // Register in sidebarProjects (typed, TS-compatible).
-                    let exists = self
-                        .config
-                        .sidebar_projects
-                        .iter()
-                        .any(|e| e.project_root.trim_end_matches('/') == root.trim_end_matches('/'));
+                    let exists = self.config.sidebar_projects.iter().any(|e| {
+                        e.project_root.trim_end_matches('/') == root.trim_end_matches('/')
+                    });
                     if !exists {
-                        self.config.sidebar_projects.push(dmux_core::SidebarProjectEntry {
-                            project_root: root.clone(),
-                            project_name: Some(name.clone()),
-                            color_theme: None,
-                            color_theme_source: None,
-                            extra: serde_json::Map::new(),
-                        });
+                        self.config
+                            .sidebar_projects
+                            .push(dmux_core::SidebarProjectEntry {
+                                project_root: root.clone(),
+                                project_name: Some(name.clone()),
+                                color_theme: None,
+                                color_theme_source: None,
+                                extra: serde_json::Map::new(),
+                            });
                         self.rebuild_sidebar_groups();
                         self.save_config();
                         self.toast(format!("Added project '{name}'"));
@@ -3051,7 +3445,9 @@ impl App {
                     .and_then(|v| v.as_str())
                     .map(String::from);
                 let cmd = agents::agent(&agent)
-                    .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
+                    .and_then(|def| {
+                        agents::compose_resume_session(def, session_id.as_deref(), &mode)
+                    })
                     .unwrap_or_else(|| agent.clone());
                 self.create_window(NewWindowCtx {
                     bootstrap: None,
@@ -3073,7 +3469,12 @@ impl App {
                 let n = plans.len();
                 for plan in plans {
                     match plan {
-                        session::RestorePlan::Agent { slug, display, path, agent } => {
+                        session::RestorePlan::Agent {
+                            slug,
+                            display,
+                            path,
+                            agent,
+                        } => {
                             let mode = {
                                 let s = self.settings.lock().unwrap();
                                 s.get_str("permissionMode").unwrap_or("").to_string()
@@ -3090,7 +3491,13 @@ impl App {
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
                             let cmd = agents::agent(&agent)
-                                .and_then(|def| agents::compose_resume_session(def, session_id.as_deref(), &mode))
+                                .and_then(|def| {
+                                    agents::compose_resume_session(
+                                        def,
+                                        session_id.as_deref(),
+                                        &mode,
+                                    )
+                                })
                                 .unwrap_or_else(|| agent.clone());
                             self.create_window(NewWindowCtx {
                                 bootstrap: None,
@@ -3106,7 +3513,12 @@ impl App {
                                 project_root: None,
                             });
                         }
-                        session::RestorePlan::Shell { slug, display, cwd, project_root } => {
+                        session::RestorePlan::Shell {
+                            slug,
+                            display,
+                            cwd,
+                            project_root,
+                        } => {
                             self.create_window(NewWindowCtx {
                                 bootstrap: None,
                                 prompt: String::new(),
@@ -3126,7 +3538,11 @@ impl App {
                 self.toast(format!("Restoring {n} pane(s) from the last session…"));
             }
             AppCmd::NewTerminalAt { path, name } => {
-                let n = 1 + self.panes.iter().filter(|p| p.slug.starts_with("terminal-")).count();
+                let n = 1 + self
+                    .panes
+                    .iter()
+                    .filter(|p| p.slug.starts_with("terminal-"))
+                    .count();
                 self.create_window(NewWindowCtx {
                     bootstrap: None,
                     prompt: String::new(),
@@ -3141,7 +3557,11 @@ impl App {
                     project_root: (PathBuf::from(&path) != self.project_root).then_some(path),
                 });
             }
-            AppCmd::LaunchAgents { prompt, allocations, mode } => self.launch_agents(prompt, allocations, mode),
+            AppCmd::LaunchAgents {
+                prompt,
+                allocations,
+                mode,
+            } => self.launch_agents(prompt, allocations, mode),
             AppCmd::SetSetting { key, value, scope } => self.set_setting(&key, value, scope),
         }
         true
@@ -3185,13 +3605,17 @@ impl App {
     }
 
     fn rename_pane(&mut self, idx: usize, name: String) {
-        let Some(p) = self.panes.get_mut(idx) else { return };
+        let Some(p) = self.panes.get_mut(idx) else {
+            return;
+        };
         p.title = name.clone();
         p.auto_name = false;
         let encoded = encode_pane_title(&name, &p.slug);
-        let _ = self
-            .client
-            .send(format!("select-pane -t {} -T {}", p.tmux_pane, dmux_cc::quote_arg(&encoded)));
+        let _ = self.client.send(format!(
+            "select-pane -t {} -T {}",
+            p.tmux_pane,
+            dmux_cc::quote_arg(&encoded)
+        ));
         let slug = p.slug.clone();
         self.update_config_pane(&slug, |rec| {
             rec.display_name = Some(name.clone());
@@ -3200,28 +3624,44 @@ impl App {
     }
 
     fn toggle_hidden(&mut self, idx: usize) {
-        let Some(p) = self.panes.get_mut(idx) else { return };
+        let Some(p) = self.panes.get_mut(idx) else {
+            return;
+        };
         p.hidden = !p.hidden;
         let hidden = p.hidden;
         let pane_id = p.tmux_pane;
         let slug = p.slug.clone();
         if hidden {
-            let _ = self.client.send(format!("refresh-client -A '{pane_id}:off'"));
+            let _ = self
+                .client
+                .send(format!("refresh-client -A '{pane_id}:off'"));
         } else {
-            let _ = self.client.send(format!("refresh-client -A '{pane_id}:on'"));
+            let _ = self
+                .client
+                .send(format!("refresh-client -A '{pane_id}:on'"));
             p.begin_reseed();
-            let _ = self.client.send_tagged(p.seed_command(), Tag::Seed(pane_id));
-            let _ = self.client.send_tagged(p.cursor_command(), Tag::Cursor(pane_id));
+            let _ = self
+                .client
+                .send_tagged(p.seed_command(), Tag::Seed(pane_id));
+            let _ = self
+                .client
+                .send_tagged(p.cursor_command(), Tag::Cursor(pane_id));
         }
         self.update_config_pane(&slug, |rec| {
             rec.hidden = hidden.then_some(true);
         });
         self.relayout();
-        self.toast(if hidden { t("toast.pane_hidden") } else { t("toast.pane_shown") });
+        self.toast(if hidden {
+            t("toast.pane_hidden")
+        } else {
+            t("toast.pane_shown")
+        });
     }
 
     fn close_pane(&mut self, idx: usize) {
-        let Some(pane) = self.panes.get_mut(idx) else { return };
+        let Some(pane) = self.panes.get_mut(idx) else {
+            return;
+        };
         // Idempotent (#29): a pane already closing ignores duplicate close
         // commands (repeated Enter, repeated ^b x).
         if pane.closing {
@@ -3242,7 +3682,11 @@ impl App {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let hook_cwd = pane.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
+        let hook_cwd = pane
+            .worktree_path
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| hook_root.clone());
         // Closing the last live pane must not destroy the session: the
         // keepalive window is created FIRST (FIFO command order guarantees
         // it exists before the kill lands).
@@ -3250,17 +3694,24 @@ impl App {
         if live == 0 {
             self.ensure_keepalive();
         }
-        let hook_env = [("DMUX_SLUG", slug.clone()), ("DMUX_PANE_ID", pane_id.to_string())];
+        let hook_env = [
+            ("DMUX_SLUG", slug.clone()),
+            ("DMUX_PANE_ID", pane_id.to_string()),
+        ];
         hooks::run_detached(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
         self.closing.insert(pane_id);
-        let _ = self.client.send_tagged(format!("kill-window -t {window}"), Tag::KillWindow(pane_id));
+        let _ = self
+            .client
+            .send_tagged(format!("kill-window -t {window}"), Tag::KillWindow(pane_id));
         self.toast(format!("Closing '{title}'…"));
         self.dirty = true;
     }
 
     /// tmux answered the kill-window for a closing pane (#29).
     fn finish_close(&mut self, pane_id: PaneId, ok: bool, err: String) {
-        let Some(idx) = self.panes.iter().position(|p| p.tmux_pane == pane_id) else { return };
+        let Some(idx) = self.panes.iter().position(|p| p.tmux_pane == pane_id) else {
+            return;
+        };
         if !ok {
             // Restore a usable pane and surface the failure.
             self.closing.remove(&pane_id);
@@ -3278,7 +3729,10 @@ impl App {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let hook_env = [("DMUX_SLUG", pane.slug.clone()), ("DMUX_PANE_ID", pane.tmux_pane.to_string())];
+        let hook_env = [
+            ("DMUX_SLUG", pane.slug.clone()),
+            ("DMUX_PANE_ID", pane.tmux_pane.to_string()),
+        ];
         hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
         self.config.panes.retain(|r| r.slug != pane.slug);
         self.save_config();
@@ -3300,8 +3754,8 @@ impl App {
             .count();
         let slug = format!("terminal-{n}");
         self.create_window(NewWindowCtx {
-                    bootstrap: None,
-                    prompt: String::new(),
+            bootstrap: None,
+            prompt: String::new(),
             display: slug.clone(),
             slug,
             kind: PaneKind::Shell,
@@ -3329,7 +3783,9 @@ impl App {
         };
 
         for (agent_id, count) in &allocations {
-            let Some(def) = agents::agent(agent_id) else { continue };
+            let Some(def) = agents::agent(agent_id) else {
+                continue;
+            };
             for i in 1..=*count {
                 let mut slug = if total == 1 {
                     base_slug.clone()
@@ -3338,7 +3794,9 @@ impl App {
                 };
                 // Uniquify against existing records.
                 let mut n = 1;
-                while self.config.panes.iter().any(|p| p.slug == slug) || self.panes.iter().any(|p| p.slug == slug) {
+                while self.config.panes.iter().any(|p| p.slug == slug)
+                    || self.panes.iter().any(|p| p.slug == slug)
+                {
                     n += 1;
                     slug = format!("{base_slug}-{}-{n}", def.short);
                 }
@@ -3364,7 +3822,11 @@ impl App {
                 // worktree_created hook itself, then starts the agent.
                 let (launch_cmd, injection, worktree_path, bootstrap) = if self.is_git {
                     let branch = format!("{branch_prefix}{slug}");
-                    let wt = self.project_root.join(".dmux").join("worktrees").join(&slug);
+                    let wt = self
+                        .project_root
+                        .join(".dmux")
+                        .join("worktrees")
+                        .join(&slug);
                     let wt_str = wt.to_string_lossy().into_owned();
                     let root = self.project_root.to_string_lossy().into_owned();
                     let spec = BootstrapSpec {
@@ -3374,9 +3836,15 @@ impl App {
                             branch,
                             base_branch: base_branch.clone(),
                             slug: slug.clone(),
-                            has_hook: hooks::hook_path(&self.project_root, "worktree_created").is_some(),
+                            has_hook: hooks::hook_path(&self.project_root, "worktree_created")
+                                .is_some(),
                         },
-                        launch: bootstrap::Launch { agent_cmd, wt: wt_str.clone(), root, injection },
+                        launch: bootstrap::Launch {
+                            agent_cmd,
+                            wt: wt_str.clone(),
+                            root,
+                            injection,
+                        },
                         agent_label: def.name.to_string(),
                     };
                     (None, None, Some(wt_str), Some(spec))
@@ -3387,7 +3855,11 @@ impl App {
                 self.create_window(NewWindowCtx {
                     bootstrap,
                     prompt: prompt.clone(),
-                    display: if total == 1 { base_slug.clone() } else { format!("{base_slug} ({}{i})", def.short) },
+                    display: if total == 1 {
+                        base_slug.clone()
+                    } else {
+                        format!("{base_slug} ({}{i})", def.short)
+                    },
                     slug,
                     kind: PaneKind::Worktree,
                     agent: Some(def.id.to_string()),
@@ -3423,7 +3895,10 @@ impl App {
             &[("DMUX_SLUG", ctx.slug.clone())],
         );
         let _ = self.client.send_tagged(
-            format!("new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}", dmux_cc::quote_arg(&cwd)),
+            format!(
+                "new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}",
+                dmux_cc::quote_arg(&cwd)
+            ),
             Tag::NewWindow(Box::new(ctx)),
         );
     }
@@ -3435,15 +3910,20 @@ impl App {
             self.toast("Pane creation failed");
             return;
         };
-        let Some(pane_id) = pane_str.strip_prefix('%').and_then(|s| s.parse().ok()).map(PaneId) else {
+        let Some(pane_id) = pane_str
+            .strip_prefix('%')
+            .and_then(|s| s.parse().ok())
+            .map(PaneId)
+        else {
             self.toast("Pane creation failed");
             return;
         };
 
         let encoded = encode_pane_title(&ctx.display, &ctx.slug);
-        let _ = self
-            .client
-            .send(format!("select-pane -t {pane_id} -T {}", dmux_cc::quote_arg(&encoded)));
+        let _ = self.client.send(format!(
+            "select-pane -t {pane_id} -T {}",
+            dmux_cc::quote_arg(&encoded)
+        ));
 
         if let Some(spec) = ctx.bootstrap.take() {
             let steps = bootstrap::Ui::step_labels(&spec.agent_label, spec.plan.has_hook);
@@ -3467,7 +3947,10 @@ impl App {
             let tx = self.app_tx.clone();
             tokio::task::spawn_blocking(move || {
                 bootstrap::run_blocking(&spec.plan, &mut |ev| {
-                    let _ = tx.send(AppMsg::Bootstrap { slug: slug.clone(), ev });
+                    let _ = tx.send(AppMsg::Bootstrap {
+                        slug: slug.clone(),
+                        ev,
+                    });
                 });
             });
         }
@@ -3492,8 +3975,15 @@ impl App {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let hook_cwd = ctx.worktree_path.clone().map(PathBuf::from).unwrap_or_else(|| hook_root.clone());
-        let mut hook_env = vec![("DMUX_SLUG", ctx.slug.clone()), ("DMUX_PANE_ID", pane_id.to_string())];
+        let hook_cwd = ctx
+            .worktree_path
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| hook_root.clone());
+        let mut hook_env = vec![
+            ("DMUX_SLUG", ctx.slug.clone()),
+            ("DMUX_PANE_ID", pane_id.to_string()),
+        ];
         if let Some(wt) = &ctx.worktree_path {
             hook_env.push(("DMUX_WORKTREE_PATH", wt.clone()));
         }
@@ -3516,10 +4006,7 @@ impl App {
             record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
             record.prompt = ctx.prompt.clone();
             record.agent = ctx.agent.clone();
-            if ctx.agent.is_some() {
-                let on = self.settings.lock().unwrap().get_bool("enableAutopilotByDefault", false);
-                record.autopilot = on.then_some(true);
-            }
+            if ctx.agent.is_some() {}
             record.worktree_path = ctx.worktree_path.clone();
             record.project_root = ctx.project_root.clone();
             record.project_name = ctx.project_root.as_deref().map(|r| {
@@ -3569,7 +4056,9 @@ impl App {
     }
 
     fn send_pane_bytes(&mut self, bytes: &[u8]) {
-        let Some(p) = self.panes.get_mut(self.focused) else { return };
+        let Some(p) = self.panes.get_mut(self.focused) else {
+            return;
+        };
         if p.status == PaneStatus::Dead || p.hidden {
             return;
         }
@@ -3651,7 +4140,10 @@ impl App {
                                     }
                                 }
                                 // Clear the in-flight flag even on failure.
-                                let _ = tx.send(AppMsg::NamingDone { pane, name: String::new() });
+                                let _ = tx.send(AppMsg::NamingDone {
+                                    pane,
+                                    name: String::new(),
+                                });
                             });
                         }
                     }
@@ -3696,7 +4188,10 @@ impl App {
                             .await
                             .map(|text| dmux_infer::parse_state(&text))
                             .map_err(|e| e.to_string());
-                            let _ = tx.send(AppMsg::AnalysisDone { pane, verdict: result });
+                            let _ = tx.send(AppMsg::AnalysisDone {
+                                pane,
+                                verdict: result,
+                            });
                         });
                     } else if !is_focused && !p.needs_attention {
                         // Heuristic-only path (no inference configured).
@@ -3728,7 +4223,9 @@ impl App {
             }
         }
         for pane_id in resumed {
-            let _ = self.client.send(format!("refresh-client -A '{pane_id}:on'"));
+            let _ = self
+                .client
+                .send(format!("refresh-client -A '{pane_id}:on'"));
             let (seed, cursor) = {
                 let p = self.panes.iter().find(|p| p.tmux_pane == pane_id).unwrap();
                 (p.seed_command(), p.cursor_command())
@@ -3757,8 +4254,7 @@ impl App {
                 let _ = self.client.send(input::send_keys_hex(pane, chunk));
             }
         }
-        if !self.tracking_inflight
-            && now.duration_since(self.last_tracking) >= tracking_interval()
+        if !self.tracking_inflight && now.duration_since(self.last_tracking) >= tracking_interval()
         {
             let targets: Vec<(String, u32)> = self
                 .panes
@@ -3782,11 +4278,7 @@ impl App {
         // Shadow verifier: compare one settled pane per tick against tmux's
         // authoritative grid (bounded to one capture in flight per sweep).
         if self.verify_enabled {
-            if let Some(p) = self
-                .panes
-                .iter_mut()
-                .find(|p| verify::eligible(p, now))
-            {
+            if let Some(p) = self.panes.iter_mut().find(|p| verify::eligible(p, now)) {
                 p.last_verify = Some(now);
                 let _ = self
                     .client
@@ -3796,11 +4288,12 @@ impl App {
         // Finished bootstrap loaders linger briefly (success: long enough for
         // the agent to paint under them; failure: long enough to read why).
         let before = self.bootstraps.len();
-        self.bootstraps.retain(|_, ui| match (ui.done_at, ui.failed.is_some()) {
-            (Some(at), false) => now.duration_since(at) < Duration::from_millis(1500),
-            (Some(at), true) => now.duration_since(at) < Duration::from_secs(6),
-            _ => true,
-        });
+        self.bootstraps
+            .retain(|_, ui| match (ui.done_at, ui.failed.is_some()) {
+                (Some(at), false) => now.duration_since(at) < Duration::from_millis(1500),
+                (Some(at), true) => now.duration_since(at) < Duration::from_secs(6),
+                _ => true,
+            });
         if self.bootstraps.len() != before {
             self.dirty = true;
         }
@@ -3821,7 +4314,11 @@ impl App {
             self.dirty = true;
         }
         if self.animating() {
-            let interval = if self.welcome_active() { RAIN_INTERVAL } else { ANIM_INTERVAL };
+            let interval = if self.welcome_active() {
+                RAIN_INTERVAL
+            } else {
+                ANIM_INTERVAL
+            };
             if self.anim_clock.fire_if_due(now, interval) {
                 self.anim = self.anim.wrapping_add(1);
                 if self.welcome_active() {
@@ -3852,7 +4349,8 @@ impl App {
         // Clear the canvas: anything not repainted this frame (welcome
         // remnants after a pane appears, closed dialogs, shrunk layouts)
         // must not survive. The diff still only emits actual changes.
-        self.back.fill(self.back.area(), &dmux_compositor::Cell::default());
+        self.back
+            .fill(self.back.area(), &dmux_compositor::Cell::default());
         let project_name = self
             .project_root
             .file_name()
@@ -3864,7 +4362,12 @@ impl App {
             self.status_msg.clone()
         } else if self.sidebar_focused {
             "sidebar: ↑↓ select · ⏎ open · m menu · h hide · x close · esc back".to_string()
-        } else if self.settings.lock().unwrap().get_bool("showFooterTips", true) {
+        } else if self
+            .settings
+            .lock()
+            .unwrap()
+            .get_bool("showFooterTips", true)
+        {
             const TIPS: &[&str] = &[
                 "tip: ^b ? shows every shortcut",
                 "tip: click a sidebar row to select it, double-click to open",
@@ -3872,7 +4375,6 @@ impl App {
                 "tip: shift+drag selects text; double-click selects a word",
                 "tip: ^b 1..9 jumps straight to a pane",
                 "tip: ^b h hides a pane without killing it",
-                "tip: autopilot (pane menu) auto-accepts option dialogs",
             ];
             pick_tip(TIPS, timestamp(), self.layout.sidebar.w as usize).to_string()
         } else {
@@ -3911,7 +4413,8 @@ impl App {
         if self.welcome_active() {
             let content = render::content_area(&self.back, &self.layout);
             self.welcome_rain.resize(content.w, content.h);
-            self.welcome_rain.draw(&mut self.back, content, &self.theme, self.anim);
+            self.welcome_rain
+                .draw(&mut self.back, content, &self.theme, self.anim);
             let wscene = welcome::WelcomeScene {
                 cards: &self.welcome_cards,
                 selected: self.welcome_sel,
@@ -3919,7 +4422,13 @@ impl App {
                 project_root: &self.project_root.to_string_lossy(),
                 installed: &self.installed_agents,
             };
-            welcome::draw(&mut self.back, content, &self.theme, &wscene, &mut self.click_map);
+            welcome::draw(
+                &mut self.back,
+                content,
+                &self.theme,
+                &wscene,
+                &mut self.click_map,
+            );
         }
 
         // Overlays above the scene, with a scrim under the stack.
@@ -3930,7 +4439,10 @@ impl App {
             // flyouts keep their sidebar row undimmed).
             let except = self.views.last().and_then(|v| v.scrim_exception());
             dmux_ui::draw_scrim_except(&mut self.back, area, except);
-            let ctx = ViewCtx { theme: &self.theme, anim: self.anim };
+            let ctx = ViewCtx {
+                theme: &self.theme,
+                anim: self.anim,
+            };
             let full = Rect::new(0, 0, self.size.0, self.size.1);
             let last = self.views.len() - 1;
             for (i, view) in self.views.iter_mut().enumerate() {
@@ -3942,8 +4454,18 @@ impl App {
         }
         if let Some(tip) = &self.tooltip {
             let label = format!(" {} ", tip.text);
-            let rect = tooltip_rect(self.back.area(), (tip.x, tip.y), label.chars().count() as u16);
-            self.back.fill(rect, &dmux_compositor::Cell { bg: self.theme.bg_selected, ..Default::default() });
+            let rect = tooltip_rect(
+                self.back.area(),
+                (tip.x, tip.y),
+                label.chars().count() as u16,
+            );
+            self.back.fill(
+                rect,
+                &dmux_compositor::Cell {
+                    bg: self.theme.bg_selected,
+                    ..Default::default()
+                },
+            );
             self.back.draw_text(
                 rect.x,
                 rect.y,
@@ -4076,12 +4598,24 @@ fn base64(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -4120,9 +4654,11 @@ async fn ai_merge(
             Some(primary),
             backup,
             SYSTEM,
-            &format!("File: {file}
+            &format!(
+                "File: {file}
 
-{content}"),
+{content}"
+            ),
             8000,
         )
         .await
@@ -4134,8 +4670,15 @@ async fn ai_merge(
         let trimmed = resolved.trim();
         let final_text = if trimmed.starts_with("```") {
             let inner = trimmed.trim_start_matches("```");
-            let inner = inner.split_once('\n').map(|(_, rest)| rest).unwrap_or(inner);
-            inner.trim_end().trim_end_matches("```").trim_end().to_string()
+            let inner = inner
+                .split_once('\n')
+                .map(|(_, rest)| rest)
+                .unwrap_or(inner);
+            inner
+                .trim_end()
+                .trim_end_matches("```")
+                .trim_end()
+                .to_string()
         } else {
             resolved.clone()
         };
@@ -4185,7 +4728,10 @@ fn is_newer(a: &str, b: &str) -> bool {
     };
     let (a, b) = (parse(a), parse(b));
     for i in 0..a.len().max(b.len()) {
-        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
         if x != y {
             return x > y;
         }
@@ -4195,7 +4741,9 @@ fn is_newer(a: &str, b: &str) -> bool {
 
 /// Shell-quote a path/branch for the bootstrap command line.
 fn shq(s: &str) -> String {
-    if s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' )) {
+    if s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/'))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
@@ -4246,10 +4794,17 @@ fn tip_index(now_ms: u64, len: usize) -> usize {
 /// the footer, so narrow sidebars show complete messages instead of clipped
 /// fragments (#8). Falls back to the shortest tip when nothing fits.
 fn pick_tip<'a>(tips: &[&'a str], now_ms: u64, width: usize) -> &'a str {
-    let fitting: Vec<&'a str> =
-        tips.iter().copied().filter(|t| t.chars().count() <= width).collect();
+    let fitting: Vec<&'a str> = tips
+        .iter()
+        .copied()
+        .filter(|t| t.chars().count() <= width)
+        .collect();
     if fitting.is_empty() {
-        return tips.iter().copied().min_by_key(|t| t.chars().count()).unwrap_or("");
+        return tips
+            .iter()
+            .copied()
+            .min_by_key(|t| t.chars().count())
+            .unwrap_or("");
     }
     fitting[tip_index(now_ms, fitting.len())]
 }
@@ -4258,7 +4813,11 @@ fn pick_tip<'a>(tips: &[&'a str], now_ms: u64, width: usize) -> &'a str {
 /// breaks out into their own windows (one pane per window is dmux's model).
 fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
     let mut seen: std::collections::HashSet<dmux_cc::WindowId> = std::collections::HashSet::new();
-    infos.iter().filter(|i| !seen.insert(i.window)).map(|i| i.pane).collect()
+    infos
+        .iter()
+        .filter(|i| !seen.insert(i.window))
+        .map(|i| i.pane)
+        .collect()
 }
 
 fn iso_now() -> String {
@@ -4279,7 +4838,20 @@ fn iso_now() -> String {
         y += 1;
     }
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let month_lens = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_lens = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0;
     while rem_days >= month_lens[m] {
         rem_days -= month_lens[m];
@@ -4304,7 +4876,10 @@ mod tests {
     #[test]
     fn slugify_prompts() {
         assert_eq!(slugify("Fix the auth bug"), "fix-the-auth-bug");
-        assert_eq!(slugify("Add   OAuth2!! support, please"), "add-oauth2-support-please");
+        assert_eq!(
+            slugify("Add   OAuth2!! support, please"),
+            "add-oauth2-support-please"
+        );
         assert!(slugify("").starts_with("agents-"));
     }
 
@@ -4331,14 +4906,20 @@ mod tests {
         // Braille spinner frames.
         assert_eq!(strip_status_glyphs("⠹ building"), "building");
         // Plain titles pass through, including mid-title glyphs.
-        assert_eq!(strip_status_glyphs("cargo build ✳ hot"), "cargo build ✳ hot");
+        assert_eq!(
+            strip_status_glyphs("cargo build ✳ hot"),
+            "cargo build ✳ hot"
+        );
         // A title that is ONLY a spinner strips to empty (then ignored).
         assert_eq!(strip_status_glyphs("✳"), "");
     }
 
     #[test]
     fn tips_are_picked_to_fit_the_sidebar() {
-        let tips = &["short tip", "a much longer tip that only fits wide sidebars"];
+        let tips = &[
+            "short tip",
+            "a much longer tip that only fits wide sidebars",
+        ];
         // Narrow sidebar: only the fitting tip is ever shown, at any time.
         assert_eq!(pick_tip(tips, 0, 20), "short tip");
         assert_eq!(pick_tip(tips, 16_000, 20), "short tip");
@@ -4372,17 +4953,41 @@ mod tests {
     }
 
     #[test]
+    fn option_dialogs_map_to_waiting_never_auto_accept() {
+        // #31: an option dialog is the user's decision — Waiting/attention,
+        // never Working-with-injected-Enter.
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::OptionDialog),
+            PaneStatus::Waiting
+        );
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::OpenPrompt),
+            PaneStatus::Idle
+        );
+        assert_eq!(
+            verdict_pane_status(&dmux_infer::PaneVerdict::InProgress),
+            PaneStatus::Working
+        );
+    }
+
+    #[test]
     fn sidebar_typing_never_leaks_or_drops_focus() {
         use dmux_host::{KeyCode, Modifiers};
         let keymap = keys::Keymap::from_overrides(&Default::default());
-        let key = |k: KeyCode, m: Modifiers| dmux_host::KeyEvent { key: k, modifiers: m };
+        let key = |k: KeyCode, m: Modifiers| dmux_host::KeyEvent {
+            key: k,
+            modifiers: m,
+        };
         // A word typed while sidebar-focused: every unbound letter is a
         // no-op — never PassThrough (which would reach a pane), never
         // LeaveFocus (#27). Letters with sidebar meanings map to actions.
         for c in "wordy".chars() {
             let action = sidebar_key_action(&key(KeyCode::Char(c), Modifiers::NONE), &keymap);
             assert!(
-                !matches!(action, SidebarKeyAction::PassThrough | SidebarKeyAction::LeaveFocus),
+                !matches!(
+                    action,
+                    SidebarKeyAction::PassThrough | SidebarKeyAction::LeaveFocus
+                ),
                 "typed '{c}' must stay in the sidebar, got {action:?}"
             );
         }
@@ -4397,16 +5002,31 @@ mod tests {
             SidebarKeyAction::PassThrough
         );
         // Recognized hotkeys, Enter, and Escape keep their meanings.
-        assert_eq!(sidebar_key_action(&key(KeyCode::Char('j'), Modifiers::NONE), &keymap), SidebarKeyAction::Down);
-        assert_eq!(sidebar_key_action(&key(KeyCode::Enter, Modifiers::NONE), &keymap), SidebarKeyAction::Activate);
-        assert_eq!(sidebar_key_action(&key(KeyCode::Escape, Modifiers::NONE), &keymap), SidebarKeyAction::LeaveFocus);
-        assert_eq!(sidebar_key_action(&key(KeyCode::Char('q'), Modifiers::NONE), &keymap), SidebarKeyAction::Ignore);
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Char('j'), Modifiers::NONE), &keymap),
+            SidebarKeyAction::Down
+        );
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Enter, Modifiers::NONE), &keymap),
+            SidebarKeyAction::Activate
+        );
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Escape, Modifiers::NONE), &keymap),
+            SidebarKeyAction::LeaveFocus
+        );
+        assert_eq!(
+            sidebar_key_action(&key(KeyCode::Char('q'), Modifiers::NONE), &keymap),
+            SidebarKeyAction::Ignore
+        );
     }
 
     #[test]
     fn sidebar_drag_thresholds_and_follows() {
         // #26: a press+release on the same row is a click, never a reorder.
-        let armed = SidebarDrag::Armed { src: 2, start_row: 5 };
+        let armed = SidebarDrag::Armed {
+            src: 2,
+            start_row: 5,
+        };
         assert_eq!(armed.reordering(), None);
         assert_eq!(armed.motion(5), armed, "same-row motion stays armed");
         // Crossing a row enters reorder mode and then follows the pointer.
@@ -4419,7 +5039,10 @@ mod tests {
     fn tooltip_clamps_to_bounds_and_expires() {
         let area = dmux_compositor::Rect::new(0, 0, 100, 30);
         // Interior release: one row above the cursor.
-        assert_eq!(tooltip_rect(area, (40, 10), 22), dmux_compositor::Rect::new(40, 9, 22, 1));
+        assert_eq!(
+            tooltip_rect(area, (40, 10), 22),
+            dmux_compositor::Rect::new(40, 9, 22, 1)
+        );
         // Top edge: stays on screen (no row above to use).
         assert_eq!(tooltip_rect(area, (40, 0), 22).y, 0);
         // Right edge: shifted left so the whole box fits.
@@ -4430,8 +5053,16 @@ mod tests {
         // Wider than the terminal: clamped to it.
         assert_eq!(tooltip_rect(area, (0, 5), 200).w, 100);
         // Expiry: a later copy restarts the clock; the deadline decides.
-        let t = Tooltip { text: "Copied to clipboard".into(), x: 1, y: 1, until: Instant::now() };
-        assert!(Instant::now() >= t.until, "an elapsed deadline reads as expired");
+        let t = Tooltip {
+            text: "Copied to clipboard".into(),
+            x: 1,
+            y: 1,
+            until: Instant::now(),
+        };
+        assert!(
+            Instant::now() >= t.until,
+            "an elapsed deadline reads as expired"
+        );
     }
 
     #[test]
@@ -4445,16 +5076,26 @@ mod tests {
         // deadline never moves.
         for i in 1..=10 {
             let now = t0 + Duration::from_millis(30 * i);
-            assert_eq!(clock.deadline(now, interval), armed, "wakeup {i} moved the deadline");
+            assert_eq!(
+                clock.deadline(now, interval),
+                armed,
+                "wakeup {i} moved the deadline"
+            );
         }
         // Not due before the pin…
         assert!(!clock.fire_if_due(t0 + Duration::from_millis(119), interval));
         // …fires at the pin, and re-arms one interval from the fire time.
         assert!(clock.fire_if_due(t0 + interval, interval));
-        assert_eq!(clock.deadline(t0 + interval, interval), t0 + interval + interval);
+        assert_eq!(
+            clock.deadline(t0 + interval, interval),
+            t0 + interval + interval
+        );
         // Disarm forgets the schedule.
         clock.disarm();
-        assert!(clock.fire_if_due(t0 + interval, interval), "unarmed clock fires immediately");
+        assert!(
+            clock.fire_if_due(t0 + interval, interval),
+            "unarmed clock fires immediately"
+        );
     }
 
     #[test]
