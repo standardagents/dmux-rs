@@ -21,12 +21,31 @@ using it.
 
 ## Looping (autonomous fixer agents)
 
-This repo is designed to be worked by an agent in a loop. From a clone,
-start Claude Code and use `/loop` with instructions along these lines:
+This repo is designed to be worked by an agent in a loop. The queue is
+**every open issue on the repo** — auto-filed `render-incident` reports and
+anything a test-ring human files by hand (bugs, UX complaints, feature
+requests). From a clone, start Claude Code and use `/loop` with
+instructions along these lines:
 
-> Work through open `render-incident` issues in standardagents/dmux-rs,
-> oldest first, following the fixer-agent runbook in AGENTS.md. One issue
-> per iteration. If the queue is empty, do nothing and wait.
+> Work through ALL open issues in standardagents/dmux-rs, oldest first.
+> Issues labeled `render-incident` follow the fixer-agent runbook in
+> AGENTS.md; any other issue is normal engineering work held to the same
+> validation bar. One issue per iteration. If the queue is empty, do
+> nothing and wait.
+
+Triage per issue:
+
+- **`render-incident`** → the fixer-agent runbook below.
+- **Human-filed bug** → reproduce first (the e2e harness patterns in
+  `scripts/` and the `DMUX_*` env knobs are your tools); fix; add a
+  regression test; close with the commit sha and a one-paragraph
+  explanation the reporter can understand.
+- **Feature/UX request** → implement if the scope is clear and consistent
+  with ROADMAP.md; verify e2e, then close with the sha. If the scope is
+  ambiguous or the change is architecturally load-bearing, comment your
+  questions or proposed design on the issue, label it `needs-info`, and
+  move on — never guess at big scope.
+- Prefer human-filed issues when ages are close: a person is waiting.
 
 Loop rules:
 
