@@ -3,7 +3,7 @@
 # Running heads poll releases and self-update within minutes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-REPO=${DMUX_RS_REPO:-justin-schroeder/dmux-rs}
+REPO=${DMUX_RS_REPO:-standardagents/dmux-rs}
 SHA=$(git rev-parse --short HEAD)
 TAG="build-$(date +%Y%m%d-%H%M)-$SHA"
 # Asset names must match updater::asset_name(): dmux-rs-{std OS}-{std ARCH}

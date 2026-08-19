@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_REPO: &str = "justin-schroeder/dmux-rs";
+pub const DEFAULT_REPO: &str = "standardagents/dmux-rs";
 
 /// One locally-remembered filed issue (sidebar rows).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
