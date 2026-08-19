@@ -43,7 +43,7 @@ use dmux_ui::{ClickMap, Theme};
 use github::{IssueLoadState, SharedIssueState};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
-use sidebar::{key_action as sidebar_key_action, nav_targets as sidebar_nav_targets};
+use sidebar::{key_action as sidebar_key_action, ProjectActivation, ProjectSelection};
 use sidebar::{SidebarKeyAction, SidebarNavTarget};
 use views::{
     AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
@@ -501,7 +501,7 @@ struct App {
     /// row); Esc or focusing a pane hands the keyboard back.
     sidebar_focused: bool,
     /// A per-project action row selected through sidebar keyboard navigation.
-    sidebar_project_root: Option<String>,
+    sidebar_project: Option<ProjectSelection>,
     anim: u64,
     anim_clock: AnimClock,
     /// Prompts waiting to be typed into send-keys-transport agent panes.
@@ -708,7 +708,7 @@ async fn run(
         status_clear_at: None,
         leader_armed: false,
         sidebar_focused: false,
-        sidebar_project_root: None,
+        sidebar_project: None,
         anim: 0,
         anim_clock: AnimClock::default(),
         pending_injections: Vec::new(),
@@ -2020,6 +2020,9 @@ impl App {
                 }
             })
             .collect();
+        if let Some(project) = &mut self.sidebar_project {
+            sidebar::normalize_project_action(project, &self.sidebar_groups);
+        }
         self.pane_accents = self
             .panes
             .iter()
@@ -2074,8 +2077,8 @@ impl App {
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
         if self.sidebar_focused {
-            if let Some(root) = &self.sidebar_project_root {
-                return Some(root.clone());
+            if let Some(project) = &self.sidebar_project {
+                return Some(project.root.clone());
             }
         }
         self.panes
@@ -2443,28 +2446,20 @@ impl App {
     }
 
     fn step_sidebar_selection(&mut self, delta: i32) {
-        let targets = sidebar_nav_targets(&self.sidebar_groups);
-        if targets.is_empty() {
+        let Some(target) = sidebar::step_vertical(
+            &self.sidebar_groups,
+            self.selected,
+            self.sidebar_project.as_ref(),
+            delta,
+        ) else {
             return;
-        }
-        let current = self
-            .sidebar_project_root
-            .as_ref()
-            .map(|root| SidebarNavTarget::Project(root.clone()))
-            .unwrap_or(SidebarNavTarget::Pane(self.selected));
-        let position = targets
-            .iter()
-            .position(|target| *target == current)
-            .unwrap_or(0);
-        let next = (position as i32 + delta).rem_euclid(targets.len() as i32) as usize;
-        match &targets[next] {
+        };
+        match target {
             SidebarNavTarget::Pane(index) => {
-                self.selected = *index;
-                self.sidebar_project_root = None;
+                self.selected = index;
+                self.sidebar_project = None;
             }
-            SidebarNavTarget::Project(root) => {
-                self.sidebar_project_root = Some(root.clone());
-            }
+            SidebarNavTarget::Project(project) => self.sidebar_project = Some(project),
         }
         self.rebuild_sidebar_groups();
     }
@@ -2477,10 +2472,27 @@ impl App {
             SidebarKeyAction::Ignore => {}
             SidebarKeyAction::Up => self.step_sidebar_selection(-1),
             SidebarKeyAction::Down => self.step_sidebar_selection(1),
+            action @ (SidebarKeyAction::Left | SidebarKeyAction::Right) => {
+                let delta = if action == SidebarKeyAction::Left {
+                    -1
+                } else {
+                    1
+                };
+                if let Some(project) = &mut self.sidebar_project {
+                    sidebar::step_horizontal(project, &self.sidebar_groups, delta);
+                }
+            }
             SidebarKeyAction::Activate => {
-                if self.sidebar_project_root.is_some() {
-                    self.dirty = true;
-                    return Some(true);
+                if let Some(project) = self.sidebar_project.clone() {
+                    return Some(match sidebar::activation(project) {
+                        ProjectActivation::Issues(root) => self.open_project_issue_browser(root),
+                        ProjectActivation::NewAgent(root) => {
+                            self.execute_cmd(AppCmd::OpenNewAgentAt { project_root: root })
+                        }
+                        ProjectActivation::NewTerminal(root) => {
+                            self.execute_cmd(AppCmd::NewTerminalInProject { project_root: root })
+                        }
+                    });
                 }
                 self.sidebar_focused = false;
                 let i = self.selected;
@@ -2489,13 +2501,13 @@ impl App {
                 }
                 return Some(self.execute_cmd(AppCmd::FocusPane(i)));
             }
-            SidebarKeyAction::Menu if self.sidebar_project_root.is_some() => {}
+            SidebarKeyAction::Menu if self.sidebar_project.is_some() => {}
             SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
-            SidebarKeyAction::Hide if self.sidebar_project_root.is_some() => {}
+            SidebarKeyAction::Hide if self.sidebar_project.is_some() => {}
             SidebarKeyAction::Hide => {
                 return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected)))
             }
-            SidebarKeyAction::Close if self.sidebar_project_root.is_some() => {}
+            SidebarKeyAction::Close if self.sidebar_project.is_some() => {}
             SidebarKeyAction::Close => {
                 return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
             }
@@ -2506,23 +2518,27 @@ impl App {
             }
             SidebarKeyAction::NewAgent => {
                 let cmd = self
-                    .sidebar_project_root
-                    .clone()
-                    .map(|project_root| AppCmd::OpenNewAgentAt { project_root })
+                    .sidebar_project
+                    .as_ref()
+                    .map(|project| AppCmd::OpenNewAgentAt {
+                        project_root: project.root.clone(),
+                    })
                     .unwrap_or(AppCmd::OpenNewAgent);
                 return Some(self.execute_cmd(cmd));
             }
             SidebarKeyAction::NewTerminal => {
                 let cmd = self
-                    .sidebar_project_root
-                    .clone()
-                    .map(|project_root| AppCmd::NewTerminalInProject { project_root })
+                    .sidebar_project
+                    .as_ref()
+                    .map(|project| AppCmd::NewTerminalInProject {
+                        project_root: project.root.clone(),
+                    })
                     .unwrap_or(AppCmd::NewTerminal);
                 return Some(self.execute_cmd(cmd));
             }
             SidebarKeyAction::LeaveFocus => {
                 self.sidebar_focused = false;
-                self.sidebar_project_root = None;
+                self.sidebar_project = None;
                 self.rebuild_sidebar_groups();
             }
         }
@@ -2782,7 +2798,7 @@ impl App {
                     // double-click opens the row-anchored pane flyout (#14)
                     // WITHOUT activating the pane — Enter still activates.
                     self.selected = i;
-                    self.sidebar_project_root = None;
+                    self.sidebar_project = None;
                     self.rebuild_sidebar_groups();
                     if is_double {
                         let anchor_x = self.layout.sidebar.right() + 1;
@@ -2872,7 +2888,7 @@ impl App {
                 }
                 Some(ClickTarget::PaneBody(i)) => {
                     self.sidebar_focused = false;
-                    self.sidebar_project_root = None;
+                    self.sidebar_project = None;
                     self.rebuild_sidebar_groups();
                     let already_focused = self.focused == i;
                     if !already_focused {
@@ -2999,7 +3015,7 @@ impl App {
             AppCmd::Quit => return false,
             AppCmd::FocusPane(i) => {
                 self.sidebar_focused = false;
-                self.sidebar_project_root = None;
+                self.sidebar_project = None;
                 if i < self.panes.len() && !self.panes[i].hidden {
                     self.focused = i;
                     self.selected = i;
@@ -4430,7 +4446,7 @@ impl App {
         let footer_text = if !self.status_msg.is_empty() {
             self.status_msg.clone()
         } else if self.sidebar_focused {
-            if self.sidebar_project_root.is_some() {
+            if self.sidebar_project.is_some() {
                 "sidebar project: ↑↓ select · i issues · n agent · t terminal · esc back"
                     .to_string()
             } else {
@@ -4468,6 +4484,7 @@ impl App {
             anim: self.anim,
             leader_armed: self.leader_armed,
             sidebar_focused: self.sidebar_focused,
+            sidebar_project: self.sidebar_project.as_ref(),
             version: &self.version_line,
             issues: (self.filed_issues.len(), self.new_issue_count),
             groups: &self.sidebar_groups,
@@ -4964,30 +4981,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_creation_uses_the_clicked_project_root() {
-        let group = |root: &str, pane_indices: Vec<usize>| render::SidebarGroup {
-            name: root.into(),
-            root: root.into(),
-            accent: dmux_compositor::Color::Default,
-            accent_soft: dmux_compositor::Color::Default,
-            pane_indices,
-            issue_label: "0 issues".into(),
-            active: false,
-        };
-        let groups = vec![group("/active", vec![0]), group("/empty", vec![])];
-
-        assert_eq!(
-            sidebar_nav_targets(&groups),
-            vec![
-                SidebarNavTarget::Pane(0),
-                SidebarNavTarget::Project("/active".into()),
-                SidebarNavTarget::Project("/empty".into()),
-            ]
-        );
-        assert_eq!(
-            sidebar_group_project_root(&groups, 1).as_deref(),
-            Some("/empty")
-        );
+    fn project_context_omits_the_main_root() {
         assert_eq!(
             project_context(Path::new("/active"), Some("/empty".into())).as_deref(),
             Some("/empty")

@@ -9,6 +9,7 @@ use dmux_ui::{spinner_frame, ClickMap, Theme};
 use crate::layout::{Layout, TITLE_ROWS};
 use crate::metrics::Metrics;
 use crate::session::{LogicalPane, PaneStatus};
+use crate::sidebar::{ProjectAction, ProjectSelection};
 use crate::views::ClickTarget;
 
 pub struct Scene<'a> {
@@ -27,6 +28,8 @@ pub struct Scene<'a> {
     /// The sidebar holds keyboard focus: selection renders with the accent
     /// bar so the active area is unmistakable.
     pub sidebar_focused: bool,
+    /// A selected project action row and its active action.
+    pub sidebar_project: Option<&'a ProjectSelection>,
     /// Build identity (sidebar bottom line).
     pub version: &'a str,
     /// (total filed issues, filed this session) for the sidebar bottom line.
@@ -202,7 +205,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 break;
             }
             let pane = &scene.panes[i];
-            let selected = i == scene.selected;
+            let selected = pane_is_selected(i, scene.selected, scene.sidebar_project.is_some());
             let focused = i == scene.focused;
             let caret = if selected { "▸" } else { " " };
             let glyph = if pane.closing {
@@ -313,34 +316,59 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             } else {
                 t.text_faint
             };
+            let selected_action = scene
+                .sidebar_project
+                .filter(|project| project.root == group.root)
+                .map(|project| project.action);
             let issue_max = x0.saturating_sub(area.x + 2) as usize;
             let issue_action =
                 issue_action_label(&group.issue_label, group.active, scene.sidebar_focused);
             let issue_label = truncate(&issue_action, issue_max);
             let ix = area.x + 1;
-            let issue_end = buf.draw_text(
+            let issue_end = draw_sidebar_action(
+                buf,
                 ix,
                 row,
                 &issue_label,
-                if group.active {
-                    group.accent
-                } else {
-                    t.text_faint
-                },
+                selected_action == Some(ProjectAction::Issues),
+                color,
+                group.accent,
                 sb_bg,
-                AttrFlags::empty(),
+                t,
                 area,
             );
             clicks.add(
                 Rect::new(ix, row, issue_end.saturating_sub(ix), 1),
                 ClickTarget::SidebarGroupIssues(gi),
             );
-            let ax = buf.draw_text(x0, row, &na, color, sb_bg, AttrFlags::empty(), area);
+            let ax = draw_sidebar_action(
+                buf,
+                x0,
+                row,
+                &na,
+                selected_action == Some(ProjectAction::NewAgent),
+                color,
+                group.accent,
+                sb_bg,
+                t,
+                area,
+            );
             clicks.add(
                 Rect::new(x0, row, ax - x0, 1),
                 ClickTarget::SidebarGroupNewAgent(gi),
             );
-            let tx = buf.draw_text(ax + 2, row, &term, color, sb_bg, AttrFlags::empty(), area);
+            let tx = draw_sidebar_action(
+                buf,
+                ax + 2,
+                row,
+                &term,
+                selected_action == Some(ProjectAction::NewTerminal),
+                color,
+                group.accent,
+                sb_bg,
+                t,
+                area,
+            );
             clicks.add(
                 Rect::new(ax + 2, row, tx - ax - 2, 1),
                 ClickTarget::SidebarGroupNewTerminal(gi),
@@ -614,6 +642,31 @@ fn issue_action_label(label: &str, group_active: bool, sidebar_focused: bool) ->
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_sidebar_action(
+    buf: &mut CellBuffer,
+    x: u16,
+    row: u16,
+    label: &str,
+    selected: bool,
+    color: Color,
+    accent: Color,
+    background: Color,
+    theme: &Theme,
+    area: Rect,
+) -> u16 {
+    let (fg, bg, attrs) = if selected {
+        (accent, theme.bg_selected, AttrFlags::BOLD)
+    } else {
+        (color, background, AttrFlags::empty())
+    };
+    buf.draw_text(x, row, label, fg, bg, attrs, area)
+}
+
+fn pane_is_selected(index: usize, selected: usize, project_selected: bool) -> bool {
+    !project_selected && index == selected
+}
+
 fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
     match pane.status {
         PaneStatus::Working => spinner_frame(anim).to_string(),
@@ -636,7 +689,7 @@ fn draw_pane_title(
         return;
     }
     let focused = idx == scene.focused;
-    let selected = idx == scene.selected;
+    let selected = pane_is_selected(idx, scene.selected, scene.sidebar_project.is_some());
     let (pa, ps) = scene
         .pane_accents
         .get(idx)
@@ -795,6 +848,8 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+#[cfg(test)]
+mod action_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
