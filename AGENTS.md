@@ -19,6 +19,40 @@ using it.
    polls releases and hot-swaps itself in place (tmux keeps the session; the
    swap is a sub-second reattach). The corrupted pane comes back clean.
 
+## Looping (autonomous fixer agents)
+
+This repo is designed to be worked by an agent in a loop. From a clone,
+start Claude Code and use `/loop` with instructions along these lines:
+
+> Work through open `render-incident` issues in standardagents/dmux-rs,
+> oldest first, following the fixer-agent runbook in AGENTS.md. One issue
+> per iteration. If the queue is empty, do nothing and wait.
+
+Loop rules:
+
+- **One issue per iteration.** Reproduce → fix → corpus-lock → validate →
+  push to `main` → close the issue with the commit sha. Never batch
+  half-finished fixes.
+- **Validation is non-negotiable**: `cargo test` fully green AND
+  `scripts/fidelity.sh` ALL PASS before any push. A fix that breaks either
+  is not a fix.
+- **Every fixed incident goes into the corpus**
+  (`crates/dmux/tests/corpus/<issue-number>.incident`) so it can never
+  regress silently.
+- **Releases stay human.** The loop pushes to `main` and closes issues;
+  a person runs `scripts/release.sh` after eyeballing the diffs. (Test-ring
+  heads auto-update within ~1 minute of a release — don't hand that
+  trigger to the loop.)
+- **Non-reproducing issues** (`replay-deterministic: no`, or the replay is
+  clean): comment findings, label `cannot-reproduce`, close. If the replay
+  is clean but the live grid diverged, the bug is likely in the emit/host
+  layer — say so in the comment and check the emitter's cursor-trust rules.
+- Work on a branch or worktree per issue if you prefer, but `main` must
+  always be releasable.
+
+Ordinary feature work loops the same way minus the issue queue: pick from
+ROADMAP.md, validate identically, and keep `main` releasable.
+
 ## Fixer-agent runbook (`render-incident` issues)
 
 For each open issue with label `render-incident`:
