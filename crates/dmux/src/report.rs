@@ -156,6 +156,10 @@ pub fn file_issue(
         return Ok(Filed { issue });
     }
 
+    // Prefer the team `issue` CLI when configured: files through the org
+    // GitHub App, lands on the shared Project, and queues locally through
+    // outages. Standing approval for automated filing comes from AGENTS.md.
+    // Falls back to plain gh for ring members without the CLI.
     // 1. Secret gist with the full bundle.
     let gist_url = run_gh(
         &[
@@ -171,14 +175,23 @@ pub fn file_issue(
 
     // 2. The issue itself.
     let body = issue_body(build, slug, cols, rows, diffs, our_grid, tmux_grid_escaped, &gist_url, deterministic);
-    let issue_url = run_gh(
-        &[
-            "issue", "create", "-R", repo, "--title", &title, "--label", "render-incident", "--body", &body,
-        ],
-        None,
-    )?;
-    let issue_url = issue_url.lines().last().unwrap_or("").trim().to_string();
-    let number = issue_url.rsplit('/').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let (number, issue_url) = match file_via_issue_cli(repo, &title, &body) {
+        Some(Ok((n, url))) => {
+            // Label best-effort; `issue new` has no label flag.
+            if n > 0 {
+                let _ = run_gh(
+                    &["issue", "edit", &n.to_string(), "-R", repo, "--add-label", "render-incident"],
+                    None,
+                );
+            }
+            (n, url)
+        }
+        Some(Err(err)) => {
+            tracing::warn!(%err, "issue CLI filing failed; falling back to gh");
+            file_via_gh(repo, &title, &body)?
+        }
+        None => file_via_gh(repo, &title, &body)?,
+    };
 
     let issue = FiledIssue {
         number,
@@ -190,6 +203,62 @@ pub fn file_issue(
     };
     append_filed(home, &issue);
     Ok(Filed { issue })
+}
+
+/// File through the team `issue` CLI. `None` = CLI not installed/configured
+/// (caller falls back to gh); `Some(Err)` = tried and failed.
+fn file_via_issue_cli(repo: &str, title: &str, body: &str) -> Option<Result<(u64, String), String>> {
+    let creds = std::env::var_os("HOME")
+        .map(PathBuf::from)?
+        .join(".standardagents")
+        .join("issues")
+        .join("credentials.json");
+    if !creds.is_file() {
+        return None;
+    }
+    let tmp = std::env::temp_dir().join(format!("dmux-rs-issue-{}.md", std::process::id()));
+    if std::fs::write(&tmp, body).is_err() {
+        return None;
+    }
+    let out = std::process::Command::new("issue")
+        .args(["new", "--repo", repo, "--title", title, "--body-file"])
+        .arg(&tmp)
+        .arg("--json")
+        .stdin(std::process::Stdio::null())
+        .output();
+    let _ = std::fs::remove_file(&tmp);
+    let out = match out {
+        Ok(o) => o,
+        Err(_) => return None, // binary missing
+    };
+    if !out.status.success() {
+        return Some(Err(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+    }
+    let parsed: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(format!("bad issue CLI output: {e}"))),
+    };
+    match parsed["status"].as_str() {
+        Some("created") => Some(Ok((
+            parsed["number"].as_u64().unwrap_or(0),
+            parsed["url"].as_str().unwrap_or("").to_string(),
+        ))),
+        Some("queued") => Some(Ok((
+            0,
+            format!("queued:{}", parsed["queue_id"].as_str().unwrap_or("?")),
+        ))),
+        other => Some(Err(format!("unexpected issue CLI status: {other:?}"))),
+    }
+}
+
+fn file_via_gh(repo: &str, title: &str, body: &str) -> Result<(u64, String), String> {
+    let issue_url = run_gh(
+        &["issue", "create", "-R", repo, "--title", title, "--label", "render-incident", "--body", body],
+        None,
+    )?;
+    let issue_url = issue_url.lines().last().unwrap_or("").trim().to_string();
+    let number = issue_url.rsplit('/').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    Ok((number, issue_url))
 }
 
 fn now() -> u64 {

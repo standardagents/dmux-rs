@@ -39,6 +39,15 @@ direction it requires). It adds issues to the shared org Project and
 survives GitHub outages via its local write queue. Leave assignments,
 labels, claims, and milestones unchanged unless an issue asks.
 
+**Standing approval (this repo only)**: the `issue` skill normally asks a
+human before creating an issue and wants explicit direction before
+closing one. For dmux-rs, this document IS that approval — the automated
+reporter files issues without confirmation, and the loop closes an issue
+without further sign-off once its runbook is satisfied (fix validated,
+released, referenced by sha and version — or correctly triaged as
+`cannot-reproduce`/`needs-info`). Do not ask for per-issue confirmation;
+do not extend this standing approval to any other repository.
+
 This repo is designed to be worked by an agent in a loop. The queue is
 **every open issue on the repo** — auto-filed `render-incident` reports and
 anything a test-ring human files by hand (bugs, UX complaints, feature
