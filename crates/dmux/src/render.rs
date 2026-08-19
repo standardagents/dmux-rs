@@ -253,6 +253,25 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
     buf.draw_text(area.x, footer_row, &truncate(footer, area.w as usize), footer_fg, t.bg, AttrFlags::empty(), area);
 }
 
+/// Title-bar colors: focus (activation) and sidebar selection are distinct
+/// states (#13). Focused wins with the solid soft-accent band; a pane
+/// selected in the sidebar gets the sidebar's neutral selection surface
+/// with accent text; everything else sits on the raised surface.
+fn title_bar_style(
+    theme: &Theme,
+    (accent, accent_soft): (Color, Color),
+    focused: bool,
+    selected: bool,
+) -> (Color, Color) {
+    if focused {
+        (Color::Indexed(255), accent_soft)
+    } else if selected {
+        (accent, theme.bg_selected)
+    } else {
+        (accent, theme.bg_raised)
+    }
+}
+
 fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
     match pane.status {
         PaneStatus::Working => spinner_frame(anim).to_string(),
@@ -275,17 +294,20 @@ fn draw_pane_title(
         return;
     }
     let focused = idx == scene.focused;
+    let selected = idx == scene.selected;
     let (pa, ps) = scene.pane_accents.get(idx).copied().unwrap_or((t.accent, t.accent_soft));
     let bar = Rect::new(body.x, body.y - TITLE_ROWS, body.w, TITLE_ROWS);
-    // Title bar carries the project color: solid soft-accent when focused,
-    // raised bg with accent text otherwise.
-    let bg = if focused { ps } else { t.bg_raised };
-    let fg = if focused { Color::Indexed(255) } else { pa };
+    let (fg, bg) = title_bar_style(t, (pa, ps), focused, selected);
     buf.fill(bar, &Cell { bg, ..Cell::default() });
 
     let glyph = status_glyph(pane, scene.anim);
     let label = format!(" {glyph} {} ", truncate(pane.display_title(), bar.w.saturating_sub(16) as usize));
-    buf.draw_text(bar.x, bar.y, &label, fg, bg, if focused { AttrFlags::BOLD } else { AttrFlags::empty() }, bar);
+    let attrs = if focused || selected { AttrFlags::BOLD } else { AttrFlags::empty() };
+    buf.draw_text(bar.x, bar.y, &label, fg, bg, attrs, bar);
+    if selected && !focused {
+        // Mirror the sidebar's selection bar so the eye can pair them (#13).
+        buf.set(bar.x, bar.y, Cell { ch: '▍', fg: pa, bg, ..Cell::default() });
+    }
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
     // Right side: size + macOS-style traffic lights on the bar itself —
@@ -353,5 +375,28 @@ fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_and_focus_are_distinct_states() {
+        // #13: sidebar selection must be visible on the body pane without
+        // stealing activation's treatment.
+        let theme = Theme::named("violet");
+        let accents = (theme.accent, theme.accent_soft);
+        let focused = title_bar_style(&theme, accents, true, false);
+        let selected = title_bar_style(&theme, accents, false, true);
+        let plain = title_bar_style(&theme, accents, false, false);
+        assert_ne!(focused, selected, "selection must not look like focus");
+        assert_ne!(selected, plain, "selection must be visible");
+        assert_ne!(focused, plain);
+        // Focus wins when a pane is both focused and selected.
+        assert_eq!(title_bar_style(&theme, accents, true, true), focused);
+        // Selection uses the sidebar's selection surface for pairing.
+        assert_eq!(selected.1, theme.bg_selected);
     }
 }
