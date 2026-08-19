@@ -72,6 +72,24 @@ pub(crate) fn focused_claims_edge(
     a_top < fr.bottom() && f_top < rect.bottom()
 }
 
+/// Color of the right-edge border drawn by the pane at `rect` (#47): the
+/// focused pane's accent when the focused pane owns the segment (its own
+/// edge, or a claimed neighbor edge per #38); neutral gray between two
+/// inactive panes — only the active pane carries highlighted borders.
+pub(crate) fn pane_border_fg(
+    theme: &Theme,
+    rect: Rect,
+    is_focused: bool,
+    focused_rect: Option<Rect>,
+    focused_accent: Color,
+) -> Color {
+    if focused_claims_edge(rect, is_focused, focused_rect) {
+        focused_accent
+    } else {
+        theme.border
+    }
+}
+
 /// Sidebar row annotation: an in-flight close (#29) outranks hidden.
 pub(crate) fn row_tag(closing: bool, hidden: bool) -> &'static str {
     if closing {
@@ -223,6 +241,28 @@ mod tests {
             false,
             Some(stacked_bottom)
         ));
+    }
+
+    #[test]
+    fn inactive_pane_borders_stay_neutral_gray() {
+        // #47: in a multi-column layout only the focused pane's borders take
+        // its accent; every edge between two inactive panes is neutral gray.
+        let theme = Theme::default();
+        let accent = Color::Indexed(214);
+        let col1 = Rect::new(41, 1, 30, 38);
+        let col2 = Rect::new(72, 1, 30, 38);
+        let col3 = Rect::new(103, 1, 30, 38);
+        let focused = Some(col3);
+        // Edge between two inactive columns: gray, never a project accent.
+        assert_eq!(
+            pane_border_fg(&theme, col1, false, focused, accent),
+            theme.border
+        );
+        // The focused pane's own right edge: its accent.
+        assert_eq!(pane_border_fg(&theme, col3, true, focused, accent), accent);
+        // The inactive neighbor's edge that doubles as the focused pane's
+        // left edge: claimed by the focused pane (#38), so accent.
+        assert_eq!(pane_border_fg(&theme, col2, false, focused, accent), accent);
     }
 
     #[test]

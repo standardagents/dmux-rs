@@ -11,8 +11,8 @@ use crate::metrics::Metrics;
 use crate::session::{LogicalPane, PaneStatus};
 use crate::sidebar::{ProjectAction, ProjectSelection};
 use crate::style::{
-    action_labels, agent_tag_color, focused_claims_edge, group_fill_color, header_shows_active,
-    issue_action_label, row_tag, sidebar_edge_highlight, sidebar_surface, title_bar_style,
+    action_labels, agent_tag_color, group_fill_color, header_shows_active, issue_action_label,
+    pane_border_fg, row_tag, sidebar_edge_highlight, sidebar_surface, title_bar_style,
 };
 use crate::views::ClickTarget;
 
@@ -88,23 +88,19 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         let border_x = rect.right();
         if border_x < buf.cols() {
             let focused_rect = scene.panes.get(scene.focused).and_then(|p| p.rect);
-            let (pa, ps) = scene
+            let focused_accent = scene
                 .pane_accents
-                .get(i)
+                .get(scene.focused)
                 .copied()
-                .unwrap_or((scene.theme.accent, scene.theme.border));
-            let border_fg = if i == scene.focused {
-                pa
-            } else if focused_claims_edge(rect, scene.focused == i, focused_rect) {
-                scene
-                    .pane_accents
-                    .get(scene.focused)
-                    .copied()
-                    .map(|(fa, _)| fa)
-                    .unwrap_or(scene.theme.accent)
-            } else {
-                ps
-            };
+                .map(|(fa, _)| fa)
+                .unwrap_or(scene.theme.accent);
+            let border_fg = pane_border_fg(
+                scene.theme,
+                rect,
+                scene.focused == i,
+                focused_rect,
+                focused_accent,
+            );
             for row in rect.y.saturating_sub(TITLE_ROWS)..rect.bottom() {
                 buf.set(
                     border_x,
