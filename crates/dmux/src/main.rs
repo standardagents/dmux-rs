@@ -23,7 +23,7 @@ mod verify;
 mod views;
 mod welcome;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -40,8 +40,8 @@ use dmux_ui::{ClickMap, Theme};
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
 use views::{
-    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView, PathPickerView,
-    SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
+    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView,
+    PathPickerView, SettingsView, ShortcutsView, View, ViewCtx, ViewResult,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -109,6 +109,27 @@ enum SidebarKeyAction {
     NewAgent,
     NewTerminal,
     LeaveFocus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SidebarNavTarget {
+    Pane(usize),
+    Project(String),
+}
+
+fn sidebar_nav_targets(groups: &[render::SidebarGroup]) -> Vec<SidebarNavTarget> {
+    let mut targets = Vec::new();
+    for group in groups {
+        targets.extend(
+            group
+                .pane_indices
+                .iter()
+                .copied()
+                .map(SidebarNavTarget::Pane),
+        );
+        targets.push(SidebarNavTarget::Project(group.root.clone()));
+    }
+    targets
 }
 
 fn sidebar_key_action(key: &dmux_host::KeyEvent, keymap: &keys::Keymap) -> SidebarKeyAction {
@@ -493,6 +514,14 @@ fn git_main_worktree_root(dir: &std::path::Path) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn project_context(main_root: &Path, target: Option<String>) -> Option<String> {
+    target.filter(|root| Path::new(root) != main_root)
+}
+
+fn sidebar_group_project_root(groups: &[render::SidebarGroup], index: usize) -> Option<String> {
+    groups.get(index).map(|group| group.root.clone())
+}
+
 struct App {
     client: Client<Tag>,
     router: ReplyRouter<Tag>,
@@ -503,7 +532,6 @@ struct App {
     /// Whether a config file existed / has been created on disk.
     config_persisted: bool,
     project_root: PathBuf,
-    is_git: bool,
     session_name: String,
     settings: Arc<Mutex<SettingsStore>>,
     installed_agents: std::collections::HashSet<&'static str>,
@@ -532,6 +560,8 @@ struct App {
     /// The sidebar owns navigation keys (entered via `^b ↑/↓` or clicking a
     /// row); Esc or focusing a pane hands the keyboard back.
     sidebar_focused: bool,
+    /// A per-project action row selected through sidebar keyboard navigation.
+    sidebar_project_root: Option<String>,
     anim: u64,
     anim_clock: AnimClock,
     /// Prompts waiting to be typed into send-keys-transport agent panes.
@@ -628,8 +658,6 @@ async fn run(
         Some(&project_root),
     )));
     let installed_agents = agents::detect_installed();
-    let is_git = git_main_worktree_root(&project_root).is_some();
-
     let host = HostTerminal::setup()?;
     let size = host.size();
     let mut input_rx = dmux_host::spawn_input_reader();
@@ -713,7 +741,6 @@ async fn run(
         config_path,
         config_persisted,
         project_root,
-        is_git,
         session_name,
         settings,
         installed_agents,
@@ -740,6 +767,7 @@ async fn run(
         status_clear_at: None,
         leader_armed: false,
         sidebar_focused: false,
+        sidebar_project_root: None,
         anim: 0,
         anim_clock: AnimClock::default(),
         pending_injections: Vec::new(),
@@ -2063,6 +2091,11 @@ impl App {
     /// Project root that new panes should target: the selected pane's
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
+        if self.sidebar_focused {
+            if let Some(root) = &self.sidebar_project_root {
+                return Some(root.clone());
+            }
+        }
         self.panes
             .get(self.selected)
             .and_then(|p| p.project_root.clone())
@@ -2427,28 +2460,46 @@ impl App {
         }
     }
 
+    fn step_sidebar_selection(&mut self, delta: i32) {
+        let targets = sidebar_nav_targets(&self.sidebar_groups);
+        if targets.is_empty() {
+            return;
+        }
+        let current = self
+            .sidebar_project_root
+            .as_ref()
+            .map(|root| SidebarNavTarget::Project(root.clone()))
+            .unwrap_or(SidebarNavTarget::Pane(self.selected));
+        let position = targets
+            .iter()
+            .position(|target| *target == current)
+            .unwrap_or(0);
+        let next = (position as i32 + delta).rem_euclid(targets.len() as i32) as usize;
+        match &targets[next] {
+            SidebarNavTarget::Pane(index) => {
+                self.selected = *index;
+                self.sidebar_project_root = None;
+            }
+            SidebarNavTarget::Project(root) => {
+                self.sidebar_project_root = Some(root.clone());
+            }
+        }
+        self.rebuild_sidebar_groups();
+    }
+
     /// Sidebar-focus navigation. Returns Some(keep_running) when consumed;
     /// any unhandled key drops sidebar focus and routes normally.
     fn handle_sidebar_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
         match sidebar_key_action(key, &self.keymap) {
             SidebarKeyAction::PassThrough => return None,
-            SidebarKeyAction::Ignore => {
-                // Unknown key while the sidebar owns focus (#27): consumed
-                // as a no-op — never forwarded to a pane, focus unchanged.
-            }
-            SidebarKeyAction::Up => {
-                let len = self.panes.len();
-                if len > 0 {
-                    self.selected = (self.selected + len - 1) % len;
-                }
-            }
-            SidebarKeyAction::Down => {
-                let len = self.panes.len();
-                if len > 0 {
-                    self.selected = (self.selected + 1) % len;
-                }
-            }
+            SidebarKeyAction::Ignore => {}
+            SidebarKeyAction::Up => self.step_sidebar_selection(-1),
+            SidebarKeyAction::Down => self.step_sidebar_selection(1),
             SidebarKeyAction::Activate => {
+                if self.sidebar_project_root.is_some() {
+                    self.dirty = true;
+                    return Some(true);
+                }
                 self.sidebar_focused = false;
                 let i = self.selected;
                 if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
@@ -2456,18 +2507,36 @@ impl App {
                 }
                 return Some(self.execute_cmd(AppCmd::FocusPane(i)));
             }
+            SidebarKeyAction::Menu if self.sidebar_project_root.is_some() => {}
             SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
+            SidebarKeyAction::Hide if self.sidebar_project_root.is_some() => {}
             SidebarKeyAction::Hide => {
                 return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected)))
             }
+            SidebarKeyAction::Close if self.sidebar_project_root.is_some() => {}
             SidebarKeyAction::Close => {
                 return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
             }
-            SidebarKeyAction::NewAgent => return Some(self.execute_cmd(AppCmd::OpenNewAgent)),
-            SidebarKeyAction::NewTerminal => return Some(self.execute_cmd(AppCmd::NewTerminal)),
+            SidebarKeyAction::NewAgent => {
+                let cmd = self
+                    .sidebar_project_root
+                    .clone()
+                    .map(|project_root| AppCmd::OpenNewAgentAt { project_root })
+                    .unwrap_or(AppCmd::OpenNewAgent);
+                return Some(self.execute_cmd(cmd));
+            }
+            SidebarKeyAction::NewTerminal => {
+                let cmd = self
+                    .sidebar_project_root
+                    .clone()
+                    .map(|project_root| AppCmd::NewTerminalInProject { project_root })
+                    .unwrap_or(AppCmd::NewTerminal);
+                return Some(self.execute_cmd(cmd));
+            }
             SidebarKeyAction::LeaveFocus => {
-                // The ONLY key that intentionally leaves sidebar focus (#27).
                 self.sidebar_focused = false;
+                self.sidebar_project_root = None;
+                self.rebuild_sidebar_groups();
             }
         }
         self.dirty = true;
@@ -2726,6 +2795,8 @@ impl App {
                     // double-click opens the row-anchored pane flyout (#14)
                     // WITHOUT activating the pane — Enter still activates.
                     self.selected = i;
+                    self.sidebar_project_root = None;
+                    self.rebuild_sidebar_groups();
                     if is_double {
                         let anchor_x = self.layout.sidebar.right() + 1;
                         return self.execute_cmd(AppCmd::OpenPaneFlyout {
@@ -2758,26 +2829,18 @@ impl App {
                 }
                 Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
                 Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
-                    if let Some(&i) = self
-                        .sidebar_groups
-                        .get(gi)
-                        .and_then(|g| g.pane_indices.first())
+                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
-                        self.selected = i;
+                        return self.execute_cmd(AppCmd::OpenNewAgentAt { project_root });
                     }
-                    self.rebuild_sidebar_groups();
-                    return self.execute_cmd(AppCmd::OpenNewAgent);
+                    return true;
                 }
                 Some(ClickTarget::SidebarGroupNewTerminal(gi)) => {
-                    if let Some(&i) = self
-                        .sidebar_groups
-                        .get(gi)
-                        .and_then(|g| g.pane_indices.first())
+                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
-                        self.selected = i;
+                        return self.execute_cmd(AppCmd::NewTerminalInProject { project_root });
                     }
-                    self.rebuild_sidebar_groups();
-                    return self.execute_cmd(AppCmd::NewTerminal);
+                    return true;
                 }
                 Some(ClickTarget::SidebarIssues) => {
                     if let Some(issue) = self.filed_issues.last() {
@@ -2815,6 +2878,8 @@ impl App {
                 }
                 Some(ClickTarget::PaneBody(i)) => {
                     self.sidebar_focused = false;
+                    self.sidebar_project_root = None;
+                    self.rebuild_sidebar_groups();
                     let already_focused = self.focused == i;
                     if !already_focused {
                         return self.execute_cmd(AppCmd::FocusPane(i));
@@ -2904,11 +2969,7 @@ impl App {
             Routed::PaneBytes(bytes) => self.send_pane_bytes(&bytes),
             Routed::SidebarNav(delta) => {
                 self.sidebar_focused = true;
-                let len = self.panes.len();
-                if len > 0 {
-                    self.selected =
-                        ((self.selected as i32 + delta).rem_euclid(len as i32)) as usize;
-                }
+                self.step_sidebar_selection(delta);
                 self.dirty = true;
             }
             Routed::ScrollView(delta) => {
@@ -2966,12 +3027,14 @@ impl App {
             AppCmd::Quit => return false,
             AppCmd::FocusPane(i) => {
                 self.sidebar_focused = false;
+                self.sidebar_project_root = None;
                 if i < self.panes.len() && !self.panes[i].hidden {
                     self.focused = i;
                     self.selected = i;
                     self.panes[i].needs_attention = false;
                     let w = self.panes[i].tmux_window;
                     let _ = self.client.send(format!("select-window -t {w}"));
+                    self.rebuild_sidebar_groups();
                     self.dirty = true;
                 }
             }
@@ -3039,38 +3102,8 @@ impl App {
                 )));
                 self.dirty = true;
             }
-            AppCmd::OpenNewAgent => {
-                let (default_agent, default_mode, enabled) = {
-                    let s = self.settings.lock().unwrap();
-                    let enabled = s
-                        .get("enabledAgents")
-                        .and_then(|v| v.as_array().cloned())
-                        .map(|l| {
-                            l.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_else(|| {
-                            agents::AGENTS
-                                .iter()
-                                .filter(|a| a.default_enabled)
-                                .map(|a| a.id.to_string())
-                                .collect()
-                        });
-                    (
-                        s.get_str("defaultAgent").map(|v| v.to_string()),
-                        s.get_str("permissionMode").unwrap_or("").to_string(),
-                        enabled,
-                    )
-                };
-                self.views.push(Box::new(AgentSelectView::new(
-                    &self.installed_agents,
-                    &enabled,
-                    default_agent.as_deref(),
-                    &default_mode,
-                )));
-                self.dirty = true;
-            }
+            AppCmd::OpenNewAgent => self.open_agent_select(None),
+            AppCmd::OpenNewAgentAt { project_root } => self.open_agent_select(Some(project_root)),
             AppCmd::OpenShortcuts => {
                 self.views.push(Box::new(ShortcutsView::new(
                     self.host.caps().kitty_keyboard,
@@ -3226,6 +3259,7 @@ impl App {
                     self.toast("Only agent panes can be duplicated");
                     return true;
                 };
+                let project_root = p.project_root.clone();
                 let prompt = self
                     .config
                     .panes
@@ -3240,7 +3274,7 @@ impl App {
                     .get_str("permissionMode")
                     .unwrap_or("")
                     .to_string();
-                self.launch_agents(prompt, vec![(agent, 1)], mode);
+                self.launch_agents(prompt, vec![(agent, 1)], mode, project_root);
             }
             AppCmd::RunHook { idx, name } => {
                 let Some(p) = self.panes.get(idx) else {
@@ -3383,7 +3417,8 @@ impl App {
             AppCmd::RenamePane { idx, name } => self.rename_pane(idx, name),
             AppCmd::ToggleHidden(idx) => self.toggle_hidden(idx),
             AppCmd::ClosePane(idx) => self.close_pane(idx),
-            AppCmd::NewTerminal => self.new_terminal(),
+            AppCmd::NewTerminal => self.new_terminal(None),
+            AppCmd::NewTerminalInProject { project_root } => self.new_terminal(Some(project_root)),
             AppCmd::PromptAddProject => {
                 // Filesystem picker rooted at dmux's launch directory (#32);
                 // rename/settings inputs stay simple text fields.
@@ -3559,10 +3594,45 @@ impl App {
                 prompt,
                 allocations,
                 mode,
-            } => self.launch_agents(prompt, allocations, mode),
+                project_root,
+            } => self.launch_agents(prompt, allocations, mode, project_root),
             AppCmd::SetSetting { key, value, scope } => self.set_setting(&key, value, scope),
         }
         true
+    }
+
+    fn open_agent_select(&mut self, project_root: Option<String>) {
+        let (default_agent, default_mode, enabled) = {
+            let s = self.settings.lock().unwrap();
+            let enabled = s
+                .get("enabledAgents")
+                .and_then(|v| v.as_array().cloned())
+                .map(|l| {
+                    l.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| {
+                    agents::AGENTS
+                        .iter()
+                        .filter(|a| a.default_enabled)
+                        .map(|a| a.id.to_string())
+                        .collect()
+                });
+            (
+                s.get_str("defaultAgent").map(|v| v.to_string()),
+                s.get_str("permissionMode").unwrap_or("").to_string(),
+                enabled,
+            )
+        };
+        self.views.push(Box::new(AgentSelectView::new(
+            &self.installed_agents,
+            &enabled,
+            default_agent.as_deref(),
+            &default_mode,
+            project_root,
+        )));
+        self.dirty = true;
     }
 
     fn set_setting(&mut self, key: &str, value: serde_json::Value, scope: SettingsScope) {
@@ -3744,13 +3814,16 @@ impl App {
         self.toast(format!("Closed '{}'", pane.display_title()));
     }
 
-    fn new_terminal(&mut self) {
+    fn new_terminal(&mut self, project_root: Option<String>) {
         let n = 1 + self
             .panes
             .iter()
             .filter(|p| p.slug.starts_with("terminal-"))
             .count();
         let slug = format!("terminal-{n}");
+        let project_root = project_root.or_else(|| self.active_project_root());
+        let cwd = project_root.clone();
+        let project_root = project_context(&self.project_root, project_root);
         self.create_window(NewWindowCtx {
             bootstrap: None,
             prompt: String::new(),
@@ -3761,16 +3834,30 @@ impl App {
             launch_cmd: None,
             injection: None,
             worktree_path: None,
-            cwd: None,
-            project_root: self.active_project_root(),
+            cwd,
+            project_root,
         });
     }
 
-    fn launch_agents(&mut self, prompt: String, allocations: Vec<(String, u8)>, mode: String) {
+    fn launch_agents(
+        &mut self,
+        prompt: String,
+        allocations: Vec<(String, u8)>,
+        mode: String,
+        project_root: Option<String>,
+    ) {
         let total: u32 = allocations.iter().map(|(_, c)| *c as u32).sum();
         if total == 0 {
             return;
         }
+        let project_root = project_root
+            .or_else(|| self.active_project_root())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.project_root.clone());
+        let project_context = project_context(
+            &self.project_root,
+            Some(project_root.to_string_lossy().into_owned()),
+        );
         let base_slug = slugify(&prompt);
         let (base_branch, branch_prefix) = {
             let s = self.settings.lock().unwrap();
@@ -3800,7 +3887,7 @@ impl App {
                 }
 
                 let prompt_file = (!prompt.is_empty()).then(|| {
-                    let dir = self.project_root.join(".dmux").join("prompts");
+                    let dir = project_root.join(".dmux").join("prompts");
                     let _ = std::fs::create_dir_all(&dir);
                     let path = dir.join(format!("{slug}-{}.txt", timestamp()));
                     let _ = std::fs::write(&path, &prompt);
@@ -3818,37 +3905,34 @@ impl App {
                 // Git projects bootstrap natively: the pane opens straight
                 // into a loader card while dmux runs worktree add + the
                 // worktree_created hook itself, then starts the agent.
-                let (launch_cmd, injection, worktree_path, bootstrap) = if self.is_git {
-                    let branch = format!("{branch_prefix}{slug}");
-                    let wt = self
-                        .project_root
-                        .join(".dmux")
-                        .join("worktrees")
-                        .join(&slug);
-                    let wt_str = wt.to_string_lossy().into_owned();
-                    let root = self.project_root.to_string_lossy().into_owned();
-                    let spec = BootstrapSpec {
-                        plan: bootstrap::Plan {
-                            root: root.clone(),
-                            wt: wt_str.clone(),
-                            branch,
-                            base_branch: base_branch.clone(),
-                            slug: slug.clone(),
-                            has_hook: hooks::hook_path(&self.project_root, "worktree_created")
-                                .is_some(),
-                        },
-                        launch: bootstrap::Launch {
-                            agent_cmd,
-                            wt: wt_str.clone(),
-                            root,
-                            injection,
-                        },
-                        agent_label: def.name.to_string(),
+                let (launch_cmd, injection, worktree_path, bootstrap) =
+                    if git_main_worktree_root(&project_root).is_some() {
+                        let branch = format!("{branch_prefix}{slug}");
+                        let wt = project_root.join(".dmux").join("worktrees").join(&slug);
+                        let wt_str = wt.to_string_lossy().into_owned();
+                        let root = project_root.to_string_lossy().into_owned();
+                        let spec = BootstrapSpec {
+                            plan: bootstrap::Plan {
+                                root: root.clone(),
+                                wt: wt_str.clone(),
+                                branch,
+                                base_branch: base_branch.clone(),
+                                slug: slug.clone(),
+                                has_hook: hooks::hook_path(&project_root, "worktree_created")
+                                    .is_some(),
+                            },
+                            launch: bootstrap::Launch {
+                                agent_cmd,
+                                wt: wt_str.clone(),
+                                root,
+                                injection,
+                            },
+                            agent_label: def.name.to_string(),
+                        };
+                        (None, None, Some(wt_str), Some(spec))
+                    } else {
+                        (Some(format!("clear; {agent_cmd}")), injection, None, None)
                     };
-                    (None, None, Some(wt_str), Some(spec))
-                } else {
-                    (Some(format!("clear; {agent_cmd}")), injection, None, None)
-                };
 
                 self.create_window(NewWindowCtx {
                     bootstrap,
@@ -3865,7 +3949,7 @@ impl App {
                     injection,
                     worktree_path,
                     cwd: None,
-                    project_root: self.active_project_root(),
+                    project_root: project_context.clone(),
                 });
             }
         }
@@ -4359,7 +4443,12 @@ impl App {
         let footer_text = if !self.status_msg.is_empty() {
             self.status_msg.clone()
         } else if self.sidebar_focused {
-            "sidebar: ↑↓ select · ⏎ open · m menu · h hide · x close · esc back".to_string()
+            if self.sidebar_project_root.is_some() {
+                "sidebar project: ↑↓ select · n agent · t terminal · esc back".to_string()
+            } else {
+                "sidebar pane: ↑↓ select · ⏎ open · m menu · h hide · x close · esc back"
+                    .to_string()
+            }
         } else if self
             .settings
             .lock()
@@ -4886,6 +4975,40 @@ mod tests {
         assert_eq!(shq("/tmp/simple-path"), "/tmp/simple-path");
         assert_eq!(shq("a path"), "'a path'");
         assert_eq!(shq("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn sidebar_creation_uses_the_clicked_project_root() {
+        let group = |root: &str, pane_indices: Vec<usize>| render::SidebarGroup {
+            name: root.into(),
+            root: root.into(),
+            accent: dmux_compositor::Color::Default,
+            accent_soft: dmux_compositor::Color::Default,
+            pane_indices,
+            active: false,
+        };
+        let groups = vec![group("/active", vec![0]), group("/empty", vec![])];
+
+        assert_eq!(
+            sidebar_nav_targets(&groups),
+            vec![
+                SidebarNavTarget::Pane(0),
+                SidebarNavTarget::Project("/active".into()),
+                SidebarNavTarget::Project("/empty".into()),
+            ]
+        );
+        assert_eq!(
+            sidebar_group_project_root(&groups, 1).as_deref(),
+            Some("/empty")
+        );
+        assert_eq!(
+            project_context(Path::new("/active"), Some("/empty".into())).as_deref(),
+            Some("/empty")
+        );
+        assert_eq!(
+            project_context(Path::new("/active"), Some("/active".into())),
+            None
+        );
     }
 
     #[test]

@@ -52,6 +52,10 @@ pub enum AppCmd {
     },
     OpenSettings,
     OpenNewAgent,
+    /// Open the agent allocator for a specific sidebar project.
+    OpenNewAgentAt {
+        project_root: String,
+    },
     OpenShortcuts,
     OpenLogs,
     PromptRename(usize),
@@ -65,6 +69,10 @@ pub enum AppCmd {
     CopyPath(usize),
     OpenInEditor(usize),
     NewTerminal,
+    /// Create a terminal for a specific sidebar project.
+    NewTerminalInProject {
+        project_root: String,
+    },
     /// Terminal in a specific directory (welcome-screen worktree cards).
     NewTerminalAt {
         path: String,
@@ -115,6 +123,7 @@ pub enum AppCmd {
         prompt: String,
         allocations: Vec<(String, u8)>,
         mode: String,
+        project_root: Option<String>,
     },
     SetSetting {
         key: String,

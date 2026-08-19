@@ -38,6 +38,7 @@ pub struct AgentSelectView {
     /// 0 = prompt, 1..=rows = agent rows, rows+1 = permission, rows+2 = launch.
     focus: usize,
     permission_idx: usize,
+    project_root: Option<String>,
 }
 
 impl AgentSelectView {
@@ -46,6 +47,7 @@ impl AgentSelectView {
         enabled: &[String],
         default_agent: Option<&str>,
         default_mode: &str,
+        project_root: Option<String>,
     ) -> Self {
         let mut rows: Vec<AgentRow> = AGENTS
             .iter()
@@ -87,6 +89,7 @@ impl AgentSelectView {
             rows,
             focus: 0,
             permission_idx,
+            project_root,
         }
     }
 
@@ -117,6 +120,7 @@ impl AgentSelectView {
             prompt: self.prompt.value.trim().to_string(),
             allocations,
             mode: PERMISSION_MODES[self.permission_idx].0.to_string(),
+            project_root: self.project_root.clone(),
         })
     }
 
@@ -407,5 +411,29 @@ impl View for AgentSelectView {
             _ => {}
         }
         ViewResult::Stay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_retains_the_sidebar_project_root() {
+        let agent = &AGENTS[0];
+        let installed = std::collections::HashSet::from([agent.id]);
+        let mut view = AgentSelectView::new(
+            &installed,
+            &[agent.id.to_string()],
+            Some(agent.id),
+            "",
+            Some("/projects/empty".into()),
+        );
+        view.prompt.value = "Fix the issue".into();
+
+        let ViewResult::CloseAnd(AppCmd::LaunchAgents { project_root, .. }) = view.launch() else {
+            panic!("expected an agent launch command");
+        };
+        assert_eq!(project_root.as_deref(), Some("/projects/empty"));
     }
 }
