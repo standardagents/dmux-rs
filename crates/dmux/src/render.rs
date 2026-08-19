@@ -132,7 +132,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
             for _ in end..area.right() {
                 fill.push('⣿');
             }
-            buf.draw_text(end, row, &fill, group.accent_soft, sb_bg, AttrFlags::empty(), area);
+            buf.draw_text(end, row, &fill, group_fill_color(group), sb_bg, AttrFlags::empty(), area);
             row += 1;
         }
         for &i in &group.pane_indices {
@@ -190,7 +190,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 let tag = format!("[{short}]");
                 let tag_x = area.right().saturating_sub(tag.len() as u16 + 1);
                 if tag_x > end {
-                    buf.draw_text(tag_x, row, &tag, group.accent_soft, bg, AttrFlags::empty(), area);
+                    buf.draw_text(tag_x, row, &tag, agent_tag_color(t), bg, AttrFlags::empty(), area);
                 }
             }
             clicks.add(row_rect, ClickTarget::SidebarRow(i));
@@ -289,6 +289,19 @@ fn title_bar_style(
     } else {
         (accent, theme.bg_raised)
     }
+}
+
+/// Right-side braille separator runs beside project names: the project's
+/// LIGHT accent, matching the name they trail (#28) — the soft variant is a
+/// dark shade that vanished against dark terminal backgrounds.
+fn group_fill_color(group: &SidebarGroup) -> Color {
+    group.accent
+}
+
+/// Agent-kind labels ([cc], [cx], …) on sidebar rows: the theme's light
+/// dim-text foreground (#28), never a dark accent variant.
+fn agent_tag_color(theme: &Theme) -> Color {
+    theme.text_dim
 }
 
 /// The sidebar's base surface is ALWAYS the terminal's own background —
@@ -421,6 +434,26 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn right_side_metadata_uses_light_foregrounds() {
+        // #28: braille separators match the project's light accent; agent
+        // labels use the theme's light dim text — never the dark soft
+        // accent variants.
+        let theme = Theme::named("violet");
+        let group = SidebarGroup {
+            name: "app".into(),
+            root: "/app".into(),
+            accent: Color::Indexed(214),
+            accent_soft: Color::Indexed(130),
+            pane_indices: vec![],
+            active: true,
+        };
+        assert_eq!(group_fill_color(&group), group.accent);
+        assert_ne!(group_fill_color(&group), group.accent_soft);
+        assert_eq!(agent_tag_color(&theme), theme.text_dim);
+        assert_ne!(agent_tag_color(&theme), theme.accent_soft);
+    }
 
     #[test]
     fn sidebar_focus_states_render_distinctly() {
