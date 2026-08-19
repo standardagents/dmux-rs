@@ -442,6 +442,12 @@ async fn run(
     // are unaffected.
     let (default_fg, default_bg) = dmux_vt::palette::default_fg_bg_hex();
     let _ = client.send(format!("set -g window-style 'fg={default_fg},bg={default_bg}'"));
+    // window-active-style MERGES OVER window-style for the active pane —
+    // where a focused TUI actually runs — so a stale or user-config value
+    // there (observed live: bg=colour231, near-white) silently overrides
+    // the answer above and re-breaks theme detection (#4 follow-up). Own
+    // both options.
+    let _ = client.send(format!("set -g window-active-style 'fg={default_fg},bg={default_bg}'"));
     client.send_tagged(
         format!("show-options -t {} -qv @dmux_controller_pid", dmux_cc::quote_arg(&session_name)),
         Tag::ControllerPid,
