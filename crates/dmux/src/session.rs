@@ -506,6 +506,37 @@ mod tests {
     }
 
     #[test]
+    fn escaped_pane_list_reply_decodes_to_records() {
+        // #19: raw control-mode bytes from tmux 3.5a — the 0x01 field
+        // separators arrive octal-escaped as the four bytes \001, and the
+        // start command is double-quoted. Feed the actual wire bytes through
+        // the parser, decode, and expect a keepalive record.
+        let wire: &[u8] = b"%begin 1755600000 3 1\n%0\\001@0\\001Mac-Studio.local\\00180\\00124\\0010\\001sleep\\001dmux-keepalive\\0012555\\001\"sleep 2147483647\"\n%end 1755600000 3 1\n";
+        let mut parser = dmux_cc::Parser::new();
+        let mut events = Vec::new();
+        parser.feed(wire, &mut events);
+        let lines: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                dmux_cc::CcEvent::ReplyLine(l) => Some(l.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 1, "one payload line, got {events:?}");
+        let mut reply = Reply { lines, ok: true, rtt: std::time::Duration::ZERO };
+        // Undecoded, the reply yields no records (the pre-fix failure that
+        // blinded the keepalive guards and re-leaked #10).
+        assert!(parse_pane_list(&reply).is_empty());
+        reply.unescape_lines();
+        let infos = parse_pane_list(&reply);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].pane, PaneId(0));
+        assert_eq!(infos[0].width, 80);
+        assert_eq!(infos[0].window_name, "dmux-keepalive");
+        assert!(is_keepalive(&infos[0]));
+    }
+
+    #[test]
     fn pane_list_parses_start_command() {
         let line = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}sleep\u{1}sleep\u{1}9\u{1}sleep 2147483647";
         let reply = Reply { lines: vec![line.as_bytes().to_vec()], ok: true, rtt: std::time::Duration::ZERO };

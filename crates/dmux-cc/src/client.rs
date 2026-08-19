@@ -33,6 +33,18 @@ pub struct Reply {
 }
 
 impl Reply {
+    /// Decode octal-escaped reply payload lines in place. tmux 3.5a (and
+    /// kin) octal-escape control bytes in command replies — `0x01` field
+    /// separators arrive as the four bytes `\001`, and real backslashes as
+    /// `\134`, so decoding is unambiguous THERE. Newer servers (3.7b) send
+    /// raw bytes, where decoding would corrupt captured pane text — callers
+    /// gate this on a per-server probe (#19).
+    pub fn unescape_lines(&mut self) {
+        for line in &mut self.lines {
+            *line = crate::unescape_output(line);
+        }
+    }
+
     pub fn text_lines(&self) -> Vec<String> {
         self.lines.iter().map(|l| String::from_utf8_lossy(l).into_owned()).collect()
     }

@@ -186,6 +186,9 @@ enum Tag {
     /// Shadow-verifier capture for one pane.
     VerifyCap(PaneId),
     ControllerPid,
+    /// Reply-escaping probe (#19): decides whether this server octal-escapes
+    /// command-reply payloads (tmux 3.5a) or sends raw bytes (3.7b).
+    EscapeProbe,
     NewWindow(Box<NewWindowCtx>),
     /// Keepalive window creation round-trip (#10): the reply clears the
     /// in-flight flag and pins the window's name against automatic-rename.
@@ -409,6 +412,10 @@ struct App {
     /// A keepalive create command is in flight; never send another until
     /// its reply lands (#10 — unbounded keepalive spawn).
     keepalive_pending: bool,
+    /// Server octal-escapes command-reply payloads (probed at attach, #19).
+    /// None until the probe reply lands; no decoding happens before that,
+    /// and the probe is the first tagged command so nothing races it.
+    replies_escaped: Option<bool>,
     /// Panes we killed on purpose: never re-adopt while tmux still lists them.
     closing: std::collections::HashSet<PaneId>,
     /// A pane we just created: focus it once adoption lands.
@@ -486,6 +493,9 @@ async fn run(
     // the answer above and re-breaks theme detection (#4 follow-up). Own
     // both options.
     let _ = client.send(format!("set -g window-active-style 'fg={default_fg},bg={default_bg}'"));
+    // Reply-escaping probe must be the FIRST tagged command: its verdict
+    // gates decoding of every later reply, and tmux answers in order (#19).
+    client.send_tagged("display-message -p 'dmuxprobe\u{1}end'".to_string(), Tag::EscapeProbe)?;
     client.send_tagged(
         format!("show-options -t {} -qv @dmux_controller_pid", dmux_cc::quote_arg(&session_name)),
         Tag::ControllerPid,
@@ -568,6 +578,7 @@ async fn run(
         welcome_rain: welcome::MatrixRain::new(size.0.saturating_sub(layout::SIDEBAR_WIDTH + 1), size.1),
         keepalive_present: false,
         keepalive_pending: false,
+        replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
         drag_select: None,
@@ -984,7 +995,12 @@ impl App {
     fn handle_cc(&mut self, ev: CcEvent) -> bool {
         match self.router.route(ev) {
             CcRouted::Notification(ev) => self.handle_notification(ev),
-            CcRouted::Reply(tag, reply) => {
+            CcRouted::Reply(tag, mut reply) => {
+                // Decode octal-escaped payloads on servers that escape them;
+                // the probe reply itself must stay raw to be judged (#19).
+                if !matches!(tag, Tag::EscapeProbe) && self.replies_escaped == Some(true) {
+                    reply.unescape_lines();
+                }
                 self.handle_reply(tag, reply);
                 true
             }
@@ -1181,6 +1197,17 @@ impl App {
                         self.dirty = true;
                     }
                 }
+            }
+            Tag::EscapeProbe => {
+                // Raw servers echo the literal 0x01 byte; escaping servers
+                // turn it into the four bytes \001.
+                let escaped = reply
+                    .lines
+                    .first()
+                    .map(|l| !l.contains(&0x01) && l.windows(4).any(|w| w == b"\\001"))
+                    .unwrap_or(false);
+                self.replies_escaped = Some(escaped);
+                tracing::info!(escaped, "reply-escaping probe");
             }
             Tag::ControllerPid => {
                 let pid = reply.text_lines().first().and_then(|l| l.trim().parse::<i32>().ok());
