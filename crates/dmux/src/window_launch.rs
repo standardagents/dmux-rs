@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use dmux_cc::{PaneId, Reply};
 use dmux_core::{encode_pane_title, DmuxPane, PaneKind};
 
-use crate::project_context;
+use crate::session::project_context;
 use crate::{bootstrap, hooks, input, shq, timestamp, App, AppMsg, Tag};
 
 /// Context for a window dmux-rs created and is waiting on.

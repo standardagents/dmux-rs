@@ -132,3 +132,20 @@ pub fn cleanup_worktree(root: &Path, worktree: &Path, branch: &str) -> Result<()
     let _ = git(root, &["branch", "-D", branch]);
     Ok(())
 }
+
+use std::path::PathBuf;
+
+pub fn git_main_worktree_root(dir: &std::path::Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("worktree "))
+        .map(PathBuf::from)
+}

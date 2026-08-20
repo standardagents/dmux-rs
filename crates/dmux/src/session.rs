@@ -515,6 +515,62 @@ pub fn recover_project_root(cwd: &str, roots: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// Why a live pane paired with a persisted record — shared by adoption and
+/// the #78 session diagnostic so both report the same identity semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchReason {
+    /// Exact `pane_id` identity.
+    PaneId,
+    /// Same slug AND the record's project contains the pane's live cwd
+    /// (disambiguates duplicate slugs across projects, #76).
+    SlugCwd,
+    /// Plain slug fallback.
+    Slug,
+}
+
+/// Ownership context for a launch target: the target root when it differs
+/// from the main project, None when it IS the main project.
+pub(crate) fn project_context(
+    main_root: &std::path::Path,
+    target: Option<String>,
+) -> Option<String> {
+    target.filter(|root| std::path::Path::new(root) != main_root)
+}
+
+/// Record lookup (#76): exact pane-id identity first; then, among same-slug
+/// records (slugs repeat across projects), the one whose project contains
+/// the pane's live cwd; plain slug last.
+pub fn record_match<'c>(
+    config: &'c DmuxConfig,
+    slug: &str,
+    info: &TmuxPaneInfo,
+) -> Option<(&'c DmuxPane, MatchReason)> {
+    config
+        .panes
+        .iter()
+        .find(|p| p.pane_id == info.pane.to_string())
+        .map(|p| (p, MatchReason::PaneId))
+        .or_else(|| {
+            config
+                .panes
+                .iter()
+                .find(|p| {
+                    p.slug == slug
+                        && p.project_root.as_deref().is_some_and(|r| {
+                            recover_project_root(&info.current_path, &[r.to_string()]).is_some()
+                        })
+                })
+                .map(|p| (p, MatchReason::SlugCwd))
+        })
+        .or_else(|| {
+            config
+                .panes
+                .iter()
+                .find(|p| p.slug == slug)
+                .map(|p| (p, MatchReason::Slug))
+        })
+}
+
 pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<LogicalPane> {
     // Configured project roots for cwd-based ownership recovery (#76).
     let known_roots: Vec<String> = config
@@ -530,23 +586,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             continue;
         }
         let parsed = parse_pane_title(&info.title);
-        // Record lookup (#76): exact pane-id identity first; then, among
-        // same-slug records (slugs repeat across projects), prefer the one
-        // whose project contains the pane's live cwd; plain slug last.
-        let config_pane = config.and_then(|c| {
-            c.panes
-                .iter()
-                .find(|p| p.pane_id == info.pane.to_string())
-                .or_else(|| {
-                    c.panes.iter().find(|p| {
-                        p.slug == parsed.slug
-                            && p.project_root.as_deref().is_some_and(|r| {
-                                recover_project_root(&info.current_path, &[r.to_string()]).is_some()
-                            })
-                    })
-                })
-                .or_else(|| c.panes.iter().find(|p| p.slug == parsed.slug))
-        });
+        let config_pane = config.and_then(|c| record_match(c, &parsed.slug, info).map(|(r, _)| r));
         let slug = config_pane
             .map(|p| p.slug.clone())
             .unwrap_or_else(|| parsed.slug.clone());

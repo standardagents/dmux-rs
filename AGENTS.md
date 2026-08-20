@@ -104,8 +104,15 @@ Triage per issue:
   `scripts/` and the `DMUX_*` env knobs are your tools — for pane-UX
   interactions, `scripts/ui-smoke.sh` drives menus, clicks, and launch
   actions against a hermetic dmux and is the template for new interaction
-  checks); fix; add a regression test; deliver per the completion
-  lifecycle with a one-paragraph explanation the reporter can understand.
+  checks; for pane-ownership/identity reports, `scripts/diagnose-session.sh
+  [project-dir]` — a wrapper for `dmux-rs --diagnose-session` — prints a
+  read-only snapshot joining the installed build, recent attach/update
+  events, live tmux panes, and persisted records with adoption's exact
+  identity semantics, flagging UNMATCHED / AMBIGUOUS / STALE panes and
+  records with no live pane; safe on a live session, and the output is
+  what testers should paste into ownership issues); fix; add a regression
+  test; deliver per the completion lifecycle with a one-paragraph
+  explanation the reporter can understand.
 - **Feature/UX request** → implement if the scope is clear and consistent
   with ROADMAP.md; verify e2e, then deliver per the completion
   lifecycle. If the scope is

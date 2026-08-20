@@ -5,6 +5,7 @@
 
 mod agents;
 mod bootstrap;
+mod diagnose;
 mod git;
 mod github;
 mod hooks;
@@ -110,6 +111,11 @@ struct Cli {
     /// recorded stream still diverges from the stored tmux capture.
     #[arg(long, value_name = "FILE")]
     replay_incident: Option<PathBuf>,
+    /// Read-only live-session diagnostic snapshot (#78): joins the installed
+    /// build, recent events, live tmux panes, and persisted records with
+    /// adoption's identity semantics. Mutates nothing.
+    #[arg(long)]
+    diagnose_session: bool,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -196,6 +202,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+    }
+    if cli.diagnose_session {
+        let (config, project_root, session_name) = resolve_session(&cli)?;
+        let code = diagnose::run(
+            config.as_ref(),
+            &project_root,
+            &session_name,
+            &cli.tmux,
+            cli.socket.as_deref(),
+        );
+        std::process::exit(code);
     }
     init_logging(&cli)?;
 
@@ -310,32 +327,13 @@ fn resolve_session(
     };
     let root = match &config {
         Some(cfg) => PathBuf::from(&cfg.project_root),
-        None => git_main_worktree_root(&start).unwrap_or(start),
+        None => git::git_main_worktree_root(&start).unwrap_or(start),
     };
     let session = cli
         .session
         .clone()
         .unwrap_or_else(|| session_name_for_root(&root.to_string_lossy()));
     Ok((config, root, session))
-}
-
-fn git_main_worktree_root(dir: &std::path::Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("worktree "))
-        .map(PathBuf::from)
-}
-
-pub(crate) fn project_context(main_root: &Path, target: Option<String>) -> Option<String> {
-    target.filter(|root| Path::new(root) != main_root)
 }
 
 fn sidebar_group_project_root(groups: &[render::SidebarGroup], index: usize) -> Option<String> {
@@ -3682,7 +3680,7 @@ impl App {
             .or_else(|| self.active_project_root())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let project_context = project_context(
+        let project_context = session::project_context(
             &self.project_root,
             Some(project_root.to_string_lossy().into_owned()),
         );
@@ -3734,7 +3732,7 @@ impl App {
                 // into a loader card while dmux runs worktree add + the
                 // worktree_created hook itself, then starts the agent.
                 let (launch_cmd, injection, worktree_path, bootstrap) =
-                    if git_main_worktree_root(&project_root).is_some() {
+                    if git::git_main_worktree_root(&project_root).is_some() {
                         let branch = format!("{branch_prefix}{slug}");
                         let wt = project_root.join(".dmux").join("worktrees").join(&slug);
                         let wt_str = wt.to_string_lossy().into_owned();
@@ -4456,18 +4454,6 @@ mod tests {
         assert_eq!(shq("/tmp/simple-path"), "/tmp/simple-path");
         assert_eq!(shq("a path"), "'a path'");
         assert_eq!(shq("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn project_context_omits_the_main_root() {
-        assert_eq!(
-            project_context(Path::new("/active"), Some("/empty".into())).as_deref(),
-            Some("/empty")
-        );
-        assert_eq!(
-            project_context(Path::new("/active"), Some("/active".into())),
-            None
-        );
     }
 
     #[test]

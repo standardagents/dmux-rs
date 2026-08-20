@@ -423,3 +423,16 @@ fn pane_list_parses_start_command() {
     };
     assert_eq!(parse_pane_list(&reply9)[0].start_command, "");
 }
+
+#[test]
+fn project_context_omits_the_main_root() {
+    use std::path::Path;
+    assert_eq!(
+        project_context(Path::new("/active"), Some("/empty".into())).as_deref(),
+        Some("/empty")
+    );
+    assert_eq!(
+        project_context(Path::new("/active"), Some("/active".into())),
+        None
+    );
+}
