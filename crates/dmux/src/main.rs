@@ -975,10 +975,7 @@ impl App {
     fn animating(&self) -> bool {
         !self.bootstraps.is_empty()
             || self.welcome_active()
-            || self
-                .panes
-                .iter()
-                .any(|p| (p.status == PaneStatus::Working || p.closing) && !p.hidden)
+            || self.panes.iter().any(render::pane_status_animating)
             || self.views.iter().any(|v| v.animating())
     }
 

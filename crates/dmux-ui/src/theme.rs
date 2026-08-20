@@ -29,6 +29,7 @@ pub struct Theme {
     pub danger: Color,
     pub ok: Color,
     pub warn: Color,
+    pub warn_soft: Color,
 }
 
 impl Theme {
@@ -85,6 +86,7 @@ impl Default for Theme {
             danger: Color::Indexed(203),
             ok: Color::Indexed(114),
             warn: Color::Indexed(214),
+            warn_soft: Color::Indexed(130),
         }
     }
 }

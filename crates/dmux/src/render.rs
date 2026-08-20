@@ -169,12 +169,27 @@ pub fn content_area(buf: &CellBuffer, layout: &Layout) -> Rect {
 }
 
 pub(super) fn status_glyph(pane: &LogicalPane, anim: u64) -> String {
+    if pane.needs_attention && !pane.closing {
+        return "●".to_string();
+    }
     match pane.status {
         PaneStatus::Working => spinner_frame(anim).to_string(),
         PaneStatus::Waiting => "△".to_string(),
         PaneStatus::Idle => "◌".to_string(),
         PaneStatus::Dead => "✗".to_string(),
     }
+}
+
+pub(super) fn attention_color(theme: &Theme, anim: u64) -> Color {
+    if anim % 6 < 3 {
+        theme.warn
+    } else {
+        theme.warn_soft
+    }
+}
+
+pub(crate) fn pane_status_animating(pane: &LogicalPane) -> bool {
+    pane.needs_attention || (!pane.hidden && (pane.status == PaneStatus::Working || pane.closing))
 }
 
 fn draw_pane_title(
@@ -244,6 +259,19 @@ fn draw_pane_title(
         AttrFlags::empty()
     };
     buf.draw_text(bar.x, bar.y, &label, fg, bg, attrs, bar);
+    if pane.needs_attention && !pane.closing && bar.w > 1 {
+        buf.set(
+            bar.x + 1,
+            bar.y,
+            Cell {
+                ch: '●',
+                fg: attention_color(t, scene.anim),
+                bg,
+                attrs: AttrFlags::BOLD,
+                ..Cell::default()
+            },
+        );
+    }
     if selected && !focused {
         // Mirror the sidebar's selection bar so the eye can pair them (#13).
         buf.set(
@@ -409,6 +437,8 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod action_tests;
+#[cfg(test)]
+mod attention_tests;
 #[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]

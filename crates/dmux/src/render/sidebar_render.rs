@@ -6,7 +6,7 @@
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
 use dmux_ui::{spinner_frame, ClickMap, Theme};
 
-use super::{status_glyph, truncate, Scene, SidebarGroup};
+use super::{attention_color, status_glyph, truncate, Scene, SidebarGroup};
 #[cfg(test)]
 use crate::layout::Layout;
 use crate::session::PaneStatus;
@@ -123,17 +123,12 @@ pub(crate) fn draw_sidebar(
             } else {
                 status_glyph(pane, scene.anim)
             };
-            let attn = if pane.needs_attention && !pane.closing {
-                "!"
-            } else {
-                " "
-            };
             let hidden_tag = row_tag(pane.closing, pane.hidden);
             let name = truncate(
                 pane.display_title(),
                 area.w.saturating_sub(14 + hidden_tag.len() as u16) as usize,
             );
-            let line = format!("{caret}{attn}{glyph} {name}{hidden_tag}");
+            let line = format!("{caret} {glyph} {name}{hidden_tag}");
             // Reorder drag (#26): the row under the pointer is the insertion
             // target (selection surface + marker below); the dragged source
             // row dims so the movement reads.
@@ -143,7 +138,7 @@ pub(crate) fn draw_sidebar(
                 (t.text_faint, AttrFlags::empty())
             } else if focused {
                 (group.accent, AttrFlags::BOLD)
-            } else if pane.status == PaneStatus::Waiting || pane.needs_attention {
+            } else if pane.status == PaneStatus::Waiting {
                 (t.warn, AttrFlags::empty())
             } else if project_active {
                 (t.text, AttrFlags::empty())
@@ -171,6 +166,19 @@ pub(crate) fn draw_sidebar(
                 );
             }
             let end = buf.draw_text(area.x, row, &line, fg, bg, attrs, area);
+            if pane.needs_attention && !pane.closing && area.w > 2 {
+                buf.set(
+                    area.x + 2,
+                    row,
+                    Cell {
+                        ch: '●',
+                        fg: attention_color(t, scene.anim),
+                        bg,
+                        attrs: AttrFlags::BOLD,
+                        ..Cell::default()
+                    },
+                );
+            }
             if selected && scene.sidebar_focused {
                 buf.set(
                     area.x,

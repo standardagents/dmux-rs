@@ -96,7 +96,8 @@ pub struct LogicalPane {
     /// duplicate close commands are ignored, and the pane is removed only
     /// when tmux confirms the kill (or restored if it fails).
     pub closing: bool,
-    /// Settled while unfocused — shown as `!` until the user looks.
+    /// Settled while unfocused; pane chrome shows a blinking attention dot
+    /// until the user looks.
     pub needs_attention: bool,
     /// Title follows the pane's own title reports (shell panes without a
     /// human-chosen name; cleared by rename).
