@@ -65,3 +65,88 @@ fn session_title_uses_pane_bar_surface_without_project_braille() {
     assert_eq!(buf.get(0, 2).fg, groups[0].accent);
     assert_ne!(buf.get(0, 2).bg, title_bg);
 }
+
+#[test]
+fn toolbar_dots_center_in_their_click_targets() {
+    // #98: each ● sits in the SECOND cell of its two-cell click target, so
+    // the group renders ` ● ● ● ` — visually centered — while the full
+    // two-cell region stays clickable for its action.
+    use crate::registry::adopt_panes;
+    use crate::session::TmuxPaneInfo;
+    use dmux_cc::{PaneId, WindowId};
+
+    let info = TmuxPaneInfo {
+        pane: PaneId(1),
+        window: WindowId(1),
+        title: "term-1".into(),
+        width: 40,
+        height: 10,
+        alternate_on: false,
+        current_command: "zsh".into(),
+        window_name: "w".into(),
+        pane_pid: 1,
+        start_command: String::new(),
+        extended_keys_mode2: false,
+        current_path: String::new(),
+    };
+    let mut pane = adopt_panes(None, &[info]).remove(0);
+    pane.rect = Some(Rect::new(41, 1, 40, 8));
+    let panes = [pane];
+
+    let theme = Theme::named("violet");
+    let layout = Layout {
+        sidebar: Rect::new(0, 0, 40, 10),
+        ..Default::default()
+    };
+    let scene = Scene {
+        panes: &panes,
+        layout: &layout,
+        focused: 0,
+        selected: 0,
+        session_name: "s",
+        project_name: "p",
+        hud: None,
+        status_line: "",
+        theme: &theme,
+        anim: 0,
+        leader_armed: false,
+        sidebar_focused: false,
+        sidebar_project: None,
+        version: "v0.0.0",
+        issues: (0, 0),
+        groups: &[],
+        pane_accents: &[(theme.accent, theme.accent_soft)],
+        reorder: None,
+        hovered: None,
+    };
+    let mut buf = CellBuffer::new(90, 10);
+    let mut clicks = ClickMap::new();
+    compose(&mut buf, &scene, &mut clicks);
+
+    // Three dots on the title row (y = 0, the bar above the body at y 1).
+    let bar_y = 0;
+    let dot_cols: Vec<u16> = (0..90).filter(|x| buf.get(*x, bar_y).ch == '●').collect();
+    assert_eq!(dot_cols.len(), 3, "three window dots: {dot_cols:?}");
+    // Evenly spaced, one blank column between and around: ` ● ● ● `.
+    assert_eq!(dot_cols[1] - dot_cols[0], 2);
+    assert_eq!(dot_cols[2] - dot_cols[1], 2);
+    for x in [
+        dot_cols[0] - 1,
+        dot_cols[0] + 1,
+        dot_cols[1] + 1,
+        dot_cols[2] + 1,
+    ] {
+        assert_eq!(buf.get(x, bar_y).ch, ' ', "gap at {x}");
+    }
+    // Each dot's click target covers BOTH cells of its slot — the cell the
+    // glyph sits in and the one to its left.
+    use crate::views::ClickTarget;
+    for (dot_x, want) in dot_cols.iter().zip([
+        ClickTarget::TitleRename(0),
+        ClickTarget::TitleHide(0),
+        ClickTarget::TitleClose(0),
+    ]) {
+        assert_eq!(clicks.hit(*dot_x, bar_y), Some(&want), "glyph cell");
+        assert_eq!(clicks.hit(dot_x - 1, bar_y), Some(&want), "left cell");
+    }
+}

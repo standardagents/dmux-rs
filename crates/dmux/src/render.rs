@@ -293,8 +293,10 @@ fn draw_pane_title(
                 },
             );
         }
-        x = buf.draw_text(
-            x,
+        // Glyph in the SECOND cell of the two-cell target (#98): with the
+        // group's trailing column this renders ` ● ● ● `, visually centered.
+        buf.draw_text(
+            bx + 1,
             bar.y,
             "●",
             fg,
@@ -307,7 +309,7 @@ fn draw_pane_title(
             bar,
         );
         clicks.add(hit, target);
-        x += 1;
+        x = bx + 2;
     }
 }
 
