@@ -11,6 +11,7 @@ pub struct MenuItem {
     pub hint: String,
     pub cmd: AppCmd,
     pub danger: bool,
+    pub special: bool,
 }
 
 impl MenuItem {
@@ -20,11 +21,17 @@ impl MenuItem {
             hint: hint.into(),
             cmd,
             danger: false,
+            special: false,
         }
     }
 
     pub fn danger(mut self) -> Self {
         self.danger = true;
+        self
+    }
+
+    pub fn special(mut self) -> Self {
+        self.special = true;
         self
     }
 }
@@ -129,6 +136,8 @@ impl View for MenuView {
             );
             let fg = if item.danger {
                 ctx.theme.danger
+            } else if item.special {
+                ctx.theme.accent
             } else if selected {
                 ctx.theme.text
             } else {
@@ -150,7 +159,7 @@ impl View for MenuView {
                 &item.label,
                 fg,
                 bg,
-                if selected {
+                if selected || item.special {
                     AttrFlags::BOLD
                 } else {
                     AttrFlags::empty()

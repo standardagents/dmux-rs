@@ -136,16 +136,60 @@ pub fn cleanup_worktree(root: &Path, worktree: &Path, branch: &str) -> Result<()
 use std::path::PathBuf;
 
 pub fn git_main_worktree_root(dir: &std::path::Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
+    let out = worktree_list(dir)?;
     if !out.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("worktree "))
-        .map(PathBuf::from)
+    parse_worktree_list(&String::from_utf8_lossy(&out.stdout))
+        .into_iter()
+        .next()
+}
+
+/// Return the registered worktree containing `dir`, if Git knows one.
+pub fn git_worktree_root_for_path(dir: &std::path::Path) -> Option<PathBuf> {
+    let target = std::fs::canonicalize(dir).ok()?;
+    let output = worktree_list(dir)?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_worktree_list(&String::from_utf8_lossy(&output.stdout))
+        .into_iter()
+        .filter_map(|path| {
+            let root = std::fs::canonicalize(path).ok()?;
+            target.starts_with(&root).then_some(root)
+        })
+        .max_by_key(|path| path.components().count())
+}
+
+fn worktree_list(dir: &std::path::Path) -> Option<std::process::Output> {
+    std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(dir)
+        .output()
+        .ok()
+}
+
+fn parse_worktree_list(raw: &str) -> Vec<PathBuf> {
+    raw.lines()
+        .filter_map(|line| line.strip_prefix("worktree ").map(PathBuf::from))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_worktree_list;
+
+    #[test]
+    fn parses_registered_worktree_paths_in_git_order() {
+        let paths = parse_worktree_list(
+            "worktree /projects/dmux-rs\nHEAD abc\n\nworktree /projects/dmux-rs-wt/fix\nbranch refs/heads/fix\n",
+        );
+        assert_eq!(
+            paths,
+            vec![
+                std::path::PathBuf::from("/projects/dmux-rs"),
+                std::path::PathBuf::from("/projects/dmux-rs-wt/fix"),
+            ]
+        );
+    }
 }

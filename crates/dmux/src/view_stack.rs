@@ -8,6 +8,7 @@ use dmux_core::i18n::t;
 
 use crate::hooks;
 use crate::pane_actions;
+use crate::prototype;
 use crate::render::SidebarGroup;
 use crate::sidebar::{project_click_target, ProjectAction, ProjectSelection};
 use crate::views::{
@@ -248,6 +249,28 @@ impl App {
                         "",
                         AppCmd::DuplicatePane(idx),
                     ));
+                }
+            }
+            if crate::updater::BUILD_TAG.is_empty() {
+                if let Some(worktree) = pane
+                    .worktree_path
+                    .as_deref()
+                    .and_then(|path| prototype::dmux_worktree(std::path::Path::new(path)))
+                {
+                    let active =
+                        prototype::active_worktree().is_some_and(|current| current == worktree);
+                    let (label, command) = if active {
+                        (
+                            "Unload prototype, return to default",
+                            AppCmd::UnloadPrototype,
+                        )
+                    } else {
+                        (
+                            "Load this worktree as dmux-rs",
+                            AppCmd::LoadPrototypeWorktree(worktree.to_string_lossy().into_owned()),
+                        )
+                    };
+                    items.push(MenuItem::new(label, "", command).special());
                 }
             }
             let hook_root = pane

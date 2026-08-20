@@ -17,6 +17,7 @@ mod issues_table;
 mod logs;
 mod menu;
 mod path_picker;
+mod prototype_build;
 mod settings_view;
 mod shortcuts;
 mod sounds_view;
@@ -32,6 +33,7 @@ pub use issues::IssueBrowserView;
 pub use logs::LogsView;
 pub use menu::{MenuItem, MenuView};
 pub use path_picker::PathPickerView;
+pub use prototype_build::PrototypeBuildView;
 pub use settings_view::SettingsView;
 pub use shortcuts::ShortcutsView;
 pub use sounds_view::SoundsView;
@@ -103,6 +105,10 @@ pub enum AppCmd {
     /// Ask for a project path, then open it.
     PromptAddProject,
     OpenProjectAt(String),
+    /// Build and load a dmux-rs worktree as the current renderer.
+    LoadPrototypeWorktree(String),
+    /// Return from a prototype binary to the default dmux-rs executable.
+    UnloadPrototype,
     /// Reopen a worktree and resume its agent's most recent session.
     ResumeWorktree {
         path: String,

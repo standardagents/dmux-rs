@@ -508,6 +508,10 @@ impl App {
                     .push_at(Box::new(PathPickerView::new(start)), origin);
                 self.dirty = true;
             }
+            AppCmd::LoadPrototypeWorktree(path) => {
+                self.start_prototype_build(path);
+            }
+            AppCmd::UnloadPrototype => self.unload_prototype(),
             AppCmd::OpenProjectAt(raw) => {
                 let expanded = expand_user_path(&raw);
                 if !expanded.is_dir() {

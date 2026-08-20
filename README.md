@@ -23,6 +23,26 @@ cd your-project && dmux-rs
 
 That's it. From then on:
 
+Development builds identify dmux-rs worktrees in pane menus. Right-click a
+pane from that repository and choose `Load this worktree as dmux-rs`. The
+same row lets you return to the default executable after a prototype is
+active. Selecting another dmux-rs worktree switches the running instance to
+that build.
+
+For automation, a second terminal can request a worktree directly:
+
+```bash
+dmux-rs --prototype-worktree /path/to/dmux-worktree --project /path/to/your-project
+```
+
+The command builds an untagged release binary from the worktree. The running
+controller re-execs that binary after active pane launches settle. The
+worktree build remains outside the published release updater until you start
+dmux-rs again from an installed release. An in-app progress panel contains
+Cargo's build output. Prototype builds share dependency artifacts in
+`~/.dmux/cache/prototype-target`, so later worktrees usually compile only the
+dmux crates changed by their branch.
+
 - **It stays fresh by itself**: every running head polls releases **every
   minute** and hot-swaps in place — your tmux sessions, agents, and layout
   survive the swap (the sidebar shows the current build).

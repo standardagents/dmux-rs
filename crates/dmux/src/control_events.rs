@@ -509,6 +509,7 @@ impl App {
                     self.keepalive_present = false;
                 }
             }
+            Tag::PrototypePath => self.receive_prototype_path(&reply),
         }
     }
 }

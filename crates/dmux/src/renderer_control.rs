@@ -19,6 +19,7 @@ use crate::input;
 
 pub const OWNER_OPTION: &str = "@dmux_renderer_owner";
 pub const TOKEN_OPTION: &str = "@dmux_renderer_token";
+pub const PROTOTYPE_OPTION: &str = "@dmux_prototype_executable";
 pub const OWNER_SUBSCRIPTION: &str = "dmux-renderer-owner";
 pub const OWNER_DENIED: &str = "DMUX_OWNER_DENIED";
 const PRESERVED_TOKEN_ENV: &str = "DMUX_RENDERER_TOKEN";
@@ -274,6 +275,29 @@ impl CommandContext {
             ])
             .status()?
             .success())
+    }
+
+    /// Publish a local replacement request only while this owner still holds
+    /// the session. The signal is sent by the caller after this succeeds.
+    pub fn request_prototype(&self, owner: &OwnerRecord, executable: &Path) -> io::Result<bool> {
+        let condition = format!("#{{==:#{{{}}},{}}}", TOKEN_OPTION, owner.token);
+        let body = format!(
+            "set-option -t {} {} {}",
+            dmux_cc::quote_arg(&self.session_name),
+            PROTOTYPE_OPTION,
+            dmux_cc::quote_arg(&executable.to_string_lossy()),
+        );
+        self.command()
+            .args([
+                "if-shell",
+                "-t",
+                &self.session_name,
+                "-F",
+                &condition,
+                &body,
+            ])
+            .status()
+            .map(|status| status.success())
     }
 }
 
@@ -632,6 +656,22 @@ pub fn owner_subscription_command() -> String {
     )
 }
 
+pub fn prototype_path_command(session_name: &str) -> String {
+    format!(
+        "show-options -t {} -qv {}",
+        dmux_cc::quote_arg(session_name),
+        PROTOTYPE_OPTION
+    )
+}
+
+pub fn clear_prototype_command(session_name: &str) -> String {
+    format!(
+        "set-option -u -t {} {}",
+        dmux_cc::quote_arg(session_name),
+        PROTOTYPE_OPTION
+    )
+}
+
 pub fn parse_owner_subscription(raw: &str) -> Option<Option<OwnerRecord>> {
     let (head, value) = raw.split_once(" : ")?;
     if head.split_whitespace().next()? != OWNER_SUBSCRIPTION {
@@ -804,6 +844,16 @@ mod tests {
         assert!(command.contains(TOKEN_OPTION));
         assert!(command.contains(&owner().token));
         assert!(command.contains(OWNER_DENIED));
+    }
+
+    #[test]
+    fn prototype_request_commands_target_the_session_option() {
+        let read = prototype_path_command("project session");
+        assert!(read.contains(PROTOTYPE_OPTION));
+        assert!(read.contains("project session"));
+        let clear = clear_prototype_command("project session");
+        assert!(clear.contains("set-option -u"));
+        assert!(clear.contains(PROTOTYPE_OPTION));
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //! the swap is a sub-second reattach + reseed — panes, agents, and layout
 //! all survive. Local dev builds (empty DMUX_BUILD_TAG) never self-update.
 
-use std::path::PathBuf;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const BUILD_TAG: &str = env!("DMUX_BUILD_TAG");
@@ -101,6 +102,96 @@ pub fn stage(repo: &str, tag: &str) -> Result<PathBuf, String> {
     Ok(staging)
 }
 
+/// Build an untagged release binary from a worktree for local prototyping.
+/// The empty build tag keeps the candidate outside the published updater loop.
+pub fn build_prototype(worktree: &Path) -> Result<PathBuf, String> {
+    build_prototype_with_output(worktree, |_| {})
+}
+
+/// Build a local prototype while reporting Cargo's latest status line. All
+/// worktrees share dependency artifacts, then receive their own executable so
+/// the running binary still identifies its source worktree.
+pub fn build_prototype_with_output(
+    worktree: &Path,
+    mut report: impl FnMut(String),
+) -> Result<PathBuf, String> {
+    let worktree = std::fs::canonicalize(worktree)
+        .map_err(|err| format!("prototype worktree is unavailable: {err}"))?;
+    if !worktree.is_dir() {
+        return Err(format!(
+            "prototype path is not a directory: {}",
+            worktree.display()
+        ));
+    }
+    if !worktree.join("Cargo.toml").is_file() {
+        return Err(format!(
+            "prototype worktree has no Cargo.toml: {}",
+            worktree.display()
+        ));
+    }
+    let target_dir = crate::dirs_home()
+        .join(".dmux")
+        .join("cache")
+        .join("prototype-target");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|err| format!("could not create prototype build cache: {err}"))?;
+    let mut child = std::process::Command::new("cargo")
+        .args(["build", "--release", "--bin", "dmux-rs", "--color", "never"])
+        .current_dir(&worktree)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO_INCREMENTAL", "1")
+        .env_remove("DMUX_BUILD_TAG")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("could not run cargo: {err}"))?;
+    let mut last_line = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            let line = line.trim().to_string();
+            if !line.is_empty() {
+                last_line.clone_from(&line);
+                report(line);
+            }
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|err| format!("could not wait for cargo: {err}"))?;
+    if !status.success() {
+        let detail = if last_line.is_empty() {
+            String::new()
+        } else {
+            format!(": {last_line}")
+        };
+        return Err(format!(
+            "prototype build failed in {}{detail}",
+            worktree.display()
+        ));
+    }
+    let built = target_dir.join("release/dmux-rs");
+    if !built.is_file() {
+        return Err(format!(
+            "prototype build did not produce {}",
+            built.display()
+        ));
+    }
+    let output_dir = worktree.join("target/dmux-prototype");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|err| format!("could not create prototype output directory: {err}"))?;
+    let executable = output_dir.join("dmux-rs");
+    let staged = output_dir.join("dmux-rs.next");
+    std::fs::copy(&built, &staged)
+        .map_err(|err| format!("could not stage prototype executable: {err}"))?;
+    std::fs::rename(&staged, &executable)
+        .map_err(|err| format!("could not install prototype executable: {err}"))?;
+    Ok(executable)
+}
+
 /// Swap the staged binary over the current executable. The running process
 /// keeps its (unlinked) image; the caller then re-execs the new file.
 pub fn apply(staged: &PathBuf) -> Result<PathBuf, String> {
@@ -124,6 +215,7 @@ pub fn reexec(
     exe: &PathBuf,
     renderer_token: &str,
     context: &crate::renderer_control::ReexecContext,
+    default_executable: &Path,
 ) -> String {
     use std::os::unix::process::CommandExt;
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -131,6 +223,10 @@ pub fn reexec(
     command
         .args(&args)
         .env("DMUX_JUST_UPDATED", "1")
+        .env(
+            "DMUX_PROTOTYPE_DEFAULT_EXE",
+            default_executable.to_string_lossy().as_ref(),
+        )
         .env(
             crate::renderer_control::preserved_token_env(),
             renderer_token,

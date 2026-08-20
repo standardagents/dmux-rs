@@ -22,6 +22,7 @@ mod metrics;
 mod notify;
 mod pane_actions;
 mod profiler;
+mod prototype;
 mod registry;
 mod render;
 mod renderer_control;
@@ -31,6 +32,7 @@ mod session;
 mod settings;
 mod sidebar;
 mod sounds;
+mod startup;
 mod style;
 mod tracking;
 mod util;
@@ -53,7 +55,7 @@ use clap::Parser as ClapParser;
 use dmux_cc::{Client, PaneId, Reply, ReplyRouter};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter};
 use dmux_core::i18n::t;
-use dmux_core::{encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsStore};
+use dmux_core::{encode_pane_title, DmuxConfig, PaneKind, SettingsStore};
 use dmux_host::HostTerminal;
 use dmux_ui::{ClickMap, Theme, VerticalAlign};
 use github::{IssueLoadState, SharedIssueState};
@@ -118,6 +120,9 @@ struct Cli {
     /// adoption's identity semantics. Mutates nothing.
     #[arg(long)]
     diagnose_session: bool,
+    /// Build a worktree and hand it to the running dmux-rs controller.
+    #[arg(long, value_name = "WORKTREE")]
+    prototype_worktree: Option<PathBuf>,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -157,6 +162,10 @@ enum AppMsg {
     },
     /// A newer published version exists.
     UpdateAvailable(String),
+    /// A local prototype replacement was requested by another dmux-rs process.
+    PrototypeRequested,
+    /// A worktree build started from a pane menu completed.
+    PrototypeBuildDone(Result<PathBuf, String>),
     /// AI auto-merge finished (Ok = files resolved, merge committed).
     AiMergeDone {
         branch: String,
@@ -186,10 +195,15 @@ enum Tag {
     /// Keepalive window creation round-trip (#10): the reply clears the
     /// in-flight flag and pins the window's name against automatic-rename.
     KeepaliveCreated,
+    /// Path published by an external local prototype request.
+    PrototypePath,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    if let Some(worktree) = &cli.prototype_worktree {
+        return prototype::run_command(&cli, worktree);
+    }
     if let Some(path) = &cli.replay_incident {
         let text = std::fs::read_to_string(path)?;
         match verify::replay_incident(&text) {
@@ -211,7 +225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if cli.diagnose_session {
-        let (config, project_root, session_name) = resolve_session(&cli)?;
+        let (config, project_root, session_name) = startup::resolve_session(&cli)?;
         let code = diagnose::run(
             config.as_ref(),
             &project_root,
@@ -221,7 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         std::process::exit(code);
     }
-    init_logging(&cli)?;
+    startup::init_logging(&cli)?;
 
     if std::env::var_os("TMUX").is_some() {
         eprintln!("dmux-rs must run OUTSIDE tmux (it renders tmux panes itself).");
@@ -229,7 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
 
-    let (config, project_root, session_name) = resolve_session(&cli)?;
+    let (config, project_root, session_name) = startup::resolve_session(&cli)?;
     let tmux_base = |cli: &Cli| {
         let mut cmd = std::process::Command::new(&cli.tmux);
         if let Some(socket) = &cli.socket {
@@ -287,60 +301,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_name,
         session_created,
     ))
-}
-
-fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let path = cli.log_file.clone().unwrap_or_else(|| {
-        let dir = dirs_home().join(".dmux").join("logs");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("dmux-rs.log")
-    });
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(file)
-        .with_ansi(false)
-        .init();
-    Ok(())
-}
-
-/// Resolve (config, project root, session name). Precedence for the root:
-/// an existing `.dmux/dmux.config.json` found by walking up (its
-/// `projectRoot` is authoritative — matches TS dmux), else the main git
-/// worktree root, else the starting directory itself.
-fn resolve_session(
-    cli: &Cli,
-) -> Result<(Option<DmuxConfig>, PathBuf, String), Box<dyn std::error::Error>> {
-    let start = cli
-        .project
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let mut dir = start.as_path();
-    let config = loop {
-        let candidate = DmuxConfig::default_path(dir);
-        if candidate.exists() {
-            break Some(DmuxConfig::load(&candidate)?);
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => break None,
-        }
-    };
-    let root = match &config {
-        Some(cfg) => PathBuf::from(&cfg.project_root),
-        None => git::git_main_worktree_root(&start).unwrap_or(start),
-    };
-    let session = cli
-        .session
-        .clone()
-        .unwrap_or_else(|| session_name_for_root(&root.to_string_lossy()));
-    Ok((config, root, session))
 }
 
 struct App {
@@ -415,6 +375,8 @@ struct App {
     /// is in flight (#53) — re-exec at the wrong moment strands the route
     /// as an idle shell. (tag, staged path, first deferred at).
     pending_update: Option<(String, PathBuf, Instant)>,
+    /// Local prototype binary held until launch state reaches a safe boundary.
+    pending_prototype: Option<(PathBuf, Instant)>,
     renderer: renderer_control::RendererControl,
     startup_legacy_checked: bool,
     startup_legacy_alive: bool,
@@ -620,6 +582,7 @@ async fn run(
         reexec_after: None,
         want_exit: false,
         pending_update: None,
+        pending_prototype: None,
         renderer,
         startup_legacy_checked: false,
         startup_legacy_alive: false,
@@ -671,6 +634,7 @@ async fn run(
             .and_then(dmux_infer::Target::from_value);
         dmux_core::i18n::set_locale(s.get_str("language").unwrap_or("en"));
     }
+    prototype::spawn_signal_listener(app.app_tx.clone())?;
     // Update check (daily, off-loop, best-effort).
     {
         let tx = app.app_tx.clone();
@@ -917,7 +881,7 @@ async fn run(
     if let Some(exe) = reexec {
         // Only returns on error; on success the new build takes over this
         // terminal and reattaches to the same tmux session.
-        let err = updater::reexec(&exe, &preserved_token, &reexec_context);
+        let err = prototype::reexec(&exe, &preserved_token, &reexec_context);
         app.renderer.graceful_release();
         eprintln!("dmux-rs self-update re-exec failed: {err}");
     }
@@ -1316,6 +1280,8 @@ impl App {
                 self.update_available = Some(version.clone());
                 self.toast(format!("Update available: dmux-rs {version}"));
             }
+            AppMsg::PrototypeRequested => self.request_prototype_path(),
+            AppMsg::PrototypeBuildDone(result) => self.handle_prototype_build_done(result),
             AppMsg::ConflictsReady { branch, files } => match files {
                 Ok(files) => {
                     let Some(def) = self.default_agent_for_conflicts() else {
@@ -2660,6 +2626,7 @@ impl App {
         // unchanged size.
         self.handle_resize(dmux_host::term_size());
         self.try_apply_pending_update();
+        self.try_apply_pending_prototype();
         // Settle classification: quiet panes get a heuristic verdict
         // (working spinner text / waiting on the user / idle).
         let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
