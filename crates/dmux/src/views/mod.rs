@@ -325,12 +325,16 @@ pub mod vkeys {
             || (matches!(k.key, KeyCode::Char('j')) && k.modifiers.is_empty())
     }
 
+    /// Plain Left only: a modified arrow (Option/Command word and line
+    /// navigation, #96) must fall through to `as_input_key`, never trigger
+    /// view navigation like the picker's go-to-parent.
     pub fn is_left(k: &KeyEvent) -> bool {
-        matches!(k.key, KeyCode::LeftArrow)
+        matches!(k.key, KeyCode::LeftArrow) && k.modifiers.is_empty()
     }
 
+    /// Plain Right only; see `is_left`.
     pub fn is_right(k: &KeyEvent) -> bool {
-        matches!(k.key, KeyCode::RightArrow)
+        matches!(k.key, KeyCode::RightArrow) && k.modifiers.is_empty()
     }
 
     pub fn is_tab(k: &KeyEvent) -> bool {
@@ -343,16 +347,24 @@ pub mod vkeys {
 
     /// Map a key event to a text-input edit, if it is one. Arrow up/down and
     /// friends are intentionally NOT input keys so lists can keep them.
+    /// The one translation from host key events to text edits (#96):
+    /// every view with a TextInput routes through here, so macOS word
+    /// (Option+arrow) and line (Command+arrow) navigation work everywhere.
     pub fn as_input_key(k: &KeyEvent) -> Option<InputKey> {
         let ctrl = k.modifiers.contains(Modifiers::CTRL);
         let alt = k.modifiers.contains(Modifiers::ALT);
+        let cmd = k.modifiers.contains(Modifiers::SUPER);
         Some(match (&k.key, ctrl, alt) {
             (KeyCode::Char('a'), true, _) => InputKey::Home,
             (KeyCode::Char('e'), true, _) => InputKey::End,
             (KeyCode::Char('u'), true, _) => InputKey::KillToStart,
             (KeyCode::Char('k'), true, _) => InputKey::KillToEnd,
             (KeyCode::Char('w'), true, _) => InputKey::DeleteWordBack,
-            (KeyCode::Char(c), false, false) => InputKey::Char(*c),
+            (KeyCode::Char(c), false, false) if !cmd => InputKey::Char(*c),
+            (KeyCode::LeftArrow, false, true) => InputKey::WordLeft,
+            (KeyCode::RightArrow, false, true) => InputKey::WordRight,
+            (KeyCode::LeftArrow, false, false) if cmd => InputKey::Home,
+            (KeyCode::RightArrow, false, false) if cmd => InputKey::End,
             (KeyCode::LeftArrow, false, false) => InputKey::Left,
             (KeyCode::RightArrow, false, false) => InputKey::Right,
             (KeyCode::Home, ..) => InputKey::Home,
@@ -370,6 +382,48 @@ pub mod vkeys {
 #[cfg(test)]
 mod hover_tests {
     use super::*;
+
+    #[test]
+    fn shared_input_path_translates_modified_navigation_once() {
+        use dmux_host::{KeyCode, KeyEvent, Modifiers};
+        use dmux_ui::InputKey;
+        let key = |code, mods| KeyEvent {
+            key: code,
+            modifiers: mods,
+        };
+        // Option+arrows → word movement; Command+arrows → line ends.
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::LeftArrow, Modifiers::ALT)),
+            Some(InputKey::WordLeft)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::RightArrow, Modifiers::ALT)),
+            Some(InputKey::WordRight)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::LeftArrow, Modifiers::SUPER)),
+            Some(InputKey::Home)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::RightArrow, Modifiers::SUPER)),
+            Some(InputKey::End)
+        ));
+        // Plain and Control behavior is unchanged.
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::LeftArrow, Modifiers::NONE)),
+            Some(InputKey::Left)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::Char('a'), Modifiers::CTRL)),
+            Some(InputKey::Home)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::Char('w'), Modifiers::CTRL)),
+            Some(InputKey::DeleteWordBack)
+        ));
+        // Command+char is a chord, not text.
+        assert!(vkeys::as_input_key(&key(KeyCode::Char('c'), Modifiers::SUPER)).is_none());
+    }
 
     #[test]
     fn overlay_hover_visually_overrides_keyboard_selection() {

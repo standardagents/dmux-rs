@@ -114,3 +114,30 @@ impl View for InputView {
         ViewResult::Stay
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmux_host::{KeyCode, Modifiers};
+
+    fn key(code: KeyCode, mods: Modifiers) -> KeyEvent {
+        KeyEvent {
+            key: code,
+            modifiers: mods,
+        }
+    }
+
+    #[test]
+    fn rename_pane_receives_shared_word_and_line_navigation() {
+        // The Rename Pane field routes every key through the shared
+        // translation (#96): Option+Left lands at a word start, so a typed
+        // character inserts there; Command+Right returns to the end.
+        let mut v = InputView::new("Rename", "alpha beta", "", InputPurpose::RenamePane(0));
+        v.on_key(&key(KeyCode::LeftArrow, Modifiers::ALT));
+        v.on_key(&key(KeyCode::Char('X'), Modifiers::NONE));
+        assert_eq!(v.input.value, "alpha Xbeta");
+        v.on_key(&key(KeyCode::RightArrow, Modifiers::SUPER));
+        v.on_key(&key(KeyCode::Char('!'), Modifiers::NONE));
+        assert_eq!(v.input.value, "alpha Xbeta!");
+    }
+}

@@ -419,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn picker_filter_receives_shared_word_navigation() {
+        // Second text-input consumer (#96): the picker's filter field
+        // routes through the same translation as Rename Pane.
+        use dmux_host::{KeyCode, KeyEvent, Modifiers};
+        let key = |code, mods| KeyEvent {
+            key: code,
+            modifiers: mods,
+        };
+        let mut v = PathPickerView::new(std::env::temp_dir());
+        for c in "some words".chars() {
+            v.on_key(&key(KeyCode::Char(c), Modifiers::NONE));
+        }
+        v.on_key(&key(KeyCode::LeftArrow, Modifiers::ALT));
+        v.on_key(&key(KeyCode::Char('X'), Modifiers::NONE));
+        assert_eq!(v.input.value, "some Xwords");
+        v.on_key(&key(KeyCode::RightArrow, Modifiers::SUPER));
+        v.on_key(&key(KeyCode::Char('!'), Modifiers::NONE));
+        assert_eq!(v.input.value, "some Xwords!");
+    }
+
+    #[test]
     fn dirs_sort_first_case_insensitively() {
         let mut v = vec![
             entry("zeta.txt", false),

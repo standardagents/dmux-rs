@@ -34,6 +34,10 @@ pub enum InputKey {
     Char(char),
     Left,
     Right,
+    /// Option+Left: start of the previous word.
+    WordLeft,
+    /// Option+Right: end of the next word.
+    WordRight,
     Home,
     End,
     Backspace,
@@ -41,6 +45,57 @@ pub enum InputKey {
     DeleteWordBack,
     KillToEnd,
     KillToStart,
+}
+
+/// Word characters for Option-arrow navigation: Unicode alphanumerics.
+/// Punctuation and whitespace are separators, matching macOS fields.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric()
+}
+
+/// Byte offset of the previous word's start (macOS Option+Left).
+fn word_left(s: &str, cursor: usize) -> usize {
+    let mut pos = cursor;
+    let mut it = s[..cursor].char_indices().rev().peekable();
+    while let Some(&(i, c)) = it.peek() {
+        if is_word_char(c) {
+            break;
+        }
+        pos = i;
+        it.next();
+    }
+    while let Some(&(i, c)) = it.peek() {
+        if !is_word_char(c) {
+            break;
+        }
+        pos = i;
+        it.next();
+    }
+    pos
+}
+
+/// Byte offset just past the next word's end (macOS Option+Right).
+fn word_right(s: &str, cursor: usize) -> usize {
+    let mut pos = cursor;
+    let mut it = s[cursor..]
+        .char_indices()
+        .map(|(i, c)| (cursor + i, c))
+        .peekable();
+    while let Some(&(i, c)) = it.peek() {
+        if is_word_char(c) {
+            break;
+        }
+        pos = i + c.len_utf8();
+        it.next();
+    }
+    while let Some(&(i, c)) = it.peek() {
+        if !is_word_char(c) {
+            break;
+        }
+        pos = i + c.len_utf8();
+        it.next();
+    }
+    pos
 }
 
 impl TextInput {
@@ -79,6 +134,8 @@ impl TextInput {
                     self.cursor += c.len_utf8();
                 }
             }
+            InputKey::WordLeft => self.cursor = word_left(&self.value, self.cursor),
+            InputKey::WordRight => self.cursor = word_right(&self.value, self.cursor),
             InputKey::Home => self.cursor = 0,
             InputKey::End => self.cursor = self.value.len(),
             InputKey::Backspace => {
@@ -343,6 +400,37 @@ mod tests {
         t.handle(InputKey::Right);
         t.handle(InputKey::Backspace);
         assert_eq!(t.value, "hllo");
+    }
+
+    #[test]
+    fn option_arrows_move_by_word_across_space_punctuation_and_unicode() {
+        // Whitespace, punctuation separators, and multibyte words (#96).
+        let mut t = TextInput::with_value("héllo wörld--foo_ 日本語!");
+        // Option+Left from the end: start of the last word.
+        t.handle(InputKey::WordLeft);
+        assert_eq!(&t.value[t.cursor..], "日本語!");
+        // Again: "foo_" — '_' is punctuation, so the word is "foo".
+        t.handle(InputKey::WordLeft);
+        assert_eq!(&t.value[t.cursor..], "foo_ 日本語!");
+        t.handle(InputKey::WordLeft);
+        assert_eq!(&t.value[t.cursor..], "wörld--foo_ 日本語!");
+        t.handle(InputKey::WordLeft);
+        assert_eq!(t.cursor, 0);
+        t.handle(InputKey::WordLeft);
+        assert_eq!(t.cursor, 0, "home is a fixed point");
+        // Option+Right: END of each successive word.
+        t.handle(InputKey::WordRight);
+        assert_eq!(&t.value[..t.cursor], "héllo");
+        t.handle(InputKey::WordRight);
+        assert_eq!(&t.value[..t.cursor], "héllo wörld");
+        t.handle(InputKey::WordRight);
+        assert_eq!(&t.value[..t.cursor], "héllo wörld--foo");
+        t.handle(InputKey::WordRight);
+        assert_eq!(&t.value[..t.cursor], "héllo wörld--foo_ 日本語");
+        t.handle(InputKey::WordRight);
+        assert_eq!(t.cursor, t.value.len());
+        t.handle(InputKey::WordRight);
+        assert_eq!(t.cursor, t.value.len(), "end is a fixed point");
     }
 
     #[test]
