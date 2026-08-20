@@ -33,7 +33,7 @@ SHA=$(git rev-parse --short HEAD)
 # hasn't blessed (unattended releases have no human eyeball).
 echo "[$VERSION] validating…"
 bash scripts/check.sh
-cargo build --quiet --bin dmux-rs --bin griddump
+# fidelity.sh builds its own binaries (#59); no separate build needed here.
 bash scripts/fidelity.sh >/dev/null 2>&1 || { echo "fidelity harness FAILED — no release"; exit 1; }
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]'); [ "$OS" = "darwin" ] && OS=macos

@@ -14,7 +14,11 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 BIN=$PWD/target/debug/dmux-rs
 GRID=$PWD/target/debug/griddump
-[ -x "$BIN" ] && [ -x "$GRID" ] || { echo "build first: cargo build --bin dmux-rs --bin griddump"; exit 1; }
+# The harness owns binary freshness (#59): stale binaries silently validate
+# old code, and a clean checkout should just work. Build failures stop the
+# run before any tmux setup.
+cargo build --quiet --bin dmux-rs --bin griddump || { echo "fidelity: cargo build FAILED"; exit 1; }
+[ -x "$BIN" ] && [ -x "$GRID" ] || { echo "fidelity: binaries missing after build"; exit 1; }
 
 # Per-run socket names (#52): several agents run this harness concurrently
 # on one machine; shared names made runs kill each other's tmux servers.
