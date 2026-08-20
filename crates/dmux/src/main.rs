@@ -12,6 +12,7 @@ mod git;
 mod github;
 mod hooks;
 mod hover;
+mod hud;
 mod input;
 mod keys;
 mod layout;
@@ -429,6 +430,10 @@ struct App {
     tooltip: Option<Tooltip>,
     /// Sidebar drag-reorder gesture state (#26).
     sidebar_drag: Option<SidebarDrag>,
+    /// Dragged perf-HUD origin (#103); None = default anchor.
+    hud_pos: Option<(u16, u16)>,
+    /// Active HUD drag: pointer grab offset within the card.
+    hud_drag: Option<(u16, u16)>,
     /// Server octal-escapes command-reply payloads (probed at attach, #19).
     /// None until the probe reply lands; no decoding happens before that,
     /// and the probe is the first tagged command so nothing races it.
@@ -630,6 +635,8 @@ async fn run(
         pending_restore: Vec::new(),
         tooltip: None,
         sidebar_drag: None,
+        hud_pos: None,
+        hud_drag: None,
         replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
@@ -2373,6 +2380,10 @@ impl App {
                 _ => {}
             }
         }
+        // A HUD drag captures the mouse until release (#103).
+        if let Some(handled) = self.hud_drag_motion(kind, is_press, col, row) {
+            return handled;
+        }
         // A sidebar reorder drag captures the mouse until release (#26).
         if let Some(drag) = self.sidebar_drag {
             match kind {
@@ -2538,6 +2549,9 @@ impl App {
                 }
             }
             MouseKind::LeftHeld if is_press => match target {
+                Some(ClickTarget::HudClose) | Some(ClickTarget::HudTitle) => {
+                    return self.hud_press(target, col, row);
+                }
                 Some(ClickTarget::SidebarRow(i)) => {
                     // Click selects (sidebar keeps the keyboard);
                     // double-click opens the row-anchored pane flyout (#14)
@@ -3392,6 +3406,7 @@ impl App {
             selected: self.selected,
             project_name: &project_name,
             hud: self.hud.then_some(&self.metrics),
+            hud_pos: self.hud_pos,
             status_line: &footer_text,
             theme: &self.theme,
             anim: self.anim,

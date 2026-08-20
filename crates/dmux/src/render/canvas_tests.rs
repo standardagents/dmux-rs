@@ -41,6 +41,7 @@ fn compose_scene(cols: u16, rows: u16, panes: &[LogicalPane]) -> (CellBuffer, Th
         selected: 0,
         project_name: "dmux-rs",
         hud: None,
+        hud_pos: None,
         status_line: "",
         theme: &theme,
         anim: 0,

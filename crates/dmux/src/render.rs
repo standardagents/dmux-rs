@@ -27,6 +27,8 @@ pub struct Scene<'a> {
     #[allow(dead_code)]
     pub project_name: &'a str,
     pub hud: Option<&'a Metrics>,
+    /// Dragged HUD origin (#103); None = default top-right anchor.
+    pub hud_pos: Option<(u16, u16)>,
     pub status_line: &'a str,
     pub theme: &'a Theme,
     pub anim: u64,
@@ -128,7 +130,7 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         }
     }
     if let Some(metrics) = scene.hud {
-        draw_hud(buf, metrics);
+        draw_hud(buf, metrics, scene.hud_pos, clicks);
     }
 }
 
@@ -317,12 +319,39 @@ fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body
     );
 }
 
-fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {
+/// Clamp a HUD origin so the whole card stays inside `area` (#103): the
+/// overlay must remain recoverable at every viewport size.
+pub(crate) fn hud_clamp(pos: (u16, u16), size: (u16, u16), area: Rect) -> (u16, u16) {
+    (
+        pos.0.min(area.w.saturating_sub(size.0)),
+        pos.1.min(area.h.saturating_sub(size.1)),
+    )
+}
+
+/// The HUD's on-screen rect: the dragged position when one is stored
+/// (clamped), else the default top-right anchor. Shared by the renderer
+/// and the drag logic so grab offsets can never drift from the drawing.
+pub(crate) fn hud_layout(area: Rect, metrics: &Metrics, pos: Option<(u16, u16)>) -> Rect {
     let lines = metrics.hud_lines();
     let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 2;
     let h = lines.len() as u16 + 1;
+    let default = (
+        area.w.saturating_sub(w + 1),
+        1.min(area.h.saturating_sub(h)),
+    );
+    let (x, y) = hud_clamp(pos.unwrap_or(default), (w, h), area);
+    Rect::new(x, y, w, h).intersect(&area)
+}
+
+fn draw_hud(
+    buf: &mut CellBuffer,
+    metrics: &Metrics,
+    pos: Option<(u16, u16)>,
+    clicks: &mut ClickMap<ClickTarget>,
+) {
+    let lines = metrics.hud_lines();
     let area = buf.area();
-    let rect = Rect::new(area.w.saturating_sub(w + 1), 1, w, h).intersect(&area);
+    let rect = hud_layout(area, metrics, pos);
     buf.fill(
         rect,
         &Cell {
@@ -339,6 +368,22 @@ fn draw_hud(buf: &mut CellBuffer, metrics: &Metrics) {
         AttrFlags::BOLD,
         rect,
     );
+    // Title row is the drag handle; the ✕ dismisses (#103).
+    buf.draw_text(
+        rect.right().saturating_sub(2),
+        rect.y,
+        "✕",
+        Color::Indexed(203),
+        Color::Indexed(17),
+        AttrFlags::BOLD,
+        rect,
+    );
+    let close = Rect::new(rect.right().saturating_sub(2), rect.y, 2, 1);
+    clicks.add(
+        Rect::new(rect.x, rect.y, rect.w.saturating_sub(2), 1),
+        ClickTarget::HudTitle,
+    );
+    clicks.add(close, ClickTarget::HudClose);
     for (i, line) in lines.iter().enumerate() {
         buf.draw_text(
             rect.x + 1,
@@ -366,6 +411,8 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 mod action_tests;
 #[cfg(test)]
 mod canvas_tests;
+#[cfg(test)]
+mod hud_tests;
 #[cfg(test)]
 mod sidebar_preview;
 #[cfg(test)]

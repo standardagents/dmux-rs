@@ -148,6 +148,7 @@ fn render_case(case: PreviewCase) -> CellBuffer {
         selected: 0,
         project_name: "dmux-rs",
         hud: case.diagnostics.then_some(&metrics),
+        hud_pos: None,
         status_line: case.status,
         theme: &theme,
         anim: 0,

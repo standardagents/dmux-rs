@@ -409,6 +409,7 @@ mod tests {
             selected: 0,
             project_name: "p",
             hud: None,
+            hud_pos: None,
             status_line: "",
             theme,
             anim: 0,
