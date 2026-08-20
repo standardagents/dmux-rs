@@ -1,3 +1,16 @@
+//! The issue-specific row contract for the GitHub issue browser.
+//!
+//! Ownership headings provide assignment context, and repository headings
+//! provide repository context. Each table row contains a selection marker,
+//! issue number, title, GitHub labels, and update date. Labels retain GitHub's
+//! source order and use comma-separated display; an issue without labels leaves
+//! that cell empty.
+//!
+//! Issue number and title remain visible at every supported width. The update
+//! date appears when space permits, followed by labels at wider sizes. The
+//! title receives the remaining width. Long display text is clipped with an
+//! ellipsis inside its column, and update timestamps use their date prefix.
+
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
 use dmux_ui::Theme;
 
@@ -212,8 +225,14 @@ mod tests {
         })
     }
 
+    fn cell_text(buf: &CellBuffer, y: u16, column: Column) -> String {
+        (column.x..column.x + column.width)
+            .map(|x| buf.get(x, y).ch)
+            .collect()
+    }
+
     #[test]
-    fn wide_rows_align_metadata_under_shared_headers() {
+    fn wide_rows_keep_assignment_in_group_headings_and_align_issue_metadata() {
         let theme = Theme::default();
         let mut buf = CellBuffer::new(96, 3);
         let table = IssueTable::new(96);
@@ -247,6 +266,40 @@ mod tests {
         }
         assert!(!text(&buf, 0).contains("ASSIGNEE"));
         assert!(!text(&buf, 1).contains("@andrew"));
+    }
+
+    #[test]
+    fn label_column_renders_empty_and_multiple_github_labels() {
+        let theme = Theme::default();
+        let mut buf = CellBuffer::new(96, 2);
+        let table = IssueTable::new(96);
+        let labels = table.labels.expect("wide table includes labels");
+        let mut unlabeled = issue(1, "No labels", "unused");
+        unlabeled.labels.clear();
+        let mut labeled = issue(2, "Several labels", "bug");
+        labeled.labels.push("urgent".into());
+
+        table.draw_row(
+            &mut buf,
+            Rect::new(0, 0, 96, 1),
+            &unlabeled,
+            &theme,
+            theme.bg_panel,
+            true,
+            false,
+        );
+        table.draw_row(
+            &mut buf,
+            Rect::new(0, 1, 96, 1),
+            &labeled,
+            &theme,
+            theme.bg_panel,
+            false,
+            false,
+        );
+
+        assert!(cell_text(&buf, 0, labels).trim().is_empty());
+        assert_eq!(cell_text(&buf, 1, labels).trim(), "bug, urgent");
     }
 
     #[test]

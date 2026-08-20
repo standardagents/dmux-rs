@@ -1,6 +1,11 @@
 //! The per-project GitHub issue browser.
 //!
-//! Issue retrieval is owned by the application.  This view only owns the
+//! The rendered list has three context levels. Ownership group headings carry
+//! assignment context, repository headings identify each source repository,
+//! and issue rows carry issue-specific fields. [`IssueTable`] documents the
+//! responsive row and truncation contract.
+//!
+//! Issue retrieval is owned by the application. This view only owns the
 //! transient selection and turns user actions into commands for the app loop.
 
 use std::collections::BTreeSet;
