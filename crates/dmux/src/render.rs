@@ -3,6 +3,8 @@
 //! Every interactive region is registered in the frame's `ClickMap` as it is
 //! drawn — whatever you see is what you can click.
 
+mod footer;
+
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
 use dmux_ui::{spinner_frame, ClickMap, Theme};
 
@@ -440,131 +442,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         }
     }
 
-    // Footer utility block (#40): a full-width divider separates the pane
-    // list from three global utilities — project creation, settings, and
-    // shortcuts. Agent/terminal creation lives in the per-project action
-    // rows, never here. Skipped entirely on very short sidebars so rows
-    // and metadata keep priority.
-    if area.h >= 10 {
-        let divider_row = area.bottom().saturating_sub(4);
-        let dash: String = "─".repeat(area.w as usize);
-        buf.draw_text(
-            area.x,
-            divider_row,
-            &dash,
-            t.border,
-            sb_bg,
-            AttrFlags::empty(),
-            area,
-        );
-
-        let utility_row = area.bottom().saturating_sub(3);
-        let project_target = ClickTarget::SidebarNewProject;
-        let px = draw_sidebar_action(
-            buf,
-            area.x + 1,
-            utility_row,
-            "+ project",
-            scene.hovered == Some(project_target),
-            t.accent,
-            t.accent,
-            sb_bg,
-            t,
-            area,
-        );
-        clicks.add(
-            Rect::new(area.x + 1, utility_row, px - area.x - 1, 1),
-            project_target,
-        );
-        let settings_target = ClickTarget::SidebarSettings;
-        let sx = draw_sidebar_action(
-            buf,
-            px + 2,
-            utility_row,
-            "⚙ settings",
-            scene.hovered == Some(settings_target),
-            t.text_dim,
-            t.accent,
-            sb_bg,
-            t,
-            area,
-        );
-        clicks.add(
-            Rect::new(px + 2, utility_row, sx - px - 2, 1),
-            settings_target,
-        );
-        let help_target = ClickTarget::SidebarHelp;
-        let hx = draw_sidebar_action(
-            buf,
-            sx + 2,
-            utility_row,
-            "? shortcuts",
-            scene.hovered == Some(help_target),
-            t.text_dim,
-            t.accent,
-            sb_bg,
-            t,
-            area,
-        );
-        clicks.add(Rect::new(sx + 2, utility_row, hx - sx - 2, 1), help_target);
-    }
-
-    // Build + auto-filed issues (first-party diagnostics ring).
-    let ver_row = area.bottom().saturating_sub(2);
-    let vx = buf.draw_text(
-        area.x + 1,
-        ver_row,
-        scene.version,
-        t.text_faint,
-        sb_bg,
-        AttrFlags::empty(),
-        area,
-    );
-    let (total, fresh) = scene.issues;
-    if total > 0 {
-        let label = if fresh > 0 {
-            format!(" · 🐛 {total} ({fresh} new)")
-        } else {
-            format!(" · 🐛 {total}")
-        };
-        let color = if fresh > 0 { t.warn } else { t.text_faint };
-        let target = ClickTarget::SidebarIssues;
-        let ix = draw_sidebar_action(
-            buf,
-            vx,
-            ver_row,
-            &label,
-            scene.hovered == Some(target),
-            color,
-            t.accent,
-            sb_bg,
-            t,
-            area,
-        );
-        clicks.add(Rect::new(vx, ver_row, ix.saturating_sub(vx), 1), target);
-    }
-
-    // Footer: leader hint or status.
-    let footer_row = area.bottom().saturating_sub(1);
-    let footer = if scene.leader_armed {
-        crate::input::LEADER_HINT
-    } else {
-        scene.status_line
-    };
-    let footer_fg = if scene.leader_armed {
-        t.warn
-    } else {
-        t.text_faint
-    };
-    buf.draw_text(
-        area.x,
-        footer_row,
-        &truncate(footer, area.w as usize),
-        footer_fg,
-        sb_bg,
-        AttrFlags::empty(),
-        area,
-    );
+    footer::draw(buf, scene, clicks, area, sb_bg);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -854,66 +732,6 @@ mod tests {
         }
     }
 
-    fn buffer_text(buf: &CellBuffer, w: u16, h: u16) -> String {
-        let mut out = String::new();
-        for row in 0..h {
-            for col in 0..w {
-                out.push(buf.get(col, row).ch);
-            }
-            out.push('\n');
-        }
-        out
-    }
-
-    #[test]
-    fn footer_holds_three_utilities_only() {
-        // #40: New Project, Settings, Shortcuts — never agent/terminal —
-        // above a full-width divider, with live click targets.
-        let theme = Theme::named("violet");
-        let layout = Layout {
-            sidebar: Rect::new(0, 0, 40, 30),
-            ..Default::default()
-        };
-        let mut buf = CellBuffer::new(40, 30);
-        let mut clicks = ClickMap::new();
-        draw_sidebar(&mut buf, &footer_scene(&layout, &[], &theme), &mut clicks);
-        let text = buffer_text(&buf, 40, 30);
-        assert!(text.contains("+ project"));
-        assert!(text.contains("⚙ settings"));
-        assert!(text.contains("? shortcuts"));
-        assert!(!text.contains("+ agent"), "global agent link removed");
-        assert!(!text.contains("+ terminal"), "global terminal link removed");
-        // Divider row above the utilities.
-        assert!(text.lines().nth(26).unwrap_or("").starts_with("────"));
-        // Click targets resolve on the utility row.
-        assert!(matches!(
-            clicks.hit(2, 27),
-            Some(ClickTarget::SidebarNewProject)
-        ));
-        assert!(matches!(
-            clicks.hit(13, 27),
-            Some(ClickTarget::SidebarSettings)
-        ));
-        assert!(matches!(clicks.hit(25, 27), Some(ClickTarget::SidebarHelp)));
-    }
-
-    #[test]
-    fn footer_utilities_skip_very_short_sidebars() {
-        // #40: below the height budget the utility block yields to rows and
-        // metadata instead of overlapping them.
-        let theme = Theme::named("violet");
-        let layout = Layout {
-            sidebar: Rect::new(0, 0, 40, 8),
-            ..Default::default()
-        };
-        let mut buf = CellBuffer::new(40, 8);
-        let mut clicks = ClickMap::new();
-        draw_sidebar(&mut buf, &footer_scene(&layout, &[], &theme), &mut clicks);
-        let text = buffer_text(&buf, 40, 8);
-        assert!(!text.contains("+ project"));
-        assert!(!text.contains("⚙ settings"));
-    }
-
     #[test]
     fn hover_highlights_exact_sidebar_actions() {
         let theme = Theme::named("violet");
@@ -966,8 +784,8 @@ mod tests {
         clicks.clear();
         draw_sidebar(&mut footer, &scene, &mut clicks);
         let settings_x = (0..40)
-            .find(|x| clicks.hit(*x, 17) == Some(&ClickTarget::SidebarSettings))
+            .find(|x| clicks.hit(*x, 16) == Some(&ClickTarget::SidebarSettings))
             .unwrap();
-        assert_eq!(footer.get(settings_x, 17).bg, theme.bg_selected);
+        assert_eq!(footer.get(settings_x, 16).bg, theme.bg_selected);
     }
 }
