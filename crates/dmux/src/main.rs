@@ -25,6 +25,7 @@ mod render;
 mod report;
 mod scheduler;
 mod session;
+mod settings;
 mod sidebar;
 mod sounds;
 mod style;
@@ -49,9 +50,7 @@ use clap::Parser as ClapParser;
 use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter};
 use dmux_core::i18n::t;
-use dmux_core::{
-    encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsScope, SettingsStore,
-};
+use dmux_core::{encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsStore};
 use dmux_host::{HostTerminal, InputEvent};
 use dmux_ui::{ClickMap, Theme, VerticalAlign};
 use github::{IssueLoadState, SharedIssueState};
@@ -482,6 +481,7 @@ async fn run(
         &dirs_home(),
         Some(&project_root),
     )));
+    let hud_visible = cli.hud || hud::configured_visible(&settings.lock().unwrap());
     let installed_agents = agents::detect_installed();
     let host = HostTerminal::setup()?;
     let size = host.size();
@@ -584,9 +584,9 @@ async fn run(
         back: CellBuffer::new(size.0, size.1),
         emitter: Emitter::new(),
         metrics: metrics::Metrics::new(),
-        hud: cli.hud,
+        hud: hud_visible,
         size,
-        layout: layout::Layout::default(),
+        layout: layout::compute(size.0, size.1, 0),
         dirty: true,
         force_full: true,
         frame_clock: scheduler::FrameClock::new(Instant::now()),
@@ -2681,9 +2681,7 @@ impl App {
                 self.dirty = true;
             }
             Routed::ToggleHud => {
-                self.hud = !self.hud;
-                self.force_full = true;
-                self.dirty = true;
+                self.set_hud_visibility(!self.hud);
             }
             Routed::FocusNext => return self.focus_step(1),
             Routed::FocusPrev => return self.focus_step(-1),
@@ -2736,43 +2734,6 @@ impl App {
         let cur = visible.iter().position(|&i| i == self.focused).unwrap_or(0) as i32;
         let next = visible[(cur + dir).rem_euclid(visible.len() as i32) as usize];
         self.execute_cmd(AppCmd::FocusPane(next))
-    }
-
-    fn set_setting(&mut self, key: &str, value: serde_json::Value, scope: SettingsScope) {
-        {
-            let mut s = self.settings.lock().unwrap();
-            let unset = value.as_str().map(|v| v.is_empty()).unwrap_or(false)
-                && matches!(key, "baseBranch");
-            if unset {
-                s.unset(key, scope);
-            } else {
-                s.set(key, value, scope);
-            }
-            if let Err(err) = s.save(scope) {
-                tracing::warn!(%err, key, "settings save failed");
-            }
-        }
-        match key {
-            "colorTheme" => {
-                let name = {
-                    let s = self.settings.lock().unwrap();
-                    s.get_str("colorTheme").unwrap_or("violet").to_string()
-                };
-                self.theme = Theme::named(&name);
-                self.force_full = true;
-            }
-            "minPaneWidth" | "maxPaneWidth" => self.relayout(),
-            "language" => {
-                let lang = {
-                    let s = self.settings.lock().unwrap();
-                    s.get_str("language").unwrap_or("en").to_string()
-                };
-                dmux_core::i18n::set_locale(&lang);
-                self.force_full = true;
-            }
-            _ => {}
-        }
-        self.dirty = true;
     }
 
     fn rename_pane(&mut self, idx: usize, name: String) {

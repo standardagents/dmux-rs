@@ -340,6 +340,15 @@ mod tests {
             ),
             Routed::OpenNewAgent
         );
+        assert_eq!(
+            route_key(
+                &key(KeyCode::Char('y'), Modifiers::NONE),
+                InputModes::default(),
+                true,
+                &km()
+            ),
+            Routed::ToggleHud
+        );
         // Double leader = literal Ctrl+b to the pane.
         assert_eq!(
             route_key(

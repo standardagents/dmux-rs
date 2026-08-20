@@ -12,6 +12,8 @@ use super::{vkeys, AppCmd, ClickTarget, InputPurpose, InputView, View, ViewCtx, 
 
 enum Kind {
     Bool,
+    /// Application state that is stored globally in every menu scope.
+    GlobalBool,
     Select(Vec<(String, String)>),
     Number {
         min: i64,
@@ -26,6 +28,32 @@ struct Def {
     key: &'static str,
     label: &'static str,
     kind: Kind,
+}
+
+impl Def {
+    fn value<'a>(&self, store: &'a SettingsStore) -> Option<&'a Value> {
+        if matches!(&self.kind, Kind::GlobalBool) {
+            store.get_global(self.key)
+        } else {
+            store.get(self.key)
+        }
+    }
+
+    fn write_scope(&self, selected: SettingsScope) -> SettingsScope {
+        if matches!(&self.kind, Kind::GlobalBool) {
+            SettingsScope::Global
+        } else {
+            selected
+        }
+    }
+
+    fn value_scope(&self, store: &SettingsStore) -> Option<SettingsScope> {
+        if matches!(&self.kind, Kind::GlobalBool) {
+            Some(SettingsScope::Global)
+        } else {
+            store.effective_scope(self.key)
+        }
+    }
 }
 
 fn definitions() -> Vec<Def> {
@@ -78,6 +106,11 @@ fn definitions() -> Vec<Def> {
             key: "showFooterTips",
             label: "Footer Tips",
             kind: Kind::Bool,
+        },
+        Def {
+            key: crate::hud::VISIBLE_SETTING,
+            label: "Performance Profiler",
+            kind: Kind::GlobalBool,
         },
         Def {
             key: "colorTheme",
@@ -178,14 +211,14 @@ impl SettingsView {
 
     fn current_value(&self, def: &Def) -> Value {
         let store = self.settings.lock().unwrap();
-        store.get(def.key).cloned().unwrap_or(Value::Null)
+        def.value(&store).cloned().unwrap_or(Value::Null)
     }
 
     fn set(&self, def: &Def, value: Value) -> ViewResult {
         ViewResult::Cmd(AppCmd::SetSetting {
             key: def.key.to_string(),
             value,
-            scope: self.scope,
+            scope: def.write_scope(self.scope),
         })
     }
 
@@ -193,7 +226,7 @@ impl SettingsView {
     fn adjust(&mut self, dir: i64, big: bool) -> ViewResult {
         let def = &self.defs[self.list.selected];
         match &def.kind {
-            Kind::Bool => {
+            Kind::Bool | Kind::GlobalBool => {
                 let cur = self.current_value(def).as_bool().unwrap_or(false);
                 self.set(def, Value::Bool(!cur))
             }
@@ -278,8 +311,8 @@ impl View for SettingsView {
                 .iter()
                 .map(|d| {
                     (
-                        store.get(d.key).cloned().unwrap_or(Value::Null),
-                        store.effective_scope(d.key),
+                        d.value(&store).cloned().unwrap_or(Value::Null),
+                        d.value_scope(&store),
                     )
                 })
                 .unzip()
@@ -296,7 +329,7 @@ impl View for SettingsView {
             let y = inner.y + row as u16;
             let selected = ctx.active_overlay(i as u64, i == self.list.selected);
             let value_text = match &def.kind {
-                Kind::Bool => {
+                Kind::Bool | Kind::GlobalBool => {
                     let on = values[i].as_bool().unwrap_or(false);
                     if on {
                         "◼ on".to_string()
@@ -430,5 +463,58 @@ mod tests {
         };
         view.on_key(&key);
         assert_eq!(view.list.selected, 2);
+    }
+
+    #[test]
+    fn profiler_visibility_is_a_global_setting_in_project_scope() {
+        let settings = Arc::new(Mutex::new(SettingsStore::load(
+            std::path::Path::new("/definitely/missing"),
+            Some(std::path::Path::new("/definitely/missing/project")),
+        )));
+        let mut view = SettingsView::new(settings, true, std::path::PathBuf::from("."));
+        view.scope = SettingsScope::Project;
+        view.list.selected = view
+            .defs
+            .iter()
+            .position(|def| def.key == crate::hud::VISIBLE_SETTING)
+            .unwrap();
+
+        let ViewResult::Cmd(AppCmd::SetSetting { key, value, scope }) = view.adjust(1, false)
+        else {
+            panic!("profiler row should emit a setting command");
+        };
+        assert_eq!(key, crate::hud::VISIBLE_SETTING);
+        assert_eq!(value, Value::Bool(true));
+        assert_eq!(scope, SettingsScope::Global);
+    }
+
+    #[test]
+    fn settings_panel_renders_the_global_profiler_toggle() {
+        let settings = Arc::new(Mutex::new(SettingsStore::load(
+            std::path::Path::new("/definitely/missing"),
+            Some(std::path::Path::new("/definitely/missing/project")),
+        )));
+        let mut view = SettingsView::new(settings, true, std::path::PathBuf::from("."));
+        let theme = dmux_ui::Theme::named("violet");
+        let ctx = ViewCtx {
+            theme: &theme,
+            anim: 0,
+            hovered: None,
+            sidebar_right: 40,
+            anchor: dmux_ui::Anchor::SidebarTop,
+        };
+        let mut buf = CellBuffer::new(110, 30);
+        let mut clicks = ClickMap::new();
+
+        let area = buf.area();
+        view.render(&mut buf, area, &ctx, &mut clicks);
+        let mut rendered = String::new();
+        for row in 0..buf.rows() {
+            for col in 0..buf.cols() {
+                rendered.push(buf.get(col, row).ch);
+            }
+        }
+        assert!(rendered.contains("ᵍ Performance Profiler"));
+        assert!(rendered.contains("◻ off"));
     }
 }

@@ -40,7 +40,7 @@ fn hud_registers_drag_handle_and_close_targets() {
     let mut clicks = ClickMap::new();
     compose(&mut buf, &scene, &mut clicks);
 
-    let rect = hud_layout(buf.area(), &metrics, None);
+    let rect = hud_layout(buf.area(), &metrics, None, layout.sidebar.right());
     // Title row: the close slot is on the left and the remainder drags.
     assert_eq!(
         clicks.hit(rect.x, rect.y),
@@ -70,23 +70,25 @@ fn hud_registers_drag_handle_and_close_targets() {
 fn dragged_position_is_honored_and_clamped() {
     let metrics = Metrics::new();
     let area = Rect::new(0, 0, 120, 30);
-    let default = hud_layout(area, &metrics, None);
-    assert_eq!(default.right(), 119, "default anchors to the top-right");
-    assert_eq!(default.y, 1);
+    let sidebar_right = 40;
+    let default = hud_layout(area, &metrics, None, sidebar_right);
+    assert_eq!(default.x, 41, "default clears the sidebar gutter");
+    assert_eq!(default.y, 0, "default attaches to the viewport top");
     // A stored drag position places the card exactly there.
-    let moved = hud_layout(area, &metrics, Some((10, 5)));
-    assert_eq!((moved.x, moved.y), (10, 5));
+    let moved = hud_layout(area, &metrics, Some((50, 5)), sidebar_right);
+    assert_eq!((moved.x, moved.y), (50, 5));
     assert_eq!((moved.w, moved.h), (default.w, default.h));
-    // Positions past the edges clamp so the card stays fully on screen.
-    let clamped = hud_layout(area, &metrics, Some((500, 500)));
+    // Positions on either side clamp to the workspace beside the sidebar.
+    let left = hud_layout(area, &metrics, Some((0, 5)), sidebar_right);
+    assert_eq!(left.x, 41);
+    let clamped = hud_layout(area, &metrics, Some((500, 500)), sidebar_right);
     assert_eq!(clamped.right(), area.w);
     assert_eq!(clamped.bottom(), area.h);
-    // Tiny viewport: the card is cut to fit, never lost.
+    // A viewport fully occupied by the sidebar has no profiler surface.
     let tiny = Rect::new(0, 0, 10, 4);
-    let small = hud_layout(tiny, &metrics, Some((9, 3)));
-    assert!(small.right() <= 10 && small.bottom() <= 4);
-    assert!(!small.is_empty());
-    // Pure clamp: interior positions pass through untouched.
-    assert_eq!(hud_clamp((3, 4), (5, 5), area), (3, 4));
-    assert_eq!(hud_clamp((119, 29), (5, 5), area), (115, 25));
+    assert!(hud_layout(tiny, &metrics, None, 10).is_empty());
+    // Clamping respects non-zero workspace origins.
+    let workspace = Rect::new(41, 0, 79, 30);
+    assert_eq!(hud_clamp((50, 4), (5, 5), workspace), (50, 4));
+    assert_eq!(hud_clamp((0, 29), (5, 5), workspace), (41, 25));
 }

@@ -6,7 +6,7 @@
 mod footer;
 
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
-use dmux_ui::{spinner_frame, ClickMap, Theme};
+use dmux_ui::{spinner_frame, Anchor, ClickMap, Theme};
 
 use crate::layout::{Layout, TITLE_ROWS};
 use crate::metrics::Metrics;
@@ -130,7 +130,13 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
         }
     }
     if let Some(metrics) = scene.hud {
-        draw_hud(buf, metrics, scene.hud_pos, clicks);
+        draw_hud(
+            buf,
+            metrics,
+            scene.hud_pos,
+            scene.layout.sidebar.right(),
+            clicks,
+        );
     }
 }
 
@@ -345,36 +351,54 @@ fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body
 /// Clamp a HUD origin so the whole card stays inside `area` (#103): the
 /// overlay must remain recoverable at every viewport size.
 pub(crate) fn hud_clamp(pos: (u16, u16), size: (u16, u16), area: Rect) -> (u16, u16) {
+    let width = size.0.min(area.w);
+    let height = size.1.min(area.h);
     (
-        pos.0.min(area.w.saturating_sub(size.0)),
-        pos.1.min(area.h.saturating_sub(size.1)),
+        pos.0.max(area.x).min(area.right().saturating_sub(width)),
+        pos.1.max(area.y).min(area.bottom().saturating_sub(height)),
     )
 }
 
-/// The HUD's on-screen rect: the dragged position when one is stored
-/// (clamped), else the default top-right anchor. Shared by the renderer
-/// and the drag logic so grab offsets can never drift from the drawing.
-pub(crate) fn hud_layout(area: Rect, metrics: &Metrics, pos: Option<(u16, u16)>) -> Rect {
+/// Workspace available to the profiler. The sidebar and its gutter remain
+/// unobstructed at every viewport width.
+pub(crate) fn hud_workspace(area: Rect, sidebar_right: u16) -> Rect {
+    let x = sidebar_right
+        .saturating_add(1)
+        .max(area.x)
+        .min(area.right());
+    Rect::new(x, area.y, area.right().saturating_sub(x), area.h)
+}
+
+/// The HUD's on-screen rect: a dragged position when one is stored, or the
+/// shared top-of-sidebar attachment. The renderer and drag logic consume the
+/// same clamped geometry.
+pub(crate) fn hud_layout(
+    area: Rect,
+    metrics: &Metrics,
+    pos: Option<(u16, u16)>,
+    sidebar_right: u16,
+) -> Rect {
     let lines = metrics.hud_lines();
-    let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 2;
-    let h = lines.len() as u16 + 1;
-    let default = (
-        area.w.saturating_sub(w + 1),
-        1.min(area.h.saturating_sub(h)),
-    );
-    let (x, y) = hud_clamp(pos.unwrap_or(default), (w, h), area);
-    Rect::new(x, y, w, h).intersect(&area)
+    let workspace = hud_workspace(area, sidebar_right);
+    let w =
+        (lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 2).min(workspace.w);
+    let h = (lines.len() as u16 + 1).min(workspace.h);
+    let attached = dmux_ui::place(area, sidebar_right, Anchor::SidebarTop, w, h);
+    let default = (attached.x, attached.y);
+    let (x, y) = hud_clamp(pos.unwrap_or(default), (w, h), workspace);
+    Rect::new(x, y, w, h).intersect(&workspace)
 }
 
 fn draw_hud(
     buf: &mut CellBuffer,
     metrics: &Metrics,
     pos: Option<(u16, u16)>,
+    sidebar_right: u16,
     clicks: &mut ClickMap<ClickTarget>,
 ) {
     let lines = metrics.hud_lines();
     let area = buf.area();
-    let rect = hud_layout(area, metrics, pos);
+    let rect = hud_layout(area, metrics, pos, sidebar_right);
     // Distinct title-bar surface (#109): the drag handle reads as a bar
     // above the metrics, not one flat slab. Diagnostic blues, no project
     // theming.

@@ -37,12 +37,23 @@ impl SettingsStore {
         self.project.get(key).or_else(|| self.global.get(key))
     }
 
+    /// Global value without project override, for application-level settings.
+    pub fn get_global(&self, key: &str) -> Option<&Value> {
+        self.global.get(key)
+    }
+
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.get(key).and_then(|v| v.as_str())
     }
 
     pub fn get_bool(&self, key: &str, default: bool) -> bool {
         self.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+    }
+
+    pub fn get_global_bool(&self, key: &str, default: bool) -> bool {
+        self.get_global(key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
     }
 
     pub fn get_u64(&self, key: &str) -> Option<u64> {
@@ -145,6 +156,9 @@ mod tests {
 
         store.save(SettingsScope::Project).unwrap();
         store.set("minPaneWidth", Value::from(70u64), SettingsScope::Global);
+        store.set("appFlag", Value::Bool(true), SettingsScope::Global);
+        store.set("appFlag", Value::Bool(false), SettingsScope::Project);
+        store.save(SettingsScope::Project).unwrap();
         store.save(SettingsScope::Global).unwrap();
 
         let reloaded = SettingsStore::load(&dir, Some(&dir.join("proj")));
@@ -152,6 +166,8 @@ mod tests {
         assert_eq!(reloaded.get_u64("minPaneWidth"), Some(70));
         // Unknown fields preserved through the global save.
         assert!(reloaded.global.get("unknownField").is_some());
+        assert!(!reloaded.get_bool("appFlag", true));
+        assert!(reloaded.get_global_bool("appFlag", false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
