@@ -281,21 +281,135 @@ fn reorder_moves_within_project_and_persists() {
         .iter()
         .map(|slug| {
             serde_json::from_value(serde_json::json!({
-                "id": *slug, "slug": *slug, "prompt": "", "paneId": "%9"
+                "id": *slug, "slug": *slug, "prompt": "",
+                "paneId": match *slug {
+                    "p__aa__p" => "%1",
+                    "p__bb__p" => "%2",
+                    "p__cc__p" => "%3",
+                    _ => "%9",
+                },
+                "projectRoot": (*slug == "p__cc__p").then_some("/other")
             }))
             .unwrap()
         })
         .collect();
-    let live_order: Vec<String> = slugs(&panes);
-    order_records(&mut records, &live_order);
+    order_records(&mut records, &panes);
     let rec_slugs: Vec<&str> = records.iter().map(|r| r.slug.as_str()).collect();
     assert_eq!(rec_slugs, ["p__bb__p", "p__aa__p", "p__cc__p", "zz"]);
 
     // A fresh adoption (tmux order) re-sorts to the persisted order.
     let mut readopted = adopt_panes(None, &parse_pane_list(&reply));
-    let record_order: Vec<String> = records.iter().map(|r| r.slug.clone()).collect();
-    order_panes(&mut readopted, &record_order);
+    order_panes(&mut readopted, &records);
     assert_eq!(slugs(&readopted), ["p__bb__p", "p__aa__p", "p__cc__p"]);
+}
+
+#[test]
+fn asynchronous_reconcile_persists_identity_order_with_duplicate_slugs() {
+    let temp = std::env::temp_dir().join(format!("dmux-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(temp.join("a")).unwrap();
+    std::fs::create_dir_all(temp.join("b")).unwrap();
+    let a = temp.join("a").to_string_lossy().into_owned();
+    let b = temp.join("b").to_string_lossy().into_owned();
+    let mut config: DmuxConfig = serde_json::from_value(serde_json::json!({
+        "projectName": "main",
+        "projectRoot": temp.to_string_lossy(),
+        "sidebarProjects": [{"projectRoot": a}, {"projectRoot": b}],
+        "panes": [
+            {"id":"b","slug":"shared","prompt":"","paneId":"%2","type":"shell",
+             "projectRoot": b},
+            {"id":"a","slug":"shared","prompt":"","paneId":"%1","type":"shell",
+             "projectRoot": a}
+        ]
+    }))
+    .unwrap();
+    let info = |pane: u32, title: &str, cwd: &str| TmuxPaneInfo {
+        pane: PaneId(pane),
+        window: WindowId(pane),
+        title: title.into(),
+        width: 80,
+        height: 24,
+        alternate_on: false,
+        current_command: "zsh".into(),
+        window_name: "w".into(),
+        pane_pid: pane,
+        start_command: String::new(),
+        extended_keys_mode2: false,
+        current_path: cwd.into(),
+    };
+
+    // A reconcile reply arrives in tmux order. The unrecorded pane is
+    // recovered from its cwd and persisted after the existing identities.
+    let first_infos = vec![
+        info(1, "shared", &a),
+        info(3, "new", &b),
+        info(2, "shared", &b),
+    ];
+    let mut first = adopt_panes(Some(&config), &first_infos);
+    assert!(record_adopted_panes(&mut config, &first, &first_infos, 42));
+    order_panes(&mut first, &config.panes);
+    assert_eq!(
+        pane_order_identities(&first),
+        ["%2".to_string(), "%1".to_string(), "%3".to_string()]
+    );
+    assert_eq!(first[0].project_root.as_deref(), Some(b.as_str()));
+    assert_eq!(first[1].project_root.as_deref(), Some(a.as_str()));
+    assert_eq!(config.panes[2].project_root.as_deref(), Some(b.as_str()));
+
+    // A later asynchronous snapshot uses a different enumeration order.
+    // Persisted pane identity keeps the display order unchanged.
+    let next_infos = vec![
+        info(3, "new", &b),
+        info(2, "shared", &b),
+        info(1, "shared", &a),
+    ];
+    let mut next = adopt_panes(Some(&config), &next_infos);
+    assert!(!record_adopted_panes(&mut config, &next, &next_infos, 43));
+    order_panes(&mut next, &config.panes);
+    assert_eq!(pane_order_identities(&next), pane_order_identities(&first));
+
+    // A reused slug whose project record is missing remains associated with
+    // its cwd. The remaining project's record stays bound to its pane.
+    let mut missing_config = config.clone();
+    missing_config
+        .panes
+        .retain(|record| record.project_root.as_deref() == Some(a.as_str()));
+    let collision_infos = vec![info(9, "shared", &b), info(1, "shared", &a)];
+    let mut collision = adopt_panes(Some(&missing_config), &collision_infos);
+    assert_eq!(collision[0].project_root.as_deref(), Some(b.as_str()));
+    assert!(record_adopted_panes(
+        &mut missing_config,
+        &collision,
+        &collision_infos,
+        44
+    ));
+    order_panes(&mut collision, &missing_config.panes);
+    assert_eq!(
+        pane_order_identities(&collision),
+        ["%1".to_string(), "%9".to_string()]
+    );
+    let mut stale_records = missing_config.panes.clone();
+    let mut stale = stale_records[1].clone();
+    stale.id = "stale".into();
+    stale.pane_id = "%99".into();
+    stale_records.insert(0, stale);
+    collision.reverse();
+    order_panes(&mut collision, &stale_records);
+    assert_eq!(
+        pane_order_identities(&collision),
+        ["%1".to_string(), "%9".to_string()]
+    );
+
+    // Canonical project identity allows an aliased record to close with its
+    // pane while retaining any unrelated records.
+    let mut alias_records: Vec<DmuxPane> = vec![serde_json::from_value(serde_json::json!({
+        "id": "alias", "slug": "shared", "prompt": "", "paneId": "%99",
+        "projectRoot": format!("{a}/")
+    }))
+    .unwrap()];
+    assert!(remove_pane_record(&mut alias_records, &first[1]));
+    assert!(alias_records.is_empty());
+    let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[test]

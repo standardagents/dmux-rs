@@ -446,28 +446,176 @@ pub fn move_pane(panes: &mut Vec<LogicalPane>, src: usize, dst: usize) -> bool {
     true
 }
 
-/// Stable-order config records to match the live display order (#26):
-/// records for live slugs sort into that order, everything else keeps its
-/// relative position after them.
-pub fn order_records(records: &mut [DmuxPane], slug_order: &[String]) {
-    records.sort_by_key(|r| {
-        slug_order
-            .iter()
-            .position(|s| *s == r.slug)
-            .unwrap_or(usize::MAX)
-    });
+pub fn same_project(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => canon_root(left) == canon_root(right),
+        _ => false,
+    }
 }
 
-/// Stable-order live panes by the persisted record order (#26): slugs the
-/// config knows sort first in config order; unknown panes keep adoption
-/// order after them.
-pub fn order_panes(panes: &mut [LogicalPane], slug_order: &[String]) {
-    panes.sort_by_key(|p| {
-        slug_order
+fn unique_index<T>(items: &[T], mut matches: impl FnMut(usize, &T) -> bool) -> Option<usize> {
+    let mut indices = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| matches(index, item).then_some(index));
+    let first = indices.next()?;
+    indices.next().is_none().then_some(first)
+}
+
+fn record_matches_pane(record: &DmuxPane, pane: &LogicalPane) -> bool {
+    record.slug == pane.slug
+        && same_project(record.project_root.as_deref(), pane.project_root.as_deref())
+}
+
+pub fn record_has_live_pane(record: &DmuxPane, panes: &[LogicalPane]) -> bool {
+    panes.iter().any(|pane| {
+        record.pane_id == pane.tmux_pane.to_string() || record_matches_pane(record, pane)
+    })
+}
+
+/// Persist panes adopted without a record and refresh fallback bindings.
+/// Records are appended in current display order so later asynchronous tmux
+/// snapshots cannot supply a different order for the same pane identities.
+pub fn record_adopted_panes(
+    config: &mut DmuxConfig,
+    panes: &[LogicalPane],
+    infos: &[TmuxPaneInfo],
+    id_seed: u64,
+) -> bool {
+    let mut changed = false;
+    let mut next_id = 0_u64;
+    let mut used_records = std::collections::HashSet::new();
+    for pane in panes {
+        let record_index = config
+            .panes
             .iter()
-            .position(|s| *s == p.slug)
-            .unwrap_or(usize::MAX)
-    });
+            .enumerate()
+            .find(|(index, record)| {
+                !used_records.contains(index) && record.pane_id == pane.tmux_pane.to_string()
+            })
+            .map(|(index, _)| index)
+            .or_else(|| {
+                unique_index(&config.panes, |index, record| {
+                    !used_records.contains(&index) && record_matches_pane(record, pane)
+                })
+            });
+        if let Some(record_index) = record_index {
+            used_records.insert(record_index);
+            let record = &mut config.panes[record_index];
+            let pane_id = pane.tmux_pane.to_string();
+            if record.pane_id != pane_id {
+                tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
+                    root = ?pane.project_root, "persisting reconciled pane identity");
+                record.pane_id = pane_id;
+                changed = true;
+            }
+            continue;
+        }
+
+        let mut record = DmuxPane::new_record(
+            format!("pane-{id_seed}-{next_id}"),
+            pane.slug.clone(),
+            pane.tmux_pane.to_string(),
+            pane.kind,
+        );
+        next_id += 1;
+        record.display_name = (pane.title != pane.slug).then(|| pane.title.clone());
+        record.hidden = pane.hidden.then_some(true);
+        record.project_root = pane.project_root.clone();
+        record.project_name = pane.project_root.as_deref().map(|root| {
+            std::path::Path::new(root)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.to_string())
+        });
+        record.worktree_path = pane.worktree_path.clone();
+        record.agent = pane.agent.clone();
+        if pane.kind == PaneKind::Shell {
+            record.shell_cwd = infos
+                .iter()
+                .find(|info| info.pane == pane.tmux_pane)
+                .map(|info| info.current_path.clone())
+                .filter(|path| !path.is_empty());
+        }
+        tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
+            root = ?pane.project_root, "persisting adopted pane identity and order");
+        config.panes.push(record);
+        used_records.insert(config.panes.len() - 1);
+        changed = true;
+    }
+    changed
+}
+
+/// Stable-order config records to match the live display order (#26, #72).
+/// Pane IDs are authoritative. Project plus slug is the restart fallback,
+/// which keeps duplicate slugs in separate projects from changing places.
+pub fn order_records(records: &mut Vec<DmuxPane>, panes: &[LogicalPane]) {
+    let mut remaining = std::mem::take(records);
+    for pane in panes {
+        let record_index = remaining
+            .iter()
+            .position(|record| record.pane_id == pane.tmux_pane.to_string())
+            .or_else(|| unique_index(&remaining, |_, record| record_matches_pane(record, pane)));
+        if let Some(record_index) = record_index {
+            records.push(remaining.remove(record_index));
+        }
+    }
+    records.append(&mut remaining);
+}
+
+/// Stable-order live panes by persisted record identity (#26, #72).
+/// Unknown panes keep their relative adoption order after recorded panes.
+pub fn order_panes(panes: &mut Vec<LogicalPane>, records: &[DmuxPane]) {
+    let mut remaining = std::mem::take(panes);
+    for (record_index, record) in records.iter().enumerate() {
+        let pane_index = remaining
+            .iter()
+            .position(|pane| record.pane_id == pane.tmux_pane.to_string())
+            .or_else(|| {
+                unique_index(&remaining, |_, pane| {
+                    let pane_id = pane.tmux_pane.to_string();
+                    let another_exact = records.iter().enumerate().any(|(index, candidate)| {
+                        index != record_index && candidate.pane_id == pane_id
+                    });
+                    let unique_fallback =
+                        unique_index(records, |_, candidate| record_matches_pane(candidate, pane))
+                            == Some(record_index);
+                    !another_exact && unique_fallback
+                })
+            });
+        if let Some(pane_index) = pane_index {
+            panes.push(remaining.remove(pane_index));
+        }
+    }
+    panes.append(&mut remaining);
+}
+
+pub fn remove_pane_record(records: &mut Vec<DmuxPane>, pane: &LogicalPane) -> bool {
+    let record_index = records
+        .iter()
+        .position(|record| record.pane_id == pane.tmux_pane.to_string())
+        .or_else(|| unique_index(records, |_, record| record_matches_pane(record, pane)));
+    if let Some(record_index) = record_index {
+        records.remove(record_index);
+        return true;
+    }
+    false
+}
+
+/// Pane identities in display order for order-mutation diagnostics (#72).
+pub fn pane_order_identities(panes: &[LogicalPane]) -> Vec<String> {
+    panes
+        .iter()
+        .map(|pane| pane.tmux_pane.to_string())
+        .collect()
+}
+
+pub fn log_pane_order_change(reason: &'static str, before: &[String], panes: &[LogicalPane]) {
+    let after = pane_order_identities(panes);
+    if before != after {
+        tracing::info!(reason, ?before, ?after, "pane display order changed");
+    }
 }
 
 /// Pane status for an LLM verdict. Option dialogs ALWAYS land on Waiting —
@@ -545,30 +693,35 @@ pub fn record_match<'c>(
     slug: &str,
     info: &TmuxPaneInfo,
 ) -> Option<(&'c DmuxPane, MatchReason)> {
-    config
+    if let Some(record) = config
         .panes
         .iter()
         .find(|p| p.pane_id == info.pane.to_string())
-        .map(|p| (p, MatchReason::PaneId))
-        .or_else(|| {
+    {
+        return Some((record, MatchReason::PaneId));
+    }
+    let roots: Vec<String> = std::iter::once(config.project_root.clone())
+        .chain(
             config
-                .panes
+                .sidebar_projects
                 .iter()
-                .find(|p| {
-                    p.slug == slug
-                        && p.project_root.as_deref().is_some_and(|r| {
-                            recover_project_root(&info.current_path, &[r.to_string()]).is_some()
-                        })
-                })
-                .map(|p| (p, MatchReason::SlugCwd))
+                .map(|p| p.project_root.clone()),
+        )
+        .collect();
+    if let Some(recovered_root) = recover_project_root(&info.current_path, &roots) {
+        let recovered_project = (canon_root(&recovered_root) != canon_root(&config.project_root))
+            .then_some(recovered_root);
+        return unique_index(&config.panes, |_, record| {
+            record.slug == slug
+                && same_project(record.project_root.as_deref(), recovered_project.as_deref())
         })
-        .or_else(|| {
-            config
-                .panes
-                .iter()
-                .find(|p| p.slug == slug)
-                .map(|p| (p, MatchReason::Slug))
-        })
+        .map(|index| (&config.panes[index], MatchReason::SlugCwd));
+    }
+    config
+        .panes
+        .iter()
+        .find(|record| record.slug == slug)
+        .map(|record| (record, MatchReason::Slug))
 }
 
 pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<LogicalPane> {
@@ -581,12 +734,54 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
         })
         .unwrap_or_default();
     let mut adopted = Vec::new();
+    let mut used_records = std::collections::HashSet::new();
     for info in infos {
         if is_infra(&info.title, &info.window_name) || is_keepalive(info) {
             continue;
         }
         let parsed = parse_pane_title(&info.title);
-        let config_pane = config.and_then(|c| record_match(c, &parsed.slug, info).map(|(r, _)| r));
+        let recovered_root = recover_project_root(&info.current_path, &known_roots);
+        let recovered_project = recovered_root.clone().filter(|root| {
+            config
+                .map(|c| canon_root(root) != canon_root(&c.project_root))
+                .unwrap_or(true)
+        });
+        // Each record binds once. Cwd ownership suppresses cross-project
+        // slug fallback when the matching project has no saved record.
+        let config_pane_index = config.and_then(|c| {
+            c.panes
+                .iter()
+                .enumerate()
+                .find(|(index, pane)| {
+                    !used_records.contains(index) && pane.pane_id == info.pane.to_string()
+                })
+                .map(|(index, _)| index)
+                .or_else(|| {
+                    recovered_root.as_ref().and_then(|_| {
+                        unique_index(&c.panes, |index, pane| {
+                            !used_records.contains(&index)
+                                && pane.slug == parsed.slug
+                                && same_project(
+                                    pane.project_root.as_deref(),
+                                    recovered_project.as_deref(),
+                                )
+                        })
+                    })
+                })
+                .or_else(|| {
+                    if recovered_root.is_none() {
+                        unique_index(&c.panes, |index, pane| {
+                            !used_records.contains(&index) && pane.slug == parsed.slug
+                        })
+                    } else {
+                        None
+                    }
+                })
+        });
+        if let Some(index) = config_pane_index {
+            used_records.insert(index);
+        }
+        let config_pane = config_pane_index.and_then(|index| config.map(|c| &c.panes[index]));
         let slug = config_pane
             .map(|p| p.slug.clone())
             .unwrap_or_else(|| parsed.slug.clone());
@@ -642,19 +837,11 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             project_root: config_pane
                 .and_then(|p| p.project_root.clone())
                 .or_else(|| {
-                    // No usable record ownership: recover from the pane's live
-                    // cwd when exactly one configured project contains it (#76).
-                    let recovered = recover_project_root(&info.current_path, &known_roots);
-                    if let Some(r) = &recovered {
+                    if let Some(r) = &recovered_root {
                         tracing::info!(pane = %info.pane, root = %r, cwd = %info.current_path,
                         "ownership recovered from cwd for unmatched pane");
                     }
-                    // The main project is represented as None downstream.
-                    recovered.filter(|r| {
-                        config
-                            .map(|c| canon_root(r) != canon_root(&c.project_root))
-                            .unwrap_or(true)
-                    })
+                    recovered_project
                 }),
             agent: config_pane.and_then(|p| p.agent.clone()),
             current_command: info.current_command.clone(),

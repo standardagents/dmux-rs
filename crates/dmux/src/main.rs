@@ -1686,10 +1686,9 @@ impl App {
         }
     }
 
-    /// Commit a sidebar reorder (#26): move the pane in display order,
-    /// keep focus/selection on the same pane identities, persist the order
-    /// through the config, and relayout. tmux order is never touched.
+    /// Commit and persist a sidebar reorder while retaining pane identity.
     fn reorder_pane(&mut self, src: usize, dst: usize) {
+        let order_before = session::pane_order_identities(&self.panes);
         let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
         let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
         if !session::move_pane(&mut self.panes, src, dst) {
@@ -1708,8 +1707,8 @@ impl App {
                 self.selected = i;
             }
         }
-        let order: Vec<String> = self.panes.iter().map(|p| p.slug.clone()).collect();
-        session::order_records(&mut self.config.panes, &order);
+        session::order_records(&mut self.config.panes, &self.panes);
+        session::log_pane_order_change("explicit reorder", &order_before, &self.panes);
         self.save_config(audit::Reason::Reorder);
         self.relayout();
     }
@@ -1922,6 +1921,7 @@ impl App {
     }
 
     fn apply_pane_list(&mut self, reply: &Reply) {
+        let order_before = session::pane_order_identities(&self.panes);
         let infos = session::parse_pane_list(reply);
         // Track (and dedupe) keepalive windows.
         let keepalives: Vec<_> = infos
@@ -2022,28 +2022,26 @@ impl App {
         let live: std::collections::HashSet<_> = infos.iter().map(|i| i.pane).collect();
         let before = self.panes.len();
         self.panes.retain(|p| live.contains(&p.tmux_pane));
+        let mut records_changed = false;
         if self.panes.len() != before {
-            // Terminal records die with their pane; worktree records stay so
-            // the welcome screen offers to reopen them.
-            let live_slugs: std::collections::HashSet<String> =
-                self.panes.iter().map(|p| p.slug.clone()).collect();
+            // Worktree records remain available for explicit restore.
             let rec_before = self.config.panes.len();
-            self.config
-                .panes
-                .retain(|r| r.kind() != PaneKind::Shell || live_slugs.contains(&r.slug));
-            if self.config.panes.len() != rec_before {
-                let live: Vec<String> = live.iter().map(|p| p.to_string()).collect();
-                self.save_config(audit::Reason::Reconcile { live });
-            }
+            self.config.panes.retain(|record| {
+                record.kind() != PaneKind::Shell
+                    || session::record_has_live_pane(record, &self.panes)
+            });
+            records_changed = self.config.panes.len() != rec_before;
         }
-        // Display order follows the persisted record order (#26) — a
-        // reorder must survive restart/reattach. Focus/selection stay on
-        // their pane identities across the shuffle.
+        records_changed |=
+            session::record_adopted_panes(&mut self.config, &self.panes, &infos, timestamp());
+        if records_changed {
+            let live: Vec<String> = live.iter().map(|pane| pane.to_string()).collect();
+            self.save_config(audit::Reason::Reconcile { live });
+        }
         {
             let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
             let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
-            let order: Vec<String> = self.config.panes.iter().map(|r| r.slug.clone()).collect();
-            session::order_panes(&mut self.panes, &order);
+            session::order_panes(&mut self.panes, &self.config.panes);
             if let Some(id) = focused_id {
                 if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
                     self.focused = i;
@@ -2055,6 +2053,7 @@ impl App {
                 }
             }
         }
+        session::log_pane_order_change("reconcile", &order_before, &self.panes);
         self.relayout();
         // Newly created panes take focus once adopted.
         if let Some(pending) = self.pending_focus {
@@ -3631,7 +3630,9 @@ impl App {
             self.toast(format!("Close failed: {err}"));
             return;
         }
+        let order_before = session::pane_order_identities(&self.panes);
         let pane = self.panes.remove(idx);
+        session::log_pane_order_change("close", &order_before, &self.panes);
         self.bootstraps.remove(&pane.slug);
         let hook_root = pane
             .project_root
@@ -3643,22 +3644,10 @@ impl App {
             ("DMUX_PANE_ID", pane.tmux_pane.to_string()),
         ];
         hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
-        // Same slugs exist across projects (#76): only this pane's own
-        // record may be removed.
-        let removed: Vec<String> = self
-            .config
-            .panes
-            .iter()
-            .filter(|r| r.slug == pane.slug && r.project_root == pane.project_root)
-            .map(|r| r.slug.clone())
-            .collect();
-        if !removed.is_empty() {
+        if session::remove_pane_record(&mut self.config.panes, &pane) {
             tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
                 root = ?pane.project_root, "removing pane record");
         }
-        self.config
-            .panes
-            .retain(|r| !(r.slug == pane.slug && r.project_root == pane.project_root));
         self.save_config(audit::Reason::PaneClosed);
         if self.focused >= self.panes.len() {
             self.focused = self.panes.len().saturating_sub(1);

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use dmux_cc::{PaneId, Reply};
 use dmux_core::{encode_pane_title, DmuxPane, PaneKind};
 
-use crate::session::project_context;
+use crate::session::{self, project_context};
 use crate::{bootstrap, hooks, input, shq, timestamp, App, AppMsg, Tag};
 
 /// Context for a window dmux-rs created and is waiting on.
@@ -263,12 +263,10 @@ impl App {
 
         // Config record first so reconcile adoption pairs slug → agent.
         // Resumed worktrees reuse their existing record (fresh pane id).
-        if let Some(existing) = self
-            .config
-            .panes
-            .iter_mut()
-            .find(|r| r.slug == ctx.slug && r.project_root == ctx.project_root)
-        {
+        if let Some(existing) = self.config.panes.iter_mut().find(|r| {
+            r.slug == ctx.slug
+                && session::same_project(r.project_root.as_deref(), ctx.project_root.as_deref())
+        }) {
             // Same slug in the SAME project: a resume — refresh the pane id
             // and complete ownership metadata (#76: updating only
             // pane_id/agent let a reused slug keep another context's
