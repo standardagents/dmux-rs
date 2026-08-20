@@ -67,13 +67,17 @@ pub struct SidebarGroup {
 
 pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<ClickTarget>) {
     draw_sidebar(buf, scene, clicks);
-    // With panes open, tint the unused content area so free space reads as
-    // canvas; pane bodies repaint their own rects over it.
+    // With panes open, texture the unused content area with the dim dot
+    // grid (#90, matching the TS spacer pane) so free space reads as
+    // canvas; pane bodies, titles, and borders repaint their own cells
+    // over it, leaving dots only where nothing else is drawn.
     if scene.panes.iter().any(|p| p.rect.is_some()) {
         let content = content_area(buf, scene.layout);
         buf.fill(
             content,
             &Cell {
+                ch: '·',
+                fg: scene.theme.canvas_dot,
                 bg: scene.theme.canvas,
                 ..Cell::default()
             },
@@ -348,6 +352,8 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod action_tests;
+#[cfg(test)]
+mod canvas_tests;
 #[cfg(test)]
 mod sidebar_preview;
 #[cfg(test)]

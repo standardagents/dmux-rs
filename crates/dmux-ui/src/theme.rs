@@ -22,6 +22,9 @@ pub struct Theme {
     /// Unused content-area background — a hair lighter than the terminal
     /// default so free space reads as canvas, not as part of a pane.
     pub canvas: Color,
+    /// Dot-grid texture for unused pane workspace (#90): the TS spacer
+    /// pane's dim gray, subdued enough to keep pane and border contrast.
+    pub canvas_dot: Color,
     pub border: Color,
     pub danger: Color,
     pub ok: Color,
@@ -77,6 +80,7 @@ impl Default for Theme {
             // Transparent like the sidebar (#23): the user's terminal
             // background shows through everywhere content isn't painted.
             canvas: Color::Default,
+            canvas_dot: Color::Indexed(238),
             border: Color::Indexed(240),
             danger: Color::Indexed(203),
             ok: Color::Indexed(114),
