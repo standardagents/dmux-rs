@@ -148,9 +148,16 @@ Loop rules:
   claim/close flow matches the current `@standardagents/issues` contract,
   and follow the skill's own instructions for claiming and progressing
   issues when they differ from this list.
-- **Claim with `issue start <n>`.** It self-assigns and moves the card to
-  "In Progress" through the GitHub App. (`scripts/board.sh <n> <status>`
-  remains as a fallback for manual card moves.)
+- **Keep one session identifier for the owned lifecycle.** Select it when the
+  loop starts, such as `dmux-loop-<UTC timestamp>`, and reuse it for every
+  owned command until the issue is finished.
+- **Claim with `issue start <n> --session <session-id>`.** It self-assigns and
+  moves the card to "In Progress" through the GitHub App.
+  (`scripts/board.sh <n> <status>` remains as a fallback for manual card
+  moves.)
+- **Report material progress with the same session identifier.** Use
+  `issue update <n> --owned --session <session-id> --idempotency-key <key>
+  "<message>"` and retain the same key when retrying that transition.
 - **Isolate concurrent issue work.** When another contributor or agent may be
   working in the repository, run `scripts/work-issue.sh <n>` after the claim
   and work from the path it prints. Each active issue must use its own
@@ -163,8 +170,9 @@ Loop rules:
      state, not the end of the job. The release has not happened yet.
   3. Release (`scripts/release.sh patch|minor`). It refuses dirty or
      unsynchronized state and re-validates before publishing.
-  4. Post the delivery record: `issue finish <n> "<explanation>"`. Its
-     role after GitHub's merge-time closure is NOT to close — it posts
+  4. Post the delivery record: `issue finish <n> --session <session-id>
+     --idempotency-key <completion-key> "<explanation>"`. Its role after
+     GitHub's merge-time closure is NOT to close — it posts
      the explanation testers read, attaches the commit sha and released
      version, and moves the Team card to Done. The tool answering
      "already completed" while still posting is the normal outcome.
