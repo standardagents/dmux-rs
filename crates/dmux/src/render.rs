@@ -151,17 +151,21 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         },
     );
 
-    // Header: session name between braille fills.
+    // The session title is quiet application context. Project headers own
+    // the bright braille separators below it (#49).
     let header = format!(
-        "⣿⣿ {} ",
-        truncate(scene.session_name, area.w.saturating_sub(6) as usize)
+        "  {}",
+        truncate(scene.session_name, area.w.saturating_sub(2) as usize)
     );
-    let end = buf.draw_text(area.x, 0, &header, t.accent, sb_bg, AttrFlags::BOLD, area);
-    let mut fill = String::new();
-    for _ in end..area.right() {
-        fill.push('⣿');
-    }
-    buf.draw_text(end, 0, &fill, t.accent, sb_bg, AttrFlags::BOLD, area);
+    buf.draw_text(
+        area.x,
+        0,
+        &header,
+        t.text_dim,
+        sb_bg,
+        AttrFlags::empty(),
+        area,
+    );
 
     // Project groups (TS parity: main project first, per-group colors,
     // per-group creation actions, blank spacing between groups).
@@ -807,6 +811,8 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod action_tests;
+#[cfg(test)]
+mod title_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
