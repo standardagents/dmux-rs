@@ -323,7 +323,7 @@ mod tests {
             elapsed: Duration::from_millis(7),
         });
 
-        let lines = metrics.hud_lines();
+        let lines = metrics.profiler_lines();
         assert!(
             lines[4].contains("key queue95 2.00 first-out95 4.00 server-frame50/95 7.00/7.00"),
             "{}",
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn untouched_interaction_categories_show_missing_samples() {
-        let lines = Metrics::new().hud_lines();
+        let lines = Metrics::new().profiler_lines();
         assert_eq!(
             lines[4],
             "key queue95 -- first-out95 -- server-frame50/95 --/--"

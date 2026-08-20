@@ -109,7 +109,10 @@ mod tests {
     fn setting_key_survives_the_rename() {
         // Persisted installations keep their visibility (#115): the key is
         // the pre-rename spelling and must never change.
-        assert_eq!(VISIBLE_SETTING, "showPerformanceProfiler");
+        assert_eq!(
+            crate::settings::SettingKey::PerformanceProfiler.as_str(),
+            "showPerformanceProfiler"
+        );
     }
 
     #[test]
