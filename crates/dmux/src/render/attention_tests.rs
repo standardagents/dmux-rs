@@ -72,7 +72,7 @@ fn attention_uses_filled_orange_status_circles_in_both_blink_phases() {
     let (bright, theme) = render_phase(0);
     let (dim, _) = render_phase(3);
 
-    for (x, y) in [(2, 2), (32, 0)] {
+    for (x, y) in [(2, 2), (41, 0)] {
         assert_eq!(bright.get(x, y).ch, '●');
         assert_eq!(bright.get(x, y).fg, theme.warn);
         assert!(bright.get(x, y).attrs.contains(AttrFlags::BOLD));

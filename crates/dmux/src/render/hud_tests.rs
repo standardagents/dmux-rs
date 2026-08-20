@@ -41,18 +41,22 @@ fn hud_registers_drag_handle_and_close_targets() {
     compose(&mut buf, &scene, &mut clicks);
 
     let rect = hud_layout(buf.area(), &metrics, None);
-    // Title row: drag handle everywhere except the ✕ cells at the right.
+    // Title row: the close slot is on the left and the remainder drags.
     assert_eq!(
         clicks.hit(rect.x, rect.y),
-        Some(&crate::views::ClickTarget::HudTitle)
-    );
-    assert_eq!(
-        clicks.hit(rect.right() - 3, rect.y),
-        Some(&crate::views::ClickTarget::HudTitle)
-    );
-    assert_eq!(
-        clicks.hit(rect.right() - 2, rect.y),
         Some(&crate::views::ClickTarget::HudClose)
+    );
+    assert_eq!(
+        clicks.hit(rect.x + 2, rect.y),
+        Some(&crate::views::ClickTarget::HudClose)
+    );
+    assert_eq!(
+        clicks.hit(rect.x + 3, rect.y),
+        Some(&crate::views::ClickTarget::HudTitle)
+    );
+    assert_eq!(
+        clicks.hit(rect.right() - 1, rect.y),
+        Some(&crate::views::ClickTarget::HudTitle)
     );
     // The ✕ glyph is visible on the title row.
     let title: String = (rect.x..rect.right())

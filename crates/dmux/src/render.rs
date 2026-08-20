@@ -230,9 +230,9 @@ fn draw_pane_title(
 
     let dots = [
         (
-            ClickTarget::TitleRename(idx),
-            Color::Rgb(0x2e, 0xc2, 0x4e),
-            Color::Indexed(65),
+            ClickTarget::TitleClose(idx),
+            Color::Rgb(0xff, 0x5f, 0x57),
+            Color::Indexed(131),
         ),
         (
             ClickTarget::TitleHide(idx),
@@ -240,14 +240,15 @@ fn draw_pane_title(
             Color::Indexed(136),
         ),
         (
-            ClickTarget::TitleClose(idx),
-            Color::Rgb(0xff, 0x5f, 0x57),
-            Color::Indexed(131),
+            ClickTarget::TitleRename(idx),
+            Color::Rgb(0x2e, 0xc2, 0x4e),
+            Color::Indexed(65),
         ),
     ];
     let dots_w = dots.len() as u16 * 3;
-    let dots_x = bar.right().saturating_sub(dots_w).max(bar.x);
-    let title_width = dots_x.saturating_sub(bar.x).saturating_sub(4);
+    let dots_x = bar.x;
+    let label_x = bar.x.saturating_add(dots_w.min(bar.w));
+    let title_width = bar.right().saturating_sub(label_x).saturating_sub(4);
     let glyph = status_glyph(pane, scene.anim);
     let label = format!(
         " {glyph} {} ",
@@ -258,10 +259,10 @@ fn draw_pane_title(
     } else {
         AttrFlags::empty()
     };
-    buf.draw_text(bar.x, bar.y, &label, fg, bg, attrs, bar);
-    if pane.needs_attention && !pane.closing && bar.w > 1 {
+    buf.draw_text(label_x, bar.y, &label, fg, bg, attrs, bar);
+    if pane.needs_attention && !pane.closing && label_x + 1 < bar.right() {
         buf.set(
-            bar.x + 1,
+            label_x + 1,
             bar.y,
             Cell {
                 ch: '●',
@@ -287,12 +288,14 @@ fn draw_pane_title(
     }
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
-    // Right side: macOS-style traffic lights on the bar itself. Green
-    // renames, yellow hides, and red closes. Each dot is CENTERED in a
-    // 3-cell slot (#98 round 2): ` ● ` per slot, so the glyph sits in the
-    // middle of its own click target instead of reading right-aligned.
+    // Left side: macOS-style traffic lights in conventional red, yellow,
+    // green order. Red closes, yellow hides, and green renames. Each dot is
+    // centered in a 3-cell slot (#98 round 2): ` ● ` per slot.
     let mut x = dots_x;
     for (target, vivid, dim) in dots {
+        if x.saturating_add(3) > bar.right() {
+            break;
+        }
         let hovered = scene.hovered == Some(target);
         let fg = if focused || hovered { vivid } else { dim };
         let bx = x;
@@ -385,6 +388,9 @@ fn draw_hud(
     // theming.
     const HUD_BAR_BG: Color = Color::Indexed(24);
     const HUD_BODY_BG: Color = Color::Indexed(17);
+    if rect.is_empty() {
+        return;
+    }
     buf.fill(
         rect,
         &Cell {
@@ -400,7 +406,7 @@ fn draw_hud(
         },
     );
     buf.draw_text(
-        rect.x + 1,
+        rect.x + 4,
         rect.y,
         "perf",
         Color::Indexed(159),
@@ -408,9 +414,12 @@ fn draw_hud(
         AttrFlags::BOLD,
         rect,
     );
-    // Title row is the drag handle; the ✕ dismisses (#103).
+    // The close control occupies the first title-bar slot; the rest of the
+    // title row is the drag handle (#103, #110).
+    let close_w = rect.w.min(3);
+    let close = Rect::new(rect.x, rect.y, close_w, 1);
     buf.draw_text(
-        rect.right().saturating_sub(2),
+        rect.x + close_w / 2,
         rect.y,
         "✕",
         Color::Indexed(210),
@@ -418,9 +427,8 @@ fn draw_hud(
         AttrFlags::BOLD,
         rect,
     );
-    let close = Rect::new(rect.right().saturating_sub(2), rect.y, 2, 1);
     clicks.add(
-        Rect::new(rect.x, rect.y, rect.w.saturating_sub(2), 1),
+        Rect::new(rect.x + close_w, rect.y, rect.w.saturating_sub(close_w), 1),
         ClickTarget::HudTitle,
     );
     clicks.add(close, ClickTarget::HudClose);

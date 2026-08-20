@@ -137,7 +137,7 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     // blank on both sides: ` ●  ●  ● `.
     assert_eq!(dot_cols[1] - dot_cols[0], 3);
     assert_eq!(dot_cols[2] - dot_cols[1], 3);
-    assert_eq!(dot_cols[2], panes[0].rect.unwrap().right() - 2);
+    assert_eq!(dot_cols[0], panes[0].rect.unwrap().x + 1);
     for dot_x in &dot_cols {
         assert_eq!(buf.get(dot_x - 1, bar_y).ch, ' ', "left gap of {dot_x}");
         assert_eq!(buf.get(dot_x + 1, bar_y).ch, ' ', "right gap of {dot_x}");
@@ -145,12 +145,70 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     // Each dot's click target covers all THREE cells of its slot.
     use crate::views::ClickTarget;
     for (dot_x, want) in dot_cols.iter().zip([
-        ClickTarget::TitleRename(0),
-        ClickTarget::TitleHide(0),
         ClickTarget::TitleClose(0),
+        ClickTarget::TitleHide(0),
+        ClickTarget::TitleRename(0),
     ]) {
         assert_eq!(clicks.hit(*dot_x, bar_y), Some(&want), "glyph cell");
         assert_eq!(clicks.hit(dot_x - 1, bar_y), Some(&want), "left cell");
         assert_eq!(clicks.hit(dot_x + 1, bar_y), Some(&want), "right cell");
     }
+}
+
+#[test]
+fn narrow_title_bars_show_only_complete_left_control_slots() {
+    use crate::registry::adopt_panes;
+    use crate::session::TmuxPaneInfo;
+    use dmux_cc::{PaneId, WindowId};
+
+    let info = TmuxPaneInfo {
+        pane: PaneId(1),
+        window: WindowId(1),
+        title: "narrow".into(),
+        width: 5,
+        height: 3,
+        alternate_on: false,
+        current_command: "zsh".into(),
+        window_name: "w".into(),
+        pane_pid: 1,
+        start_command: String::new(),
+        extended_keys_mode2: false,
+        current_path: String::new(),
+    };
+    let mut pane = adopt_panes(None, &[info]).remove(0);
+    pane.rect = Some(Rect::new(10, 1, 5, 3));
+    let panes = [pane];
+    let theme = Theme::named("violet");
+    let layout = Layout {
+        sidebar: Rect::new(0, 0, 9, 5),
+        ..Default::default()
+    };
+    let scene = Scene {
+        panes: &panes,
+        layout: &layout,
+        focused: 0,
+        selected: 0,
+        project_name: "p",
+        hud: None,
+        hud_pos: None,
+        status_line: "",
+        theme: &theme,
+        anim: 0,
+        leader_armed: false,
+        sidebar_focused: false,
+        sidebar_project: None,
+        version: "v0.0.0",
+        groups: &[],
+        pane_accents: &[(theme.accent, theme.accent_soft)],
+        reorder: None,
+        hovered: None,
+    };
+    let mut buf = CellBuffer::new(20, 5);
+    let mut clicks = ClickMap::new();
+    compose(&mut buf, &scene, &mut clicks);
+
+    assert_eq!(buf.get(11, 0).ch, '●');
+    assert_eq!(clicks.hit(10, 0), Some(&ClickTarget::TitleClose(0)));
+    assert_eq!(clicks.hit(12, 0), Some(&ClickTarget::TitleClose(0)));
+    assert_ne!(clicks.hit(13, 0), Some(&ClickTarget::TitleHide(0)));
 }
