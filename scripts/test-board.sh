@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python3 - <<'EOF'
+python3 -B - <<'EOF'
 import importlib.util, sys
 
 spec = importlib.util.spec_from_file_location("board", "scripts/board.py")
