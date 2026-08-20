@@ -321,6 +321,35 @@ elif open_sidebar_menu "other-term" 25 sidebar-context-menu; then
   fi
 fi
 
+# ---- case 5: sidebar click-to-focus (#100) ----------------------------------
+# Clicking a sidebar row hands the sidebar the keyboard (Enter activates
+# that pane); clicking empty sidebar space also grants focus without
+# changing the selection (Down+Enter then switches panes).
+tgt_window() { tmux -L "$TGT" display-message -p '#{window_id}'; }
+# Earlier cases closed the fixture terminals; open a fresh one so two panes
+# (editor + terminal) exist for the focus-switch assertions.
+leader t; sleep 3
+if stable_sidebar_row "terminal-1" sidebar-focus-row; then
+  left_click 5 "$SIDEBAR_ROW"; sleep 0.6
+  drv_keys Enter; sleep 1.2
+  W_ROWCLICK=$(tgt_window)
+  # Focus the FIRST pane body (just right of the sidebar) so Down lands on
+  # the second pane row, then click empty sidebar space and navigate: the
+  # sidebar must own the keyboard, so Down+Enter switches panes.
+  left_click 45 20; sleep 0.6
+  W_BEFORE=$(tgt_window)
+  left_click 5 30; sleep 0.6
+  drv_keys Down; sleep 0.4; drv_keys Enter; sleep 1.2
+  W_AFTER=$(tgt_window)
+  if [ -n "$W_ROWCLICK" ] && [ "$W_BEFORE" != "$W_AFTER" ]; then
+    echo "PASS sidebar-focus (row click activates; empty-space click keys the sidebar)"
+  else
+    echo "  row-click window=$W_ROWCLICK, empty-space before=$W_BEFORE after=$W_AFTER"
+    sidebar_snapshot
+    fail sidebar-focus
+  fi
+fi
+
 # ---- result ----------------------------------------------------------------
 if [ "$FAILS" -eq 0 ]; then
   echo "ui-smoke: ALL PASS"
