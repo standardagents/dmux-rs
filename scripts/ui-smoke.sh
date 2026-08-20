@@ -215,6 +215,17 @@ if stable_sidebar_row "terminal-1" marker-sidebar-target; then
     MX=$(cap | /usr/bin/grep -n "MARKER" | head -1 | cut -d: -f1)
     if [ -n "${MX:-}" ]; then
       right_click 60 "$MX"; sleep 1
+      # A second pane-targeted right click replaces the first context menu.
+      # Rounded panels use one top-left corner each, so the composed frame
+      # must contain one after the replacement.
+      right_click 90 "$MX"; sleep 1
+      MENU_COUNT=$(cap | python3 -c 'import sys; print(sys.stdin.read().count("╭"))')
+      if [ "$MENU_COUNT" = 1 ]; then
+        echo "PASS context-menu singleton (second right-click replaced the first)"
+      else
+        echo "  expected one context menu after repeated right-click, got $MENU_COUNT"
+        fail context-menu-singleton
+      fi
       ANSI=$(cap_ansi)
       # SGR runs may separate the color set from the text; assert both on the
       # marker's line rather than adjacent.

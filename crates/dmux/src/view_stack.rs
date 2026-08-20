@@ -118,6 +118,13 @@ impl OverlayOrigin {
 pub(crate) struct OverlayEntry {
     pub(crate) view: Box<dyn crate::views::View>,
     pub(crate) origin: OverlayOrigin,
+    kind: OverlayKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverlayKind {
+    Flow,
+    ContextMenu,
 }
 
 impl std::ops::Deref for OverlayEntry {
@@ -143,7 +150,25 @@ impl OverlayStack {
     }
 
     pub(crate) fn push_at(&mut self, view: Box<dyn crate::views::View>, origin: OverlayOrigin) {
-        self.0.push(OverlayEntry { view, origin });
+        self.0.push(OverlayEntry {
+            view,
+            origin,
+            kind: OverlayKind::Flow,
+        });
+    }
+
+    fn replace_context_menu_at(
+        &mut self,
+        view: Box<dyn crate::views::View>,
+        origin: OverlayOrigin,
+    ) {
+        self.0
+            .retain(|entry| entry.kind != OverlayKind::ContextMenu);
+        self.0.push(OverlayEntry {
+            view,
+            origin,
+            kind: OverlayKind::ContextMenu,
+        });
     }
 
     pub(crate) fn pop(&mut self) -> Option<OverlayEntry> {
@@ -333,7 +358,11 @@ impl App {
                 Anchor::Pointer { x, y } => OverlayOrigin::Pointer { x, y },
                 _ => OverlayOrigin::Global,
             };
-            self.views.push_at(Box::new(menu), origin);
+            if matches!(anchor, Anchor::Pointer { .. }) {
+                self.views.replace_context_menu_at(Box::new(menu), origin);
+            } else {
+                self.views.push_at(Box::new(menu), origin);
+            }
             self.dirty = true;
         }
         true
@@ -475,6 +504,23 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_menu() -> Box<dyn crate::views::View> {
+        Box::new(MenuView::new("pane", vec![]))
+    }
+
+    #[test]
+    fn pointer_context_menu_replaces_only_the_previous_context_menu() {
+        let mut stack = OverlayStack::default();
+        stack.push(empty_menu());
+        stack.replace_context_menu_at(empty_menu(), OverlayOrigin::Pointer { x: 20, y: 5 });
+        stack.replace_context_menu_at(empty_menu(), OverlayOrigin::Pointer { x: 70, y: 12 });
+
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack[0].kind, OverlayKind::Flow);
+        assert_eq!(stack[1].kind, OverlayKind::ContextMenu);
+        assert_eq!(stack[1].origin, OverlayOrigin::Pointer { x: 70, y: 12 });
+    }
 
     fn group(root: &str, theme: &str) -> SidebarGroup {
         let (accent, accent_soft) = dmux_ui::project_theme(theme);
