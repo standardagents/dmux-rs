@@ -214,7 +214,7 @@ fn normalize_key(mut ev: InputEvent) -> InputEvent {
     if let InputEvent::Key(k) = &mut ev {
         k.key = match k.key {
             KeyCode::Char('\u{1b}') => KeyCode::Escape,
-            KeyCode::Char('\r') | KeyCode::Char('\n') => KeyCode::Enter,
+            KeyCode::Char('\r') => KeyCode::Enter,
             KeyCode::Char('\t') => KeyCode::Tab,
             KeyCode::Char('\u{7f}') => KeyCode::Backspace,
             other => other,
@@ -227,12 +227,109 @@ fn normalize_key(mut ev: InputEvent) -> InputEvent {
 /// pipeline tests. Every emitted key has dmux's protocol-independent form.
 pub struct InputDecoder {
     parser: InputParser,
+    scan: LfScan,
+}
+
+/// Byte-stream state for literal-LF interception (#63). termwiz collapses
+/// raw 0x0A and 0x0D into the same semantic Enter, destroying the
+/// distinction a Ghostty `text:\n` binding depends on. A bare LF is
+/// intercepted only in GROUND state — never inside an escape sequence or a
+/// bracketed paste — and surfaced as `Char('\n')` so the pane receives the
+/// byte unchanged while real Enter stays semantic.
+#[derive(Clone, PartialEq, Debug)]
+enum LfScan {
+    Ground,
+    Esc,
+    /// Inside a CSI; collects parameter bytes to recognize paste guards.
+    Csi(Vec<u8>),
+    Osc,
+    OscEsc,
+    /// Inside a bracketed paste: everything passes through untouched.
+    Paste,
+    PasteEsc,
+    PasteCsi(Vec<u8>),
+}
+
+impl LfScan {
+    /// Advance over one byte; returns true when the byte is a bare LF in
+    /// ground state (intercepted rather than parsed).
+    fn step(&mut self, b: u8) -> bool {
+        use LfScan::*;
+        *self = match std::mem::replace(self, Ground) {
+            Ground => match b {
+                b'\n' => return true,
+                0x1b => Esc,
+                _ => Ground,
+            },
+            Esc => match b {
+                b'[' => Csi(Vec::new()),
+                b']' => Osc,
+                _ => Ground,
+            },
+            Csi(mut params) => {
+                if (0x40..=0x7e).contains(&b) {
+                    if b == b'~' && params == b"200" {
+                        Paste
+                    } else {
+                        Ground
+                    }
+                } else {
+                    if params.len() < 8 {
+                        params.push(b);
+                    }
+                    Csi(params)
+                }
+            }
+            Osc => match b {
+                0x07 => Ground,
+                0x1b => OscEsc,
+                _ => Osc,
+            },
+            OscEsc => {
+                if b == b'\\' {
+                    Ground
+                } else {
+                    Osc
+                }
+            }
+            Paste => {
+                if b == 0x1b {
+                    PasteEsc
+                } else {
+                    Paste
+                }
+            }
+            PasteEsc => {
+                if b == b'[' {
+                    PasteCsi(Vec::new())
+                } else {
+                    Paste
+                }
+            }
+            PasteCsi(mut params) => {
+                if (0x40..=0x7e).contains(&b) {
+                    if b == b'~' && params == b"201" {
+                        Ground
+                    } else {
+                        Paste
+                    }
+                } else {
+                    if params.len() < 8 {
+                        params.push(b);
+                    }
+                    PasteCsi(params)
+                }
+            }
+        };
+        false
+    }
 }
 
 impl InputDecoder {
     pub fn new() -> Self {
         Self {
             parser: InputParser::new(),
+            scan: LfScan::Ground,
         }
     }
 
@@ -242,11 +339,30 @@ impl InputDecoder {
         mut callback: impl FnMut(InputEvent),
         more_data_may_arrive: bool,
     ) {
-        self.parser.parse(
-            bytes,
-            |event| callback(normalize_key(event)),
-            more_data_may_arrive,
-        );
+        let mut seg_start = 0usize;
+        for (i, &b) in bytes.iter().enumerate() {
+            if self.scan.step(b) {
+                if seg_start < i {
+                    self.parser.parse(
+                        &bytes[seg_start..i],
+                        |event| callback(normalize_key(event)),
+                        true,
+                    );
+                }
+                callback(InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char('\n'),
+                    modifiers: Modifiers::NONE,
+                }));
+                seg_start = i + 1;
+            }
+        }
+        if seg_start < bytes.len() || bytes.is_empty() {
+            self.parser.parse(
+                &bytes[seg_start..],
+                |event| callback(normalize_key(event)),
+                more_data_may_arrive,
+            );
+        }
     }
 }
 
@@ -328,5 +444,85 @@ mod tests {
         assert!(ENTER.windows(8).any(|window| window == b"\x1b[?1003h"));
         assert!(LEAVE.windows(8).any(|window| window == b"\x1b[?1003l"));
         assert!(ENTER.windows(8).any(|window| window == b"\x1b[?1006h"));
+    }
+}
+
+#[cfg(test)]
+mod lf_tests {
+    use super::*;
+
+    fn decode(chunks: &[&[u8]]) -> Vec<InputEvent> {
+        let mut d = InputDecoder::new();
+        let mut evs = Vec::new();
+        for c in chunks {
+            d.parse(c, |e| evs.push(e), false);
+        }
+        evs
+    }
+
+    fn is_lf(e: &InputEvent) -> bool {
+        matches!(e, InputEvent::Key(KeyEvent { key: KeyCode::Char('\n'), modifiers }) if modifiers.is_empty())
+    }
+
+    #[test]
+    fn bare_lf_survives_as_literal_char() {
+        // #63: Ghostty `text:\n` sends a raw 0x0A — it must NOT collapse
+        // into semantic Enter.
+        let evs = decode(&[b"\n"]);
+        assert_eq!(evs.len(), 1);
+        assert!(is_lf(&evs[0]), "got {evs:?}");
+    }
+
+    #[test]
+    fn raw_cr_stays_semantic_enter() {
+        let evs = decode(&[b"\r"]);
+        assert!(
+            matches!(
+                &evs[0],
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Enter,
+                    ..
+                })
+            ),
+            "got {evs:?}"
+        );
+    }
+
+    #[test]
+    fn lf_inside_escape_sequences_passes_through() {
+        // An LF byte inside CSI/OSC must reach the parser untouched — the
+        // scanner only intercepts in ground state.
+        let evs = decode(&[b"\x1b[31m"]);
+        assert!(!evs.iter().any(is_lf));
+        let evs = decode(&[b"\x1b]0;ti\ntle\x07"]);
+        assert!(
+            !evs.iter().any(is_lf),
+            "OSC content must not be intercepted: {evs:?}"
+        );
+    }
+
+    #[test]
+    fn lf_inside_bracketed_paste_passes_through() {
+        let evs = decode(&[b"\x1b[200~line one\nline two\x1b[201~"]);
+        assert!(
+            !evs.iter().any(is_lf),
+            "paste LF must stay in the paste: {evs:?}"
+        );
+        let paste = evs.iter().find_map(|e| match e {
+            InputEvent::Paste(s) => Some(s.clone()),
+            _ => None,
+        });
+        assert_eq!(paste.as_deref(), Some("line one\nline two"));
+        // …and ground-state interception resumes after the paste ends.
+        let evs = decode(&[b"\x1b[200~a\nb\x1b[201~", b"\n"]);
+        assert_eq!(evs.iter().filter(|e| is_lf(e)).count(), 1);
+    }
+
+    #[test]
+    fn split_reads_keep_scanner_state() {
+        // Escape sequence split across reads: the LF in the middle chunk is
+        // still inside the OSC.
+        let evs = decode(&[b"\x1b]0;a", b"\nb", b"\x07", b"\n"]);
+        assert_eq!(evs.iter().filter(|e| is_lf(e)).count(), 1, "got {evs:?}");
     }
 }

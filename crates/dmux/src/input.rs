@@ -137,6 +137,12 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
 }
 
 pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
+    // Literal LF from the host (#63 — e.g. a Ghostty `text:\n` binding):
+    // deliver the byte exactly. termwiz would otherwise re-encode any
+    // Enter-like key as CR and destroy the distinction.
+    if key.key == KeyCode::Char('\n') && key.modifiers.is_empty() {
+        return Some(b"\n".to_vec());
+    }
     let encoding = if modes.extended_keys_mode2 {
         // The pane requested mode 2 extended keys: encode CSI-u so it gets
         // the disambiguated keys it asked for.
@@ -441,6 +447,32 @@ mod tests {
             ),
             Routed::PaneBytes(_) | Routed::Ignore
         ));
+    }
+
+    #[test]
+    fn literal_lf_and_semantic_enter_stay_distinct() {
+        // #63: raw LF (Ghostty text:\n) delivers 0x0A; plain Enter delivers
+        // 0x0D in legacy modes; semantic Shift+Enter keeps CSI-u.
+        let modes = InputModes::default();
+        let lf = KeyEvent {
+            key: KeyCode::Char('\n'),
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(encode_key(&lf, modes).unwrap(), b"\n");
+        let enter = KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(encode_key(&enter, modes).unwrap(), b"\r");
+        let shift_enter = KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::SHIFT,
+        };
+        let bytes = encode_key(&shift_enter, modes).unwrap();
+        assert!(
+            bytes.starts_with(b"\x1b["),
+            "shift+enter stays CSI-u: {bytes:?}"
+        );
     }
 
     #[test]
