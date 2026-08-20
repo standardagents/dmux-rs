@@ -153,6 +153,36 @@ pub fn run_blocking(plan: &Plan, emit: &mut dyn FnMut(Ev)) {
 }
 
 /// Paint the loader over a pane's body rect.
+/// Draw every bootstrapping pane's loader card in the owning project's
+/// accent (#107). `accents` is parallel to `panes` and recomputed on every
+/// sidebar rebuild, so reorders, theme changes, and resizes cannot
+/// cross-color a card; success/warning/failure keep their status colors.
+pub fn draw_all(
+    buf: &mut CellBuffer,
+    panes: &[crate::session::LogicalPane],
+    accents: &[(dmux_compositor::Color, dmux_compositor::Color)],
+    theme: &Theme,
+    bootstraps: &std::collections::HashMap<String, Ui>,
+    anim: u64,
+) {
+    if bootstraps.is_empty() {
+        return;
+    }
+    for (i, p) in panes.iter().enumerate() {
+        if let (Some(rect), Some(ui)) = (p.rect, bootstraps.get(&p.slug)) {
+            let themed = match accents.get(i) {
+                Some((accent, accent_soft)) => Theme {
+                    accent: *accent,
+                    accent_soft: *accent_soft,
+                    ..*theme
+                },
+                None => *theme,
+            };
+            draw(buf, rect, &themed, ui, anim);
+        }
+    }
+}
+
 pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64) {
     // The pane's shell may already have painted a prompt — cover it all.
     buf.fill(
@@ -298,4 +328,80 @@ pub fn draw(buf: &mut CellBuffer, rect: Rect, theme: &Theme, ui: &Ui, anim: u64)
         AttrFlags::ITALIC,
         inner,
     );
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use super::*;
+    use dmux_compositor::Color;
+
+    fn card_ui() -> Ui {
+        Ui {
+            pane: dmux_cc::PaneId(1),
+            title: "issue-worktree".into(),
+            agent_label: "claude".into(),
+            branch: "issue-1".into(),
+            steps: Ui::step_labels("claude", false),
+            current: 1,
+            detail: String::new(),
+            started: Instant::now(),
+            done_at: None,
+            failed: None,
+            launch: None,
+        }
+    }
+
+    fn accent_cells(buf: &CellBuffer, accent: Color) -> usize {
+        let area = buf.area();
+        (0..area.h)
+            .flat_map(|y| (0..area.w).map(move |x| (x, y)))
+            .filter(|(x, y)| buf.get(*x, *y).fg == accent)
+            .count()
+    }
+
+    #[test]
+    fn cards_use_their_own_project_accent_and_keep_status_colors() {
+        // Two projects with distinct accents (#107): each card's border,
+        // heading, and progress glyphs carry ITS project's accent; the
+        // other project's accent never appears, and error state keeps the
+        // status color under both.
+        let base = Theme::default();
+        let orange = dmux_ui::project_theme("orange");
+        let cyan = dmux_ui::project_theme("cyan");
+        let themes = [
+            Theme {
+                accent: orange.0,
+                accent_soft: orange.1,
+                ..base
+            },
+            Theme {
+                accent: cyan.0,
+                accent_soft: cyan.1,
+                ..base
+            },
+        ];
+        let ui = card_ui();
+        for (theme, other) in [(themes[0], themes[1]), (themes[1], themes[0])] {
+            let mut buf = CellBuffer::new(60, 16);
+            draw(&mut buf, Rect::new(0, 0, 60, 16), &theme, &ui, 0);
+            assert!(
+                accent_cells(&buf, theme.accent) > 0,
+                "card carries its own accent"
+            );
+            assert_eq!(
+                accent_cells(&buf, other.accent),
+                0,
+                "the other project's accent never appears"
+            );
+        }
+        // Failure semantics stay on the status color for any accent.
+        let mut failed = card_ui();
+        failed.failed = Some("clone failed".into());
+        let mut buf = CellBuffer::new(60, 16);
+        draw(&mut buf, Rect::new(0, 0, 60, 16), &themes[0], &failed, 0);
+        assert!(
+            accent_cells(&buf, base.danger) > 0,
+            "error state renders in the status color"
+        );
+    }
 }

@@ -3267,14 +3267,16 @@ impl App {
         };
         render::compose(&mut self.back, &scene, &mut self.click_map);
 
-        // Bootstrapping panes show the native loader card over their body.
-        if !self.bootstraps.is_empty() {
-            for p in &self.panes {
-                if let (Some(rect), Some(ui)) = (p.rect, self.bootstraps.get(&p.slug)) {
-                    bootstrap::draw(&mut self.back, rect, &self.theme, ui, self.anim);
-                }
-            }
-        }
+        // Bootstrapping panes show the native loader card over their body,
+        // in the owning project's accent (#107).
+        bootstrap::draw_all(
+            &mut self.back,
+            &self.panes,
+            &self.pane_accents,
+            &self.theme,
+            &self.bootstraps,
+            self.anim,
+        );
 
         if self.welcome_active() {
             let content = render::content_area(&self.back, &self.layout);
