@@ -199,7 +199,13 @@ Loop rules:
   must always be releasable.
 
 Ordinary feature work loops the same way minus the issue queue: pick from
-ROADMAP.md, validate identically, and keep `main` releasable.
+ROADMAP.md, validate identically, and keep `main` releasable. Before ANY
+ordinary feature or publication edits (issue work has `work-issue.sh`),
+run `scripts/start-task.sh <task-slug>` first: it refreshes
+`origin/main`, reports whether the current checkout is ahead / behind /
+diverged / dirty, and prints a clean task worktree created from the
+refreshed tip — work there, not in a stale root checkout. It never
+changes or discards existing checkout state.
 
 ## Fixer-agent runbook (`render-incident` issues)
 
