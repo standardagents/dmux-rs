@@ -8,6 +8,7 @@ mod agents;
 mod audit;
 mod bootstrap;
 mod command_dispatch;
+mod control_events;
 mod diagnose;
 mod git;
 mod github;
@@ -23,6 +24,7 @@ mod pane_actions;
 mod profiler;
 mod registry;
 mod render;
+mod renderer_control;
 mod report;
 mod scheduler;
 mod session;
@@ -48,7 +50,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::Parser as ClapParser;
-use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
+use dmux_cc::{Client, PaneId, Reply, ReplyRouter};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter};
 use dmux_core::i18n::t;
 use dmux_core::{encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsStore};
@@ -122,6 +124,8 @@ struct Cli {
 /// into the main loop.
 #[derive(Debug)]
 enum AppMsg {
+    /// A renderer claim acquired its session-scoped advisory lock.
+    RendererLock(Result<renderer_control::ClaimLock, String>),
     MergeDone {
         slug: String,
         branch: String,
@@ -169,7 +173,9 @@ enum Tag {
     Cursor(PaneId),
     /// Shadow-verifier capture for one pane.
     VerifyCap(PaneId),
-    ControllerPid,
+    RendererIdentity,
+    ClaimCheck,
+    ClaimFence,
     /// Reply-escaping probe (#19): decides whether this server octal-escapes
     /// command-reply payloads (tmux 3.5a) or sends raw bytes (3.7b).
     EscapeProbe,
@@ -409,7 +415,11 @@ struct App {
     /// is in flight (#53) — re-exec at the wrong moment strands the route
     /// as an idle shell. (tag, staged path, first deferred at).
     pending_update: Option<(String, PathBuf, Instant)>,
-    own_sizing: bool,
+    renderer: renderer_control::RendererControl,
+    startup_legacy_checked: bool,
+    startup_legacy_alive: bool,
+    startup_panes_ready: bool,
+    pending_owner_input: std::collections::VecDeque<dmux_host::TimedInputEvent>,
     /// Welcome-screen state (shown when no panes are visible).
     welcome_cards: Vec<welcome::WelcomeCard>,
     welcome_sel: usize,
@@ -507,39 +517,18 @@ async fn run(
 
     let _ = client.send("refresh-client -f ignore-size,pause-after=1,wait-exit");
     let _ = client.send(format!("refresh-client -C {}x{}", size.0, size.1));
-    // tmux answers pane OSC 10/11 queries itself, and with only a
-    // control-mode client attached it reports black-on-black — apps then
-    // mis-detect the theme (codex painted a light composer, #4).
-    // window-style feeds tmux the palette's answer; it tints only
-    // tmux-client rendering (nothing watches that — dmux is the client)
-    // and never reaches capture-pane grids, so the verifier and seed path
-    // are unaffected.
-    let (default_fg, default_bg) = dmux_vt::palette::default_fg_bg_hex();
-    let _ = client.send(format!(
-        "set -g window-style 'fg={default_fg},bg={default_bg}'"
-    ));
-    // window-active-style MERGES OVER window-style for the active pane —
-    // where a focused TUI actually runs — so a stale or user-config value
-    // there (observed live: bg=colour231, near-white) silently overrides
-    // the answer above and re-breaks theme detection (#4 follow-up). Own
-    // both options.
-    let _ = client.send(format!(
-        "set -g window-active-style 'fg={default_fg},bg={default_bg}'"
-    ));
-    // Mirror pane mode 2 with tmux's CSI-u extended-key format.
-    session::configure_extended_keys(&client);
+    session::subscribe_key_modes(&client);
+    let _ = client.send(renderer_control::owner_subscription_command());
     // Reply-escaping probe must be the FIRST tagged command: its verdict
     // gates decoding of every later reply, and tmux answers in order (#19).
     client.send_tagged(
         "display-message -p 'dmuxprobe\u{1}end'".to_string(),
         Tag::EscapeProbe,
     )?;
+    client.send_tagged(renderer_control::identity_command(), Tag::RendererIdentity)?;
     client.send_tagged(
-        format!(
-            "show-options -t {} -qv @dmux_controller_pid",
-            dmux_cc::quote_arg(&session_name)
-        ),
-        Tag::ControllerPid,
+        renderer_control::claim_check_command(&session_name),
+        Tag::ClaimCheck,
     )?;
     client.send_tagged(session::list_panes_command(), Tag::ListPanes)?;
 
@@ -563,6 +552,14 @@ async fn run(
     });
     let config_path = DmuxConfig::default_path(&project_root);
     let audit_base = audit::snapshot(&config.panes);
+    let renderer = renderer_control::RendererControl::new(
+        dirs_home(),
+        renderer_control::CommandContext {
+            tmux: cli.tmux.clone(),
+            socket: cli.socket.clone(),
+            session_name: session_name.clone(),
+        },
+    );
 
     let mut app = App {
         client,
@@ -623,7 +620,11 @@ async fn run(
         reexec_after: None,
         want_exit: false,
         pending_update: None,
-        own_sizing: false,
+        renderer,
+        startup_legacy_checked: false,
+        startup_legacy_alive: false,
+        startup_panes_ready: false,
+        pending_owner_input: std::collections::VecDeque::new(),
         welcome_cards: Vec::new(),
         welcome_sel: 0,
         welcome_rain: welcome::MatrixRain::new(
@@ -746,7 +747,7 @@ async fn run(
     }
     app.refresh_welcome_cards();
 
-    loop {
+    'main_loop: loop {
         let now = Instant::now();
         let render_deadline = app
             .dirty
@@ -876,7 +877,7 @@ async fn run(
                         {
                             match events.try_recv() {
                                 Ok(ev) => {
-                                    if !app.handle_cc(ev) { return app.shutdown(&mut child).await; }
+                                    if !app.handle_cc(ev) { break 'main_loop; }
                                     budget -= 1;
                                 }
                                 Err(_) => break,
@@ -905,11 +906,19 @@ async fn run(
     }
 
     let reexec = app.reexec_after.take();
+    let reexec_context = app.renderer.reexec_context();
+    if reexec.is_some() {
+        app.renderer.mark_reexec(app.size);
+    } else {
+        app.renderer.graceful_release();
+    }
+    let preserved_token = app.renderer.token.clone();
     let result = app.shutdown(&mut child).await;
     if let Some(exe) = reexec {
         // Only returns on error; on success the new build takes over this
         // terminal and reattaches to the same tmux session.
-        let err = updater::reexec(&exe);
+        let err = updater::reexec(&exe, &preserved_token, &reexec_context);
+        app.renderer.graceful_release();
         eprintln!("dmux-rs self-update re-exec failed: {err}");
     }
     result
@@ -929,6 +938,24 @@ impl App {
             self.metrics.frame_total_us.value_at_quantile(0.95) as f64 / 1000.0
         );
         Ok(())
+    }
+
+    pub(crate) fn send_shared(&self, command: impl AsRef<str>) -> Result<(), dmux_cc::CcError> {
+        let Some(command) = self.renderer.guarded(command.as_ref()) else {
+            return Ok(());
+        };
+        self.client.send_deferred(command)
+    }
+
+    pub(crate) fn send_shared_tagged(
+        &self,
+        command: impl AsRef<str>,
+        tag: Tag,
+    ) -> Result<(), dmux_cc::CcError> {
+        let Some(command) = self.renderer.guarded(command.as_ref()) else {
+            return Ok(());
+        };
+        self.client.send_deferred_tagged(command, tag)
     }
 
     fn visible_pane_count(&self) -> usize {
@@ -994,7 +1021,7 @@ impl App {
     /// Commands are FIFO on the control stream, so calling this before a
     /// kill-window guarantees the session never hits zero windows.
     fn ensure_keepalive(&mut self) {
-        if self.keepalive_present || self.keepalive_pending || !self.own_sizing {
+        if self.keepalive_present || self.keepalive_pending || !self.renderer.is_controller() {
             return;
         }
         // Tagged round-trip: keepalive_pending stays set until tmux confirms,
@@ -1003,7 +1030,7 @@ impl App {
         // (session::is_keepalive), which survives automatic-rename.
         self.keepalive_present = true;
         self.keepalive_pending = true;
-        let _ = self.client.send_tagged(
+        let _ = self.send_shared_tagged(
             format!(
                 "new-window -dP -F '#{{window_id}}' -n {} '{}'",
                 session::KEEPALIVE_NAME,
@@ -1026,6 +1053,9 @@ impl App {
         if text.is_empty() || text.len() > 512 * 1024 {
             return;
         }
+        let Some(_owner_guard) = self.renderer.confirmed_guard() else {
+            return;
+        };
         let osc = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
         if let Err(err) = self.host.write_frame(osc.as_bytes()) {
             tracing::warn!(%err, "clipboard forward failed");
@@ -1036,7 +1066,7 @@ impl App {
         let path = std::env::temp_dir().join(format!("dmux-rs-clip-{}", std::process::id()));
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let _ = self.client.send(format!(
+                let _ = self.send_shared(format!(
                     "load-buffer -b dmux {}",
                     dmux_cc::quote_arg(&path.to_string_lossy())
                 ));
@@ -1091,6 +1121,9 @@ impl App {
         {
             return;
         }
+        let Some(owner_guard) = self.renderer.confirmed_guard() else {
+            return;
+        };
         let Some(incident) = incident else { return };
         let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) else {
             return;
@@ -1137,6 +1170,7 @@ impl App {
                 dry.as_deref(),
             )
             .map(|f| f.issue);
+            drop(owner_guard);
             let _ = tx.send(AppMsg::IssueFiled(result));
         });
     }
@@ -1149,6 +1183,10 @@ impl App {
             s.get_bool("enableNotifications", true)
         };
         if native && notify::available() {
+            let Some(owner_guard) = self.renderer.confirmed_guard() else {
+                self.toast(msg);
+                return;
+            };
             let body = msg.clone();
             // Rotate through the configured helper sounds (TS randomizes;
             // a timestamp pick avoids an rng dependency).
@@ -1158,284 +1196,29 @@ impl App {
             };
             tokio::task::spawn_blocking(move || {
                 let _ = notify::notify("dmux", &body, sound.as_deref());
+                drop(owner_guard);
             });
         }
         self.toast(msg);
     }
 
-    // ------------------------------------------------------------------
-    // Control-mode events
-
-    fn handle_cc(&mut self, ev: CcEvent) -> bool {
-        match self.router.route(ev) {
-            CcRouted::Notification(ev) => self.handle_notification(ev),
-            CcRouted::Reply(tag, mut reply) => {
-                // Decode octal-escaped payloads on servers that escape them;
-                // the probe reply itself must stay raw to be judged (#19).
-                if !matches!(tag, Tag::EscapeProbe) && self.replies_escaped == Some(true) {
-                    reply.unescape_lines();
-                }
-                self.handle_reply(tag, reply);
-                true
-            }
-            CcRouted::Consumed => true,
-            CcRouted::Desync => {
-                tracing::error!("protocol desync — exiting (restart to reattach)");
-                false
-            }
-        }
-    }
-
-    fn handle_notification(&mut self, ev: CcEvent) -> bool {
-        match ev {
-            CcEvent::Output { pane, data } | CcEvent::ExtendedOutput { pane, data, .. } => {
-                self.metrics.record_input(data.len());
-                let output_at = Instant::now();
-                let mut visible_output = false;
-                let data = if self.fault_drop > 0 {
-                    let n = data.len().min(self.fault_drop);
-                    self.fault_drop -= n;
-                    data[n..].to_vec()
-                } else {
-                    data
-                };
-                let mut clipboard_out: Vec<String> = Vec::new();
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
-                    let now = output_at;
-                    if now.duration_since(p.window_start) >= FLOOD_WINDOW {
-                        p.window_start = now;
-                        p.window_bytes = 0;
-                    }
-                    p.window_bytes += data.len() as u64;
-
-                    if let Some(buffer) = &mut p.reseed_buffer {
-                        // Recorded when the seed drains it (finish_reseed).
-                        buffer.push(data);
-                    } else {
-                        let effects = p.advance_recorded(&data);
-                        for effect in effects {
-                            if let Some(text) = handle_side_effect(&self.client, p, effect) {
-                                clipboard_out.push(text);
-                            }
-                        }
-                        p.engine.on_output();
-                        p.dirty = true;
-                        p.last_output = Some(now);
-                        if p.status != PaneStatus::Dead {
-                            p.status = PaneStatus::Working;
-                        }
-                        self.dirty = true;
-                        visible_output = true;
-                    }
-
-                    if !p.throttled && p.window_bytes > FLOOD_BYTES_PER_WINDOW {
-                        tracing::info!(pane = %pane, "flood detected; throttling output at source");
-                        p.throttled = true;
-                        p.resume_at = Some(now + FLOOD_RESEED_EVERY);
-                        let _ = self.client.send(format!("refresh-client -A '{pane}:off'"));
-                        self.dirty = true;
-                    }
-                }
-                if visible_output {
-                    self.handle_pane_interaction_output(pane, output_at);
-                }
-                for text in clipboard_out {
-                    self.forward_clipboard(&text);
-                }
-                true
-            }
-            CcEvent::Pause(pane) => {
-                self.metrics.pauses += 1;
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
-                    p.paused = true;
-                    p.begin_reseed();
-                    let _ = self
-                        .client
-                        .send(format!("refresh-client -A '{pane}:continue'"));
-                    let _ = self.client.send_tagged(p.seed_command(), Tag::Seed(pane));
-                    let _ = self
-                        .client
-                        .send_tagged(p.cursor_command(), Tag::Cursor(pane));
-                    self.dirty = true;
-                }
-                true
-            }
-            CcEvent::Continue(pane) => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
-                    p.paused = false;
-                    p.dirty = true;
-                    self.dirty = true;
-                }
-                true
-            }
-            CcEvent::WindowClose(w) => {
-                for p in self.panes.iter_mut().filter(|p| p.tmux_window == w) {
-                    p.status = PaneStatus::Dead;
-                    p.dirty = true;
-                }
-                self.request_reconcile();
-                true
-            }
-            CcEvent::UnlinkedWindowClose(_) => {
-                // A window closed in a session OURS is not attached to
-                // (grouped sessions, other users' sessions). Our windows are
-                // always linked to our session, so this is never one of our
-                // panes dying — marking Dead here false-kills healthy panes
-                // whenever session groups churn. Reconcile picks up any real
-                // topology change.
-                self.request_reconcile();
-                true
-            }
-            CcEvent::WindowAdd(_)
-            | CcEvent::LayoutChange { .. }
-            | CcEvent::WindowPaneChanged { .. }
-            | CcEvent::PaneModeChanged(_)
-            | CcEvent::SubscriptionChanged { .. } => {
-                self.request_reconcile();
-                true
-            }
-            CcEvent::WindowRenamed { window, name }
-            | CcEvent::UnlinkedWindowRenamed { window, name } => {
-                if let Some(p) = self
-                    .panes
-                    .iter_mut()
-                    .find(|p| p.tmux_window == window && p.title.is_empty())
-                {
-                    p.title = name;
-                    self.dirty = true;
-                }
-                true
-            }
-            CcEvent::Exit(reason) => {
-                tracing::info!(?reason, "server closed control connection");
-                false
-            }
-            CcEvent::ConfigError(err) => {
-                tracing::warn!(%err, "tmux config error");
-                true
-            }
-            CcEvent::Unknown(line) => {
-                tracing::debug!(%line, "unknown control-mode line");
-                true
-            }
-            _ => true,
-        }
-    }
-
-    fn handle_reply(&mut self, tag: Tag, reply: Reply) {
-        match tag {
-            Tag::Input(pane, sequence) => {
-                self.handle_pane_input_ack(pane, sequence, reply.ok, Instant::now())
-            }
-            Tag::ListPanes => {
-                self.reconcile_in_flight = false;
-                self.apply_pane_list(&reply);
-                if self.reconcile_again {
-                    self.reconcile_again = false;
-                    self.request_reconcile();
-                }
-            }
-            Tag::Seed(pane_id) => {
-                // An error reply (e.g. the pane died mid-flight) must never
-                // be applied as grid content.
-                if reply.ok {
-                    if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
-                        p.pending_seed = Some(reply);
-                    }
-                }
-            }
-            Tag::VerifyCap(pane_id) => {
-                if !reply.ok {
-                    return;
-                }
-                // Comparison waits out post-capture quiescence (#113):
-                // %output delivery can lag behind the capture reply, so an
-                // immediate compare races bytes tmux applied but we have
-                // not received. The stash is finished by the timer loop.
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
-                    if p.reseed_buffer.is_none() && !p.paused && !p.throttled {
-                        p.pending_verify = Some((reply.clone(), std::time::Instant::now()));
-                    }
-                }
-            }
-            Tag::Cursor(pane_id) => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
-                    if let Some(seed) = p.pending_seed.take() {
-                        let cursor = reply
-                            .ok
-                            .then(|| session::parse_cursor_reply(&reply))
-                            .flatten();
-                        p.finish_reseed(&seed, cursor);
-                        self.dirty = true;
-                    } else {
-                        // Seed failed: stop buffering so live output flows again.
-                        if let Some(buffered) = p.reseed_buffer.take() {
-                            for chunk in buffered {
-                                let _ = p.advance_recorded(&chunk);
-                            }
-                        }
-                        self.dirty = true;
-                    }
-                }
-            }
-            Tag::EscapeProbe => {
-                // Raw servers echo the literal 0x01 byte; escaping servers
-                // turn it into the four bytes \001.
-                let escaped = reply
-                    .lines
-                    .first()
-                    .map(|l| !l.contains(&0x01) && l.windows(4).any(|w| w == b"\\001"))
-                    .unwrap_or(false);
-                self.replies_escaped = Some(escaped);
-                tracing::info!(escaped, "reply-escaping probe");
-            }
-            Tag::ControllerPid => {
-                let pid = reply
-                    .text_lines()
-                    .first()
-                    .and_then(|l| l.trim().parse::<i32>().ok());
-                let controller_alive = pid
-                    .map(|pid| unsafe { libc::kill(pid, 0) == 0 })
-                    .unwrap_or(false);
-                self.own_sizing = !controller_alive;
-                tracing::info!(?pid, own_sizing = self.own_sizing, "controller check");
-                if !self.own_sizing {
-                    self.toast("observe mode: TS dmux owns this session");
-                }
-                // Keepalive creation happens in apply_pane_list, after the
-                // pane listing has revealed whether one already exists.
-                self.apply_window_sizes();
-            }
-            Tag::NewWindow(ctx) => {
-                self.finish_new_window(*ctx, &reply);
-            }
-            Tag::KillWindow(pane_id) => {
-                let err = reply.text_lines().first().cloned().unwrap_or_default();
-                self.finish_close(pane_id, reply.ok, err);
-            }
-            Tag::KeepaliveCreated => {
-                self.keepalive_pending = false;
-                if reply.ok {
-                    // Pin the name so name-based tooling stays readable even
-                    // under automatic-rename configs (identity itself is the
-                    // start command and does not depend on this).
-                    if let Some(win) = reply.text_lines().first().map(|l| l.trim().to_string()) {
-                        if win.starts_with('@') {
-                            let _ = self
-                                .client
-                                .send(format!("set-option -w -t {win} automatic-rename off"));
-                        }
-                    }
-                } else {
-                    // Creation failed; allow a later reconcile to retry.
-                    self.keepalive_present = false;
-                }
-            }
-        }
-    }
-
     fn handle_app_msg(&mut self, msg: AppMsg) {
         match msg {
+            AppMsg::RendererLock(result) => match result {
+                Ok(lock) => {
+                    self.renderer.claim_lock = Some(lock);
+                    let _ = self.client.send_tagged(
+                        renderer_control::claim_check_command(&self.session_name),
+                        Tag::ClaimCheck,
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "renderer claim lock failed");
+                    let owner = self.renderer.command.read_owner().ok().flatten();
+                    self.renderer.become_follower(owner);
+                    self.toast("Renderer ownership unavailable");
+                }
+            },
             AppMsg::MergeDone {
                 slug,
                 branch,
@@ -1693,6 +1476,7 @@ impl App {
             }
             AppMsg::NamingDone { pane, name } => {
                 let mut apply = false;
+                let mut rename_command = None;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     p.analysis_inflight = false;
                     if !name.is_empty() && p.auto_name {
@@ -1701,7 +1485,7 @@ impl App {
                         if p.title != name {
                             p.title = name.clone();
                             let encoded = encode_pane_title(&name, &p.slug);
-                            let _ = self.client.send(format!(
+                            rename_command = Some(format!(
                                 "select-pane -t {} -T {}",
                                 p.tmux_pane,
                                 dmux_cc::quote_arg(&encoded)
@@ -1709,6 +1493,9 @@ impl App {
                             apply = true;
                         }
                     }
+                }
+                if let Some(command) = rename_command {
+                    let _ = self.send_shared(command);
                 }
                 if apply {
                     self.dirty = true;
@@ -1951,7 +1738,7 @@ impl App {
             .collect();
         self.keepalive_present = !keepalives.is_empty();
         for extra in keepalives.iter().skip(1) {
-            let _ = self.client.send(format!("kill-window -t {extra}"));
+            let _ = self.send_shared(format!("kill-window -t {extra}"));
         }
         // Legacy multi-pane windows (splits inherited from older sessions or
         // other clients): dmux's model is one pane per window, so in owner
@@ -1959,11 +1746,11 @@ impl App {
         // this, apply_window_sizes skips shared windows entirely and stale
         // split layouts survive forever (#7). Idempotent: the reconcile
         // after the breaks lists only single-pane windows.
-        if self.own_sizing {
+        if self.renderer.is_controller() {
             let extras = panes_to_break_out(&infos);
             for pane in &extras {
                 tracing::info!(pane = %pane, "breaking legacy multi-pane window");
-                let _ = self.client.send(format!("break-pane -d -s {pane}"));
+                let _ = self.send_shared(format!("break-pane -d -s {pane}"));
             }
             if !extras.is_empty() {
                 self.request_reconcile();
@@ -2079,7 +1866,7 @@ impl App {
         // Fresh server + persisted config: offer ONE explicit recovery
         // action (#20). Agent restarts can have external side effects, so
         // nothing restarts without this confirmation.
-        if self.session_created && !self.restore_offered && self.own_sizing {
+        if self.session_created && !self.restore_offered && self.renderer.is_controller() {
             self.restore_offered = true;
             let root = self.project_root.to_string_lossy().into_owned();
             let (plans, skipped) = session::plan_session_restore(&self.config, &root, &|p| {
@@ -2166,7 +1953,7 @@ impl App {
     }
 
     fn apply_window_sizes(&mut self) {
-        if !self.own_sizing {
+        if !self.renderer.is_controller() {
             return;
         }
         let mut per_window: std::collections::HashMap<dmux_cc::WindowId, u32> =
@@ -2191,7 +1978,7 @@ impl App {
             // latest-mode height = client minus status row). The commands
             // are idempotent and only sent while the size is wrong, so the
             // converged steady state sends nothing.
-            let _ = self.client.send(format!(
+            let _ = self.send_shared(format!(
                 "set-option -w -t {} window-size manual",
                 p.tmux_window
             ));
@@ -2199,11 +1986,11 @@ impl App {
             // the window, making the pane one row shorter than the window
             // we size — the bottom row of every pane would be invisible.
             // Scoped to our windows; the user's other sessions keep it.
-            let _ = self.client.send(format!(
+            let _ = self.send_shared(format!(
                 "set-option -w -t {} pane-border-status off",
                 p.tmux_window
             ));
-            let _ = self.client.send(format!(
+            let _ = self.send_shared(format!(
                 "resize-window -t {} -x {} -y {}",
                 p.tmux_window, rect.w, rect.h
             ));
@@ -2224,6 +2011,7 @@ impl App {
             .client
             .send(format!("refresh-client -C {}x{}", new_size.0, new_size.1));
         self.relayout();
+        self.renderer.update_size(new_size);
     }
 
     /// Welcome-screen navigation. Returns Some(keep_running) when consumed.
@@ -2277,7 +2065,7 @@ impl App {
                                 row.saturating_sub(rect.y),
                             );
                             self.interactions.forwarded_to(p.tmux_pane);
-                            let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &motion));
+                            let _ = self.send_shared(input::send_keys_hex(p.tmux_pane, &motion));
                         }
                     }
                 }
@@ -2403,14 +2191,14 @@ impl App {
                             // Motion-while-held: SGR button 32.
                             let m = input::encode_sgr_mouse(32, true, c, r);
                             self.interactions.forwarded_to(pane_id);
-                            let _ = self.client.send(input::send_keys_hex(pane_id, &m));
+                            let _ = self.send_shared(input::send_keys_hex(pane_id, &m));
                             return true;
                         }
                         MouseKind::Release => {
                             self.mouse_forward = None;
                             let up = input::encode_sgr_mouse(0, false, c, r);
                             self.interactions.forwarded_to(pane_id);
-                            let _ = self.client.send(input::send_keys_hex(pane_id, &up));
+                            let _ = self.send_shared(input::send_keys_hex(pane_id, &up));
                             return true;
                         }
                         _ => {}
@@ -2478,6 +2266,7 @@ impl App {
                         if let Some(ClickTarget::PaneBody(i)) | Some(ClickTarget::PaneTitle(i)) =
                             target
                         {
+                            let mut forwarded = None;
                             if let Some(p) = self.panes.get_mut(i) {
                                 let modes = p.term.input_modes();
                                 let app_mouse =
@@ -2494,23 +2283,23 @@ impl App {
                                             r,
                                         );
                                         self.interactions.forwarded_to(p.tmux_pane);
-                                        let _ = self
-                                            .client
-                                            .send(input::send_keys_hex(p.tmux_pane, &seq));
+                                        forwarded = Some(input::send_keys_hex(p.tmux_pane, &seq));
                                     }
                                 } else if modes.alt_screen {
                                     // xterm "alternate scroll" / tmux behavior:
                                     // honoring DECCKM application encoding.
                                     let seq = input::alternate_scroll_bytes(up, modes.app_cursor);
                                     self.interactions.forwarded_to(p.tmux_pane);
-                                    let _ =
-                                        self.client.send(input::send_keys_hex(p.tmux_pane, seq));
+                                    forwarded = Some(input::send_keys_hex(p.tmux_pane, seq));
                                 } else {
                                     p.term.scroll_view(delta);
                                     p.dirty = true;
                                     self.dirty = true;
                                     self.interactions.local_changed();
                                 }
+                            }
+                            if let Some(command) = forwarded {
+                                let _ = self.send_shared(command);
                             }
                         }
                     }
@@ -2614,7 +2403,7 @@ impl App {
                                 let down = input::encode_sgr_mouse(0, true, c, r);
                                 let pane = p.tmux_pane;
                                 self.interactions.forwarded_to(pane);
-                                let _ = self.client.send(input::send_keys_hex(pane, &down));
+                                let _ = self.send_shared(input::send_keys_hex(pane, &down));
                                 self.mouse_forward = Some(i);
                             } else {
                                 // dmux-side text selection (Shift forces it
@@ -2718,12 +2507,13 @@ impl App {
         p.title = name.clone();
         p.auto_name = false;
         let encoded = encode_pane_title(&name, &p.slug);
-        let _ = self.client.send(format!(
+        let command = format!(
             "select-pane -t {} -T {}",
             p.tmux_pane,
             dmux_cc::quote_arg(&encoded)
-        ));
+        );
         let slug = p.slug.clone();
+        let _ = self.send_shared(command);
         self.update_config_pane(&slug, audit::Reason::Rename, |rec| {
             rec.display_name = Some(name.clone());
         });
@@ -2805,11 +2595,10 @@ impl App {
             ("DMUX_SLUG", slug.clone()),
             ("DMUX_PANE_ID", pane_id.to_string()),
         ];
-        hooks::run_detached(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
+        self.run_hook_if_controller(&hook_root, "before_pane_close", &hook_cwd, &hook_env);
         self.closing.insert(pane_id);
-        let _ = self
-            .client
-            .send_tagged(format!("kill-window -t {window}"), Tag::KillWindow(pane_id));
+        let _ =
+            self.send_shared_tagged(format!("kill-window -t {window}"), Tag::KillWindow(pane_id));
         self.toast(format!("Closing '{title}'…"));
         self.dirty = true;
     }
@@ -2842,7 +2631,7 @@ impl App {
             ("DMUX_SLUG", pane.slug.clone()),
             ("DMUX_PANE_ID", pane.tmux_pane.to_string()),
         ];
-        hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
+        self.run_hook_if_controller(&hook_root, "pane_closed", &hook_root, &hook_env);
         if registry::remove_pane_record(&mut self.config.panes, &pane) {
             tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
                 root = ?pane.project_root, "removing pane record");
@@ -3049,12 +2838,17 @@ impl App {
         }
         // Shadow verifier: compare one settled pane per tick against tmux's
         // authoritative grid (bounded to one capture in flight per sweep).
-        if self.verify_enabled {
-            if let Some(p) = self.panes.iter_mut().find(|p| verify::eligible(p, now)) {
-                p.last_verify = Some(now);
-                let _ = self
-                    .client
-                    .send_tagged(p.seed_command_visible(), Tag::VerifyCap(p.tmux_pane));
+        if self.verify_enabled && self.renderer.is_controller() {
+            let capture = self
+                .panes
+                .iter_mut()
+                .find(|p| verify::eligible(p, now))
+                .map(|p| {
+                    p.last_verify = Some(now);
+                    (p.seed_command_visible(), p.tmux_pane)
+                });
+            if let Some((command, pane)) = capture {
+                let _ = self.send_shared_tagged(command, Tag::VerifyCap(pane));
             }
         }
         // Finished bootstrap loaders linger briefly (success: long enough for
@@ -3108,6 +2902,9 @@ impl App {
     }
 
     fn render_frame(&mut self) {
+        if !self.renderer.is_ready() {
+            return;
+        }
         let start = Instant::now();
         self.click_map.clear();
         // Clear the canvas: anything not repainted this frame (welcome
@@ -3122,7 +2919,9 @@ impl App {
             .unwrap_or_else(|| "project".into());
         // Footer tips fill the idle footer (rotating every ~15s); any real
         // status message wins.
-        let footer_text = if !self.status_msg.is_empty() {
+        let footer_text = if self.leader_armed {
+            input::LEADER_HINT.to_string()
+        } else if !self.status_msg.is_empty() {
             self.status_msg.clone()
         } else if self.sidebar_focused {
             if self.sidebar_project.is_some() {
@@ -3150,6 +2949,8 @@ impl App {
         } else {
             "^b for commands · ^b ? help".to_string()
         };
+        let ownership = self.renderer.status_line(self.size);
+        let footer_text = format!("{ownership} · {footer_text}");
         let scene = render::Scene {
             panes: &self.panes,
             layout: &self.layout,
@@ -3281,13 +3082,17 @@ impl App {
 
 fn handle_side_effect(
     client: &Client<Tag>,
+    owner: Option<&renderer_control::OwnerRecord>,
     pane: &mut LogicalPane,
     effect: dmux_vt::TermSideEffect,
 ) -> Option<String> {
     use dmux_vt::TermSideEffect;
     match effect {
         TermSideEffect::PtyResponse(bytes) => {
-            let _ = client.send(input::send_keys_hex(pane.tmux_pane, &bytes));
+            if let Some(owner) = owner {
+                let command = input::send_keys_hex(pane.tmux_pane, &bytes);
+                let _ = client.send_deferred(renderer_control::guarded_command(owner, &command));
+            }
             None
         }
         TermSideEffect::Title(title) => {
@@ -3309,7 +3114,9 @@ fn handle_side_effect(
             None
         }
         TermSideEffect::PaletteChange { slot, to } => {
-            trace_palette_line(&dirs_home(), pane.tmux_pane, &pane.slug, slot, to);
+            if owner.is_some() {
+                trace_palette_line(&dirs_home(), pane.tmux_pane, &pane.slug, slot, to);
+            }
             None
         }
         TermSideEffect::Clipboard(text) => Some(text),

@@ -12,6 +12,7 @@ use std::path::Path;
 use dmux_core::{parse_pane_title, DmuxConfig};
 
 use crate::registry::{self, MatchReason};
+use crate::renderer_control::CommandContext;
 use crate::session::{self, TmuxPaneInfo};
 
 /// One classified live pane, ready to print.
@@ -65,12 +66,11 @@ pub fn classify_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Ve
                 }
             }
             let line = format!(
-                "{pane} slug={slug} window={win} cwd={cwd} start={start} saved-root={saved} live-root={live} {flags}",
+                "{pane} slug={slug} window={win} cwd={cwd} saved-root={saved} live-root={live} {flags}",
                 pane = info.pane,
                 slug = slug,
                 win = info.window,
                 cwd = registry::canon_root(&info.current_path),
-                start = if info.start_command.is_empty() { "-" } else { &info.start_command },
                 saved = saved_root.map(registry::canon_root).unwrap_or_else(|| "-".into()),
                 live = live_root.unwrap_or_else(|| "-".into()),
                 flags = flags.join(" "),
@@ -120,6 +120,23 @@ pub fn run(
         registry::canon_root(&project_root.to_string_lossy())
     );
 
+    let command_context = CommandContext {
+        tmux: tmux.to_string(),
+        socket: socket.map(str::to_string),
+        session_name: session_name.to_string(),
+    };
+    match command_context.read_owner() {
+        Ok(Some(owner)) => println!(
+            "renderer owner: {} · claimed {}",
+            owner.summary(),
+            owner.claimed_at
+        ),
+        Ok(None) => println!("renderer owner: none"),
+        Err(err) => println!("renderer owner: unavailable ({err})"),
+    }
+
+    print_live_clients(tmux, socket, session_name);
+
     // Recent attach/reload events from the tracing log (metadata lines only).
     let log = crate::dirs_home()
         .join(".dmux")
@@ -149,23 +166,14 @@ pub fn run(
     let fmt = session::list_panes_command();
     let fmt = fmt.trim_start_matches("list-panes -s -F ");
     let out = cmd
-        .args(["list-panes", "-a", "-F"])
+        .args(["list-panes", "-s", "-t", session_name, "-F"])
         .arg(fmt.trim_matches('\''))
         .output();
     let Ok(out) = out else {
         eprintln!("diagnose: tmux not reachable");
         return 1;
     };
-    let reply = dmux_cc::Reply {
-        lines: out
-            .stdout
-            .split(|b| *b == b'\n')
-            .map(|l| l.to_vec())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        ok: out.status.success(),
-        rtt: std::time::Duration::ZERO,
-    };
+    let reply = direct_reply(&out.stdout, out.status.success());
     let infos = session::parse_pane_list(&reply);
 
     println!("panes ({}):", infos.len());
@@ -201,10 +209,83 @@ pub fn run(
     0
 }
 
+fn direct_reply(stdout: &[u8], ok: bool) -> dmux_cc::Reply {
+    let mut reply = dmux_cc::Reply {
+        lines: stdout
+            .split(|byte| *byte == b'\n')
+            .map(|line| line.to_vec())
+            .filter(|line| !line.is_empty())
+            .collect(),
+        ok,
+        rtt: std::time::Duration::ZERO,
+    };
+    let escaped = reply
+        .lines
+        .iter()
+        .any(|line| !line.contains(&0x01) && line.windows(4).any(|window| window == b"\\001"));
+    if escaped {
+        reply.unescape_lines();
+    }
+    reply
+}
+
+fn print_live_clients(tmux: &str, socket: Option<&str>, session_name: &str) {
+    let mut command = std::process::Command::new(tmux);
+    if let Some(socket) = socket {
+        command.args(["-L", socket]);
+    }
+    let output = command
+        .args(["list-clients", "-t", session_name, "-F"])
+        .arg("#{client_name}\u{1}#{client_pid}\u{1}#{client_control_mode}\u{1}#{client_width}\u{1}#{client_height}")
+        .output();
+    let Ok(output) = output else {
+        println!("control clients: unavailable");
+        return;
+    };
+    let reply = direct_reply(&output.stdout, output.status.success());
+    let clients: Vec<Vec<String>> = reply
+        .text_lines()
+        .into_iter()
+        .filter_map(|line| {
+            let fields: Vec<String> = line.split('\u{1}').map(str::to_string).collect();
+            (fields.len() == 5 && fields[2] == "1").then_some(fields)
+        })
+        .collect();
+    println!("control clients ({}):", clients.len());
+    for fields in clients {
+        println!(
+            "  name={} pid={} control={} size={}×{}",
+            fields[0], fields[1], fields[2], fields[3], fields[4]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use dmux_cc::{PaneId, WindowId};
+
+    #[test]
+    fn direct_tmux_35a_replies_decode_field_separators() {
+        let wire = b"%5\\001@3\\001shell\\00191\\00128\\0010\\001zsh\\001work\\00142\\001zsh\\001Ext 2\\001/tmp/project\n";
+        let reply = direct_reply(wire, true);
+        let panes = session::parse_pane_list(&reply);
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].pane, PaneId(5));
+        assert_eq!((panes[0].width, panes[0].height), (91, 28));
+        assert_eq!(panes[0].current_path, "/tmp/project");
+    }
+
+    #[test]
+    fn direct_raw_replies_preserve_field_separators() {
+        let wire =
+            b"%7\x01@4\x01shell\x0180\x0124\x010\x01zsh\x01work\x0143\x01zsh\x01\x01/tmp/raw\n";
+        let reply = direct_reply(wire, true);
+        let panes = session::parse_pane_list(&reply);
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].pane, PaneId(7));
+        assert_eq!(panes[0].current_path, "/tmp/raw");
+    }
 
     fn mk(pane: u32, title: &str, cwd: &str) -> TmuxPaneInfo {
         TmuxPaneInfo {

@@ -95,6 +95,9 @@ impl FrameClock {
 
 impl crate::App {
     pub(super) fn render_if_due(&mut self) {
+        if !self.renderer.is_ready() {
+            return;
+        }
         if self.dirty && self.frame_clock.due(Instant::now()) {
             self.render_frame();
         } else if self.dirty {

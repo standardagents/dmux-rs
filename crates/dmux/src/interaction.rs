@@ -8,7 +8,7 @@ use dmux_host::{InputEvent, MouseButtons, TimedInputEvent};
 use tokio::sync::mpsc;
 
 use crate::input::{MouseButtonState, MouseKind};
-use crate::{input, session, App};
+use crate::{input, renderer_control, session, App};
 
 const MAX_INPUT_BATCH: usize = 64;
 const MAX_PENDING_AGE: Duration = Duration::from_secs(2);
@@ -455,7 +455,21 @@ impl App {
 
     /// Handle one timestamped host event and schedule direct manipulation at
     /// the lower-latency interaction cadence.
-    fn handle_timed_input_now(&mut self, timed: TimedInputEvent) -> bool {
+    pub(super) fn handle_timed_input_now(&mut self, timed: TimedInputEvent) -> bool {
+        if matches!(
+            self.renderer.state,
+            renderer_control::State::Startup | renderer_control::State::Claiming
+        ) {
+            self.pending_owner_input.push_back(timed);
+            return true;
+        }
+        if !self.renderer.is_controller()
+            && renderer_control::claim_worthy(&timed.event, &self.mouse_buttons)
+        {
+            self.pending_owner_input.push_back(timed);
+            self.request_renderer_claim(renderer_control::ClaimReason::Activity, None);
+            return true;
+        }
         if let Some(queue) = self.interactions.begin(&timed) {
             self.metrics.record_input_queue(queue.kind, queue.elapsed);
         }
@@ -543,16 +557,17 @@ impl App {
             p.dirty = true;
             self.dirty = true;
         }
-        self.interactions.forwarded_to(p.tmux_pane);
+        let pane = p.tmux_pane;
+        self.interactions.forwarded_to(pane);
         let key_sequence = self.interactions.current_key_sequence();
         let mut chunks = bytes.chunks(256).peekable();
         while let Some(chunk) = chunks.next() {
-            let command = input::send_keys_hex(p.tmux_pane, chunk);
+            let command = input::send_keys_hex(pane, chunk);
             let result = match (key_sequence, chunks.peek().is_none()) {
-                (Some(sequence), true) => self
-                    .client
-                    .send_tagged(command, crate::Tag::Input(p.tmux_pane, sequence)),
-                _ => self.client.send(command),
+                (Some(sequence), true) => {
+                    self.send_shared_tagged(command, crate::Tag::Input(pane, sequence))
+                }
+                _ => self.send_shared(command),
             };
             if result.is_err() {
                 break;

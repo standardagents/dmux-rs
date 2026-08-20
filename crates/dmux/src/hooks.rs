@@ -1,6 +1,6 @@
 //! Project lifecycle hooks (`<root>/.dmux-hooks/<name>`), the TS `hooks.ts`
-//! contract. Everything here is fire-and-forget; the one veto hook
-//! (`pre_merge`) runs inline in `git.rs` instead.
+//! contract. Ordinary hooks run on blocking workers while renderer ownership
+//! stays locked. The veto hook (`pre_merge`) runs inline in `git.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -9,15 +9,11 @@ pub fn hook_path(root: &Path, name: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// Spawn the hook detached with the standard env; never blocks the UI and
-/// never fails visibly (missing/broken hooks are the project's business).
-pub fn run_detached(root: &Path, name: &str, cwd: &Path, envs: &[(&str, String)]) {
+/// Run one hook to completion on a blocking worker.
+pub(crate) fn run_blocking(root: &Path, name: &str, cwd: &Path, envs: &[(&str, String)]) {
     let Some(path) = hook_path(root, name) else {
         return;
     };
-    // The preferred cwd may not exist yet (pane_created fires while the
-    // pane's own bootstrap is still creating the worktree) — fall back to
-    // the project root rather than failing to spawn.
     let cwd = if cwd.is_dir() { cwd } else { root };
     let mut cmd = std::process::Command::new(path);
     cmd.current_dir(cwd)
@@ -25,11 +21,40 @@ pub fn run_detached(root: &Path, name: &str, cwd: &Path, envs: &[(&str, String)]
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    for (k, v) in envs {
-        cmd.env(k, v);
+    for (key, value) in envs {
+        cmd.env(key, value);
     }
-    match cmd.spawn() {
-        Ok(_) => tracing::debug!(hook = name, "lifecycle hook spawned"),
-        Err(err) => tracing::warn!(hook = name, %err, "lifecycle hook failed to spawn"),
+    match cmd.status() {
+        Ok(_) => tracing::debug!(hook = name, "lifecycle hook completed"),
+        Err(err) => tracing::warn!(hook = name, %err, "lifecycle hook failed"),
+    }
+}
+
+impl crate::App {
+    pub(crate) fn run_hook_if_controller(
+        &self,
+        root: &Path,
+        name: &str,
+        cwd: &Path,
+        env: &[(&str, String)],
+    ) {
+        let Some(owner_guard) = self.renderer.confirmed_guard() else {
+            return;
+        };
+        let root = root.to_path_buf();
+        let name = name.to_string();
+        let cwd = cwd.to_path_buf();
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            let borrowed: Vec<(&str, String)> = env
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
+                .collect();
+            run_blocking(&root, &name, &cwd, &borrowed);
+            drop(owner_guard);
+        });
     }
 }

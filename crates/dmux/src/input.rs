@@ -265,6 +265,12 @@ impl MouseButtonState {
         self.left || self.right
     }
 
+    pub fn would_claim(&self, kind: MouseKind) -> bool {
+        matches!(kind, MouseKind::WheelUp | MouseKind::WheelDown)
+            || kind == MouseKind::LeftHeld && !self.left
+            || kind == MouseKind::RightHeld && !self.right
+    }
+
     pub fn update(&mut self, kind: MouseKind) -> MouseTransitions {
         let left_press = kind == MouseKind::LeftHeld && !self.left;
         let right_press = kind == MouseKind::RightHeld && !self.right && !self.left;

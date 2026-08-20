@@ -325,6 +325,12 @@ impl crate::App {
     /// capture) are discarded; ready ones are compared and reported
     /// through the incident pipeline.
     pub(crate) fn finish_pending_verifies(&mut self, now: Instant) {
+        let Some(owner_guard) = self.renderer.confirmed_guard() else {
+            for pane in &mut self.panes {
+                pane.pending_verify = None;
+            }
+            return;
+        };
         let mut reports = Vec::new();
         for p in &mut self.panes {
             let Some((_, stashed_at)) = p.pending_verify.as_ref() else {
@@ -357,6 +363,7 @@ impl crate::App {
                 }
             }
         }
+        drop(owner_guard);
         for (pane_id, n, path, title, reply) in reports {
             let loc = path
                 .as_ref()

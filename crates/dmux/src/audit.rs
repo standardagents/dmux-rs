@@ -174,6 +174,10 @@ impl crate::App {
     /// The single persistence boundary for the project config: audits the
     /// pane-record diff (#79), stamps lastUpdated, and writes the file.
     pub(crate) fn save_config(&mut self, reason: Reason) {
+        let Some(_owner_guard) = self.renderer.confirmed_guard() else {
+            tracing::debug!(?reason, "follower skipped shared config write");
+            return;
+        };
         self.audit_base = log_and_advance(&self.audit_base, &self.config.panes, &reason);
         if let Some(obj) = self.config.extra.get_mut("lastUpdated") {
             *obj = serde_json::Value::String(crate::iso_now());

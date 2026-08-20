@@ -72,7 +72,7 @@ pub fn commit_and_merge(
     let target = current_branch(root).unwrap_or_else(|| "HEAD".into());
     match git(root, &["merge", "--no-edit", branch]) {
         Ok(_) => {
-            crate::hooks::run_detached(
+            crate::hooks::run_blocking(
                 root,
                 "post_merge",
                 root,

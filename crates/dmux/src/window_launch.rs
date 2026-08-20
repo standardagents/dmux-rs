@@ -7,7 +7,7 @@ use dmux_cc::{PaneId, Reply};
 use dmux_core::{encode_pane_title, DmuxPane, PaneKind};
 
 use crate::registry::{self, project_context};
-use crate::{bootstrap, hooks, input, shq, timestamp, App, AppMsg, Tag};
+use crate::{bootstrap, input, shq, timestamp, App, AppMsg, Tag};
 
 /// Context for a window dmux-rs created and is waiting on.
 #[derive(Debug)]
@@ -143,15 +143,13 @@ impl App {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        hooks::run_detached(
+        self.run_hook_if_controller(
             &hook_root,
             "before_pane_create",
             &hook_root,
             &[("DMUX_SLUG", ctx.slug.clone())],
         );
-        let _ = self
-            .client
-            .send_tagged(new_window_command(&cwd), Tag::NewWindow(Box::new(ctx)));
+        let _ = self.send_shared_tagged(new_window_command(&cwd), Tag::NewWindow(Box::new(ctx)));
     }
 
     pub(super) fn new_terminal(&mut self, project_root: Option<String>) {
@@ -196,7 +194,7 @@ impl App {
         };
 
         let encoded = encode_pane_title(&ctx.display, &ctx.slug);
-        let _ = self.client.send(format!(
+        let _ = self.send_shared(format!(
             "select-pane -t {pane_id} -T {}",
             dmux_cc::quote_arg(&encoded)
         ));
@@ -259,7 +257,7 @@ impl App {
         if let Some(wt) = &ctx.worktree_path {
             hook_env.push(("DMUX_WORKTREE_PATH", wt.clone()));
         }
-        hooks::run_detached(&hook_root, "pane_created", &hook_cwd, &hook_env);
+        self.run_hook_if_controller(&hook_root, "pane_created", &hook_cwd, &hook_env);
 
         // Config record first so reconcile adoption pairs slug → agent.
         // Resumed worktrees reuse their existing record (fresh pane id).
@@ -347,7 +345,7 @@ impl App {
 
     fn send_pane_line(&mut self, pane: PaneId, line: &str) {
         for command in pane_line_commands(pane, line) {
-            let _ = self.client.send(command);
+            let _ = self.send_shared(command);
         }
     }
 }

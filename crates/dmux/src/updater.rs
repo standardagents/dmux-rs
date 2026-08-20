@@ -120,13 +120,33 @@ pub fn apply(staged: &PathBuf) -> Result<PathBuf, String> {
 /// Replace this process with the (new) binary at `exe`, preserving args.
 /// Only returns on error.
 #[cfg(unix)]
-pub fn reexec(exe: &PathBuf) -> String {
+pub fn reexec(
+    exe: &PathBuf,
+    renderer_token: &str,
+    context: &crate::renderer_control::ReexecContext,
+) -> String {
     use std::os::unix::process::CommandExt;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let err = std::process::Command::new(exe)
+    let mut command = std::process::Command::new(exe);
+    command
         .args(&args)
         .env("DMUX_JUST_UPDATED", "1")
-        .exec();
+        .env(
+            crate::renderer_control::preserved_token_env(),
+            renderer_token,
+        )
+        .env(
+            crate::renderer_control::reexec_role_env(),
+            match context.role {
+                crate::renderer_control::ReexecRole::Controller => "controller",
+                crate::renderer_control::ReexecRole::Follower => "follower",
+            },
+        )
+        .env_remove(crate::renderer_control::reexec_owner_env());
+    if let Some(owner) = &context.expected_owner {
+        command.env(crate::renderer_control::reexec_owner_env(), owner);
+    }
+    let err = command.exec();
     format!("exec failed: {err}")
 }
 

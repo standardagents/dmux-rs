@@ -308,10 +308,14 @@ impl App {
                 let branch = git::current_branch(&wt_path).unwrap_or_else(|| slug.clone());
                 let root = self.project_root.clone();
                 let tx = self.app_tx.clone();
+                let Some(owner_guard) = self.renderer.confirmed_guard() else {
+                    return true;
+                };
                 self.toast(format!("Merging '{branch}'…"));
                 tokio::task::spawn_blocking(move || {
                     let result =
                         git::commit_and_merge(&root, &wt_path, &branch, message.as_deref());
+                    drop(owner_guard);
                     let _ = tx.send(AppMsg::MergeDone {
                         slug,
                         branch,
@@ -438,6 +442,9 @@ impl App {
                         .unwrap_or_else(|| slug.clone());
                     self.close_pane(idx);
                     if let Some(wt) = wt {
+                        let Some(owner_guard) = self.renderer.confirmed_guard() else {
+                            return true;
+                        };
                         let root = self.project_root.clone();
                         let wt_path = PathBuf::from(wt);
                         let tx = self.app_tx.clone();
@@ -446,9 +453,10 @@ impl App {
                                 ("DMUX_WORKTREE_PATH", wt_path.to_string_lossy().into_owned()),
                                 ("DMUX_BRANCH", branch.clone()),
                             ];
-                            hooks::run_detached(&root, "before_worktree_remove", &root, &env);
+                            hooks::run_blocking(&root, "before_worktree_remove", &root, &env);
                             let _ = git::cleanup_worktree(&root, &wt_path, &branch);
-                            hooks::run_detached(&root, "worktree_removed", &root, &env);
+                            hooks::run_blocking(&root, "worktree_removed", &root, &env);
+                            drop(owner_guard);
                             let _ = tx.send(AppMsg::RefreshDerived);
                         });
                     }

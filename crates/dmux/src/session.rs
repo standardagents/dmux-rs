@@ -10,10 +10,15 @@ use dmux_vt::PaneTerm;
 pub const PANE_SCROLLBACK: usize = 10_000;
 pub const SEED_HISTORY_LINES: u32 = 2_000;
 
-pub fn configure_extended_keys<T>(client: &dmux_cc::Client<T>) {
-    let _ = client.send("set -g extended-keys on");
-    let _ = client.send("set -g extended-keys-format csi-u");
+pub fn subscribe_key_modes<T>(client: &dmux_cc::Client<T>) {
     let _ = client.send("refresh-client -B 'dmux-key-mode:%*:#{pane_key_mode}'");
+}
+
+pub fn extended_key_commands() -> [&'static str; 2] {
+    [
+        "set -g extended-keys on",
+        "set -g extended-keys-format csi-u",
+    ]
 }
 
 /// Names that mark dmux-owned infrastructure we never render: the TS-era

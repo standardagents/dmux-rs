@@ -69,6 +69,9 @@ impl App {
         value: serde_json::Value,
         requested_scope: SettingsScope,
     ) {
+        let Some(_owner_guard) = self.renderer.confirmed_guard() else {
+            return;
+        };
         let scope = key.write_scope(requested_scope);
         let serialized_key = key.as_str();
         {

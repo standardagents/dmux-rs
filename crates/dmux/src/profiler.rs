@@ -30,6 +30,9 @@ impl App {
     }
 
     pub(crate) fn set_profiler_visibility(&mut self, visible: bool) {
+        let Some(_owner_guard) = self.renderer.confirmed_guard() else {
+            return;
+        };
         let save = {
             let mut settings = self.settings.lock().unwrap();
             save_visibility(&mut settings, visible)

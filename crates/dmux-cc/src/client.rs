@@ -191,7 +191,27 @@ impl<T> Client<T> {
         self.send_inner(cmd.into(), None)
     }
 
+    /// Send an `if-shell` command and discard both its outer reply and the
+    /// reply from the selected command.
+    pub fn send_deferred(&self, cmd: impl Into<String>) -> Result<(), CcError> {
+        self.send_with_slots(cmd.into(), [None, None])
+    }
+
+    /// Send an `if-shell` command and attach `tag` to the selected command's
+    /// reply. tmux reports the outer `if-shell` completion first.
+    pub fn send_deferred_tagged(&self, cmd: impl Into<String>, tag: T) -> Result<(), CcError> {
+        self.send_with_slots(cmd.into(), [None, Some(tag)])
+    }
+
     fn send_inner(&self, cmd: String, tag: Option<T>) -> Result<(), CcError> {
+        self.send_with_slots(cmd, [tag])
+    }
+
+    fn send_with_slots<const N: usize>(
+        &self,
+        cmd: String,
+        tags: [Option<T>; N],
+    ) -> Result<(), CcError> {
         // A command with an embedded line break would desync the whole
         // control stream (#18) — refuse it loudly instead of dying quietly.
         if !crate::command_is_line_safe(&cmd) {
@@ -201,12 +221,14 @@ impl<T> Client<T> {
         // Hold the pending lock across the channel send so slot order always
         // matches write order even with concurrent senders.
         let mut pending = self.pending.lock().unwrap();
-        pending.push_back(PendingSlot {
-            sent_at: Instant::now(),
-            tag,
-        });
+        let sent_at = Instant::now();
+        for tag in tags {
+            pending.push_back(PendingSlot { sent_at, tag });
+        }
         self.cmd_tx.send(cmd).map_err(|_| {
-            pending.pop_back();
+            for _ in 0..N {
+                pending.pop_back();
+            }
             CcError::Closed
         })
     }
@@ -251,6 +273,60 @@ impl<T> ReplyRouter<T> {
                 }
             }
             other => Routed::Notification(other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn begin(num: u64) -> CcEvent {
+        CcEvent::ReplyBegin {
+            time: 1,
+            num,
+            flags: 1,
+        }
+    }
+
+    fn end(num: u64) -> CcEvent {
+        CcEvent::ReplyEnd {
+            time: 1,
+            num,
+            flags: 1,
+            ok: true,
+        }
+    }
+
+    #[test]
+    fn deferred_tag_tracks_the_selected_commands_second_reply() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let pending = Arc::new(Mutex::new(VecDeque::new()));
+        let client = Client {
+            cmd_tx,
+            pending: pending.clone(),
+        };
+        let mut router = ReplyRouter {
+            pending,
+            current: None,
+        };
+
+        client
+            .send_deferred_tagged("if-shell true display-message", 42)
+            .unwrap();
+        assert_eq!(cmd_rx.try_recv().unwrap(), "if-shell true display-message");
+        assert!(matches!(router.route(begin(1)), Routed::Consumed));
+        assert!(matches!(router.route(end(1)), Routed::Consumed));
+        assert!(matches!(router.route(begin(2)), Routed::Consumed));
+        assert!(matches!(
+            router.route(CcEvent::ReplyLine(b"confirmed".to_vec())),
+            Routed::Consumed
+        ));
+        match router.route(end(2)) {
+            Routed::Reply(42, reply) => {
+                assert_eq!(reply.text_lines(), ["confirmed"]);
+            }
+            other => panic!("unexpected routed event: {other:?}"),
         }
     }
 }

@@ -14,3 +14,4 @@ bash scripts/test-start-task.sh
 bash scripts/test-resolve-build.sh
 bash scripts/release-guards-test.sh
 bash scripts/test-board.sh
+bash scripts/renderer-control-smoke.sh

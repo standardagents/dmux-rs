@@ -106,11 +106,7 @@ fn draw_status(buf: &mut CellBuffer, scene: &Scene<'_>, area: Rect) {
     } else {
         scene.theme.text_dim
     };
-    let text = if scene.leader_armed {
-        crate::input::LEADER_HINT
-    } else {
-        scene.status_line
-    };
+    let text = scene.status_line;
     buf.draw_text(
         area.x + SIDE_INSET,
         row,
