@@ -36,7 +36,7 @@ pub struct MenuView {
     list: ListState,
     /// Anchor cell for a row-attached flyout (#14); None = centered modal.
     anchor: Option<(u16, u16)>,
-    /// Originating sidebar row, kept undimmed by the scrim (#16).
+    /// Originating pane surface or sidebar row, kept undimmed by the scrim.
     source: Option<Rect>,
 }
 
@@ -58,10 +58,9 @@ impl MenuView {
         self
     }
 
-    /// The sidebar row this flyout belongs to — excluded from the scrim so
-    /// row and menu read as one connected control (#16).
-    pub fn with_source(mut self, row: Rect) -> Self {
-        self.source = Some(row);
+    /// The source surface this flyout belongs to, excluded from the scrim.
+    pub fn with_source(mut self, source: Rect) -> Self {
+        self.source = Some(source);
         self
     }
 

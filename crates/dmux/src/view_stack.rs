@@ -7,6 +7,7 @@ use dmux_compositor::Rect;
 use dmux_core::i18n::t;
 
 use crate::hooks;
+use crate::pane_actions;
 use crate::views::{AppCmd, ClickTarget, ContextMenuTarget, MenuItem, MenuView, ViewResult};
 use crate::App;
 
@@ -104,7 +105,14 @@ impl App {
         row: u16,
     ) -> bool {
         match target.and_then(ClickTarget::context_menu) {
-            Some(ContextMenuTarget::Pane(idx)) => self.open_pane_flyout(idx, col, row, None),
+            Some(ContextMenuTarget::Pane(idx)) => {
+                let source = self
+                    .panes
+                    .get(idx)
+                    .and_then(|pane| pane.rect)
+                    .map(pane_actions::surface_rect);
+                self.open_pane_flyout(idx, col, row, source)
+            }
             Some(ContextMenuTarget::SidebarPane(idx)) => self.open_sidebar_pane_flyout(idx, row),
             None => true,
         }

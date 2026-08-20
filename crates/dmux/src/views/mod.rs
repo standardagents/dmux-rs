@@ -272,10 +272,9 @@ pub trait View {
         ViewResult::Stay
     }
 
-    /// A region the overlay scrim must leave undimmed (#16) — an anchored
-    /// flyout returns its originating sidebar row so the pair reads as
-    /// connected. Asked of the TOP view only, so a closed or replaced view
-    /// can never leave a stale carve-out.
+    /// A region the overlay scrim must leave undimmed. An anchored flyout
+    /// returns its source pane or sidebar row. Asked of the top view only,
+    /// so a closed or replaced view cannot leave a stale carve-out.
     fn scrim_exception(&self) -> Option<Rect> {
         None
     }

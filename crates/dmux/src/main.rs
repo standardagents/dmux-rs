@@ -14,6 +14,7 @@ mod keys;
 mod layout;
 mod metrics;
 mod notify;
+mod pane_actions;
 mod render;
 mod report;
 mod session;
@@ -3056,20 +3057,14 @@ impl App {
             }
             AppCmd::CopyPath(idx) => {
                 if let Some(p) = self.panes.get(idx) {
-                    let path = p
-                        .worktree_path
-                        .clone()
-                        .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+                    let path = pane_actions::path(p, &self.project_root);
                     self.forward_clipboard(&path);
                     self.toast(format!("Copied {path}"));
                 }
             }
             AppCmd::OpenInEditor(idx) => {
                 if let Some(p) = self.panes.get(idx) {
-                    let path = p
-                        .worktree_path
-                        .clone()
-                        .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
+                    let path = pane_actions::path(p, &self.project_root);
                     let n = 1 + self
                         .panes
                         .iter()
