@@ -34,3 +34,9 @@ assert_main_unmoved() {
     exit 1
   fi
 }
+
+# Refresh only immutable release tags. The issue tool uses moving
+# sa-issues-claim/* tags, which a broad --tags fetch can reject as clobbers.
+refresh_release_refs() {
+  git fetch -q origin main '+refs/tags/v*:refs/tags/v*'
+}

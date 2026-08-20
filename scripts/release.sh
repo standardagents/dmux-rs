@@ -47,7 +47,7 @@ bash scripts/validate.sh --between \
 # Main and the tag set may have advanced during validation. The release lock
 # prevents another local publisher from changing them between this refresh
 # and publication.
-git fetch -q origin main --tags
+refresh_release_refs
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main advanced during validation"; exit 1; }
 LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
 VERSION=$(next_release_version "${LATEST:-v0.1.0}" "$BUMP") || {

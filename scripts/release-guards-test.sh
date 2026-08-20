@@ -68,5 +68,19 @@ VFID=$(/usr/bin/grep -n "bash scripts/fidelity.sh" "$SRC/scripts/validate.sh" | 
 { [ -n "$VCHECK" ] && [ -n "$VBETWEEN" ] && [ -n "$VFID" ] && [ "$VCHECK" -lt "$VBETWEEN" ] && [ "$VBETWEEN" -lt "$VFID" ]; } \
   || { echo "FAIL: validate.sh must order check → between-hook → fidelity"; fail=1; }
 
+# 10. Release-tag refresh ignores the issue tool's moving claim tags.
+old_claim=$(git -C "$T/origin" rev-parse HEAD~1)
+git -C "$T/origin" tag sa-issues-claim/94 "$old_claim"
+git -C "$T/wt" fetch -q origin \
+  'refs/tags/sa-issues-claim/94:refs/tags/sa-issues-claim/94'
+git -C "$T/origin" tag -f sa-issues-claim/94 HEAD >/dev/null
+git -C "$T/origin" tag v0.0.1 HEAD
+(cd "$T/wt" && source "$SRC/scripts/release-lib.sh" && refresh_release_refs) \
+  || { echo "FAIL: release-tag refresh must ignore moving claim tags"; fail=1; }
+[ "$(git -C "$T/wt" rev-parse refs/tags/sa-issues-claim/94)" = "$old_claim" ] \
+  || { echo "FAIL: release-tag refresh must leave local claim tags alone"; fail=1; }
+[ "$(git -C "$T/wt" rev-parse refs/tags/v0.0.1)" = "$(git -C "$T/origin" rev-parse HEAD)" ] \
+  || { echo "FAIL: release-tag refresh must fetch version tags"; fail=1; }
+
 [ "$fail" = 0 ] && echo "release-guards: ALL PASS"
 exit "$fail"
