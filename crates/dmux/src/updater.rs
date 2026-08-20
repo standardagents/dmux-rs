@@ -6,17 +6,30 @@
 //! all survive. Local dev builds (empty DMUX_BUILD_TAG) never self-update.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub const BUILD_TAG: &str = env!("DMUX_BUILD_TAG");
 pub const GIT_SHA: &str = env!("DMUX_GIT_SHA");
 
+fn build_version(build_tag: &str, git_sha: &str) -> String {
+    if build_tag.is_empty() {
+        format!("dev ({git_sha})")
+    } else {
+        build_tag.to_owned()
+    }
+}
+
+/// Static build version used by Clap's command metadata.
+pub fn cli_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION
+        .get_or_init(|| build_version(BUILD_TAG, GIT_SHA))
+        .as_str()
+}
+
 /// Sidebar version line.
 pub fn version_line() -> String {
-    if BUILD_TAG.is_empty() {
-        format!("dmux-rs dev ({GIT_SHA})")
-    } else {
-        format!("dmux-rs {BUILD_TAG}")
-    }
+    format!("dmux-rs {}", cli_version())
 }
 
 pub fn enabled() -> bool {
@@ -113,4 +126,15 @@ pub fn reexec(exe: &PathBuf) -> String {
         .env("DMUX_JUST_UPDATED", "1")
         .exec();
     format!("exec failed: {err}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_version;
+
+    #[test]
+    fn formats_release_and_development_builds() {
+        assert_eq!(build_version("v1.2.3", "abc1234"), "v1.2.3");
+        assert_eq!(build_version("", "abc1234"), "dev (abc1234)");
+    }
 }

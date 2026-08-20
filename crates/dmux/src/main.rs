@@ -81,7 +81,7 @@ fn tracking_interval() -> Duration {
 }
 
 #[derive(ClapParser, Debug)]
-#[command(name = "dmux-rs", about = "dmux control-mode renderer prototype")]
+#[command(name = "dmux-rs", about = "dmux control-mode renderer prototype", version = updater::cli_version())]
 struct Cli {
     /// tmux session to attach (default: derived from the project config).
     #[arg(long)]
