@@ -499,8 +499,9 @@ fn strip_prefix_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
 
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Barrier};
 
     use super::*;
 
@@ -510,16 +511,17 @@ mod tests {
 
     impl TestTree {
         fn new() -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let sequence = NEXT_TEST_TREE.fetch_add(1, Ordering::Relaxed);
             let process = std::process::id();
-            let path =
-                std::env::temp_dir().join(format!("dmux-github-test-{process}-{nonce}-{sequence}"));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
+            loop {
+                let sequence = NEXT_TEST_TREE.fetch_add(1, Ordering::Relaxed);
+                let path =
+                    std::env::temp_dir().join(format!("dmux-github-test-{process}-{sequence}"));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create test tree {}: {error}", path.display()),
+                }
+            }
         }
 
         fn init_repo(&self, relative: &str, remote: &str) {
@@ -545,6 +547,35 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn concurrent_test_trees_have_distinct_owned_directories() {
+        let worker_count = 16;
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let workers: Vec<_> = (0..worker_count)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    TestTree::new()
+                })
+            })
+            .collect();
+        let mut trees: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        let mut paths: Vec<_> = trees.iter().map(|tree| tree.0.clone()).collect();
+        paths.sort();
+        paths.dedup();
+
+        assert_eq!(paths.len(), worker_count);
+        assert!(paths.iter().all(|path| path.is_dir()));
+        let removed = trees[0].0.clone();
+        drop(trees.remove(0));
+        assert!(!removed.exists());
+        assert!(trees.iter().all(|tree| tree.0.is_dir()));
     }
 
     #[test]
