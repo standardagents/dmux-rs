@@ -40,3 +40,17 @@ That's it. From then on:
 | `DMUX_UPDATE_INTERVAL_SECS` | poll cadence (default 60) |
 | `DMUX_NO_REPORT=1` | don't auto-file issues |
 | `DMUX_VERIFY=0` | disable the shadow verifier entirely |
+
+## Sidebar preview
+
+Contributors can render representative sidebar states through the production
+renderer without connecting to a tmux server:
+
+```bash
+scripts/sidebar-preview.sh
+```
+
+The preview covers the standard 40-column sidebar, compact and tiny widths,
+hover and leader states, diagnostics, and a long status message. ANSI colors
+are included by default. Use
+`scripts/sidebar-preview.sh --plain` for stable text output in a diff.

@@ -349,4 +349,6 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod action_tests;
 #[cfg(test)]
+mod sidebar_preview;
+#[cfg(test)]
 mod title_tests;
