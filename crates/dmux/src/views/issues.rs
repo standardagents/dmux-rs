@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use dmux_compositor::{AttrFlags, Cell, CellBuffer, Rect};
+use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
 use dmux_ui::{
     centered, draw_button, draw_hint_bar, draw_panel, frame_height, panel_frame, spinner_frame,
@@ -14,6 +14,7 @@ use dmux_ui::{
 
 use crate::github::{issue_section, GitHubIssue, IssueLoadState, IssueSection, SharedIssueState};
 
+use super::issues_table::IssueTable;
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
 const TAG_ROW: u64 = 100;
@@ -226,20 +227,6 @@ fn ensure_grouped_visible(
     }
 }
 
-fn issue_meta(issue: &GitHubIssue) -> String {
-    let mut metadata = Vec::new();
-    if !issue.labels.is_empty() {
-        metadata.push(issue.labels.join(", "));
-    }
-    if !issue.assignees.is_empty() {
-        metadata.push(format!("@{}", issue.assignees.join(", @")));
-    }
-    if !issue.updated_at.is_empty() {
-        metadata.push(format!("updated {}", issue.updated_at));
-    }
-    metadata.join(" · ")
-}
-
 impl View for IssueBrowserView {
     fn render(
         &mut self,
@@ -257,7 +244,7 @@ impl View for IssueBrowserView {
         let list_rows = loaded_issues(&state)
             .filter(|issues| !issues.is_empty())
             .map_or(2, |issues| {
-                grouped_row_count(issues, viewer_login, 0, issues.len() - 1)
+                grouped_row_count(issues, viewer_login, 0, issues.len() - 1) + 1
             }) as u16;
         let h = frame_height(list_rows + 2)
             .min(max_h)
@@ -276,7 +263,10 @@ impl View for IssueBrowserView {
         let content = frame.content;
         let bg = ctx.theme.bg_panel;
         let rows_bottom = content.bottom().saturating_sub(2);
-        let visible = rows_bottom.saturating_sub(content.y) as usize;
+        let has_issue_table = loaded_issues(&state).is_some_and(|issues| !issues.is_empty());
+        let visible = rows_bottom
+            .saturating_sub(content.y)
+            .saturating_sub(u16::from(has_issue_table)) as usize;
         if let Some(issues) = loaded_issues(&state) {
             ensure_grouped_visible(&mut self.list, issues, viewer_login, visible);
         }
@@ -346,7 +336,11 @@ impl View for IssueBrowserView {
                 );
             }
             IssueLoadState::Loaded { issues, .. } => {
-                let mut y = content.y;
+                let table = IssueTable::new(content.w);
+                let header = Rect::new(content.x, content.y, content.w, 1);
+                table.draw_header(buf, header, ctx.theme, bg);
+
+                let mut y = content.y + 1;
                 let mut previous_section = None;
                 let mut previous_repository = None;
                 for (idx, issue) in issues.iter().enumerate().skip(self.list.scroll) {
@@ -393,63 +387,7 @@ impl View for IssueBrowserView {
                         .selected
                         .contains(&(issue.repository.clone(), issue.number));
                     let row_bg = if focused { ctx.theme.bg_selected } else { bg };
-                    buf.fill(
-                        row_rect,
-                        &Cell {
-                            bg: row_bg,
-                            ..Cell::default()
-                        },
-                    );
-                    let checkbox = if selected { "◼" } else { "◻" };
-                    buf.draw_text(
-                        content.x + 4,
-                        y,
-                        checkbox,
-                        if selected {
-                            ctx.theme.accent
-                        } else {
-                            ctx.theme.text_dim
-                        },
-                        row_bg,
-                        AttrFlags::empty(),
-                        row_rect,
-                    );
-                    let prefix = format!(" #{:<5} ", issue.number);
-                    let x = buf.draw_text(
-                        content.x + 6,
-                        y,
-                        &prefix,
-                        ctx.theme.accent,
-                        row_bg,
-                        AttrFlags::BOLD,
-                        row_rect,
-                    );
-                    let title_width =
-                        content.w.saturating_sub(x.saturating_sub(content.x) + 1) as usize;
-                    let meta = issue_meta(issue);
-                    let text = if meta.is_empty() {
-                        issue.title.clone()
-                    } else {
-                        format!("{}  ·  {}", issue.title, meta)
-                    };
-                    let clipped: String = text.chars().take(title_width).collect();
-                    buf.draw_text(
-                        x,
-                        y,
-                        &clipped,
-                        if focused {
-                            ctx.theme.text
-                        } else {
-                            ctx.theme.text_dim
-                        },
-                        row_bg,
-                        if focused {
-                            AttrFlags::BOLD
-                        } else {
-                            AttrFlags::empty()
-                        },
-                        row_rect,
-                    );
+                    table.draw_row(buf, row_rect, issue, ctx.theme, row_bg, focused, selected);
                     clicks.add(row_rect, ClickTarget::Overlay(TAG_ROW + idx as u64));
                     y += 1;
                 }
@@ -589,6 +527,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use dmux_compositor::Cell;
     use dmux_host::Modifiers;
 
     fn issue(number: u64, title: &str) -> GitHubIssue {

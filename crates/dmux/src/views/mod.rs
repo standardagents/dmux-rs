@@ -11,6 +11,7 @@ mod hooks_view;
 mod infer_view;
 mod input_view;
 mod issues;
+mod issues_table;
 mod logs;
 mod menu;
 mod path_picker;
