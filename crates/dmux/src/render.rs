@@ -151,8 +151,17 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         },
     );
 
-    // The session title is quiet application context. Project headers own
-    // the bright braille separators below it (#49).
+    // Use the inactive pane-title surface for application context (#49).
+    // Project headers retain the brighter braille separators below it.
+    let title_area = Rect::new(area.x, 0, area.w, 1);
+    let (title_fg, title_bg) = title_bar_style(t, (t.accent, t.accent_soft), false, false);
+    buf.fill(
+        title_area,
+        &Cell {
+            bg: title_bg,
+            ..Cell::default()
+        },
+    );
     let header = format!(
         "  {}",
         truncate(scene.session_name, area.w.saturating_sub(2) as usize)
@@ -161,10 +170,10 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         area.x,
         0,
         &header,
-        t.text_dim,
-        sb_bg,
+        title_fg,
+        title_bg,
         AttrFlags::empty(),
-        area,
+        title_area,
     );
 
     // Project groups (TS parity: main project first, per-group colors,

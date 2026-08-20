@@ -13,7 +13,7 @@ fn group(name: &str, theme: &Theme) -> SidebarGroup {
 }
 
 #[test]
-fn session_title_is_quiet_and_distinct_from_project_headers() {
+fn session_title_uses_pane_bar_surface_without_project_braille() {
     let theme = Theme::named("violet");
     let layout = Layout {
         sidebar: Rect::new(0, 0, 24, 12),
@@ -52,10 +52,16 @@ fn session_title_is_quiet_and_distinct_from_project_headers() {
     assert!(!title
         .chars()
         .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)));
-    assert_eq!(buf.get(2, 0).fg, theme.text_dim);
+    let (title_fg, title_bg) =
+        title_bar_style(&theme, (theme.accent, theme.accent_soft), false, false);
+    assert_eq!(buf.get(2, 0).fg, title_fg);
     assert!(!buf.get(2, 0).attrs.contains(AttrFlags::BOLD));
+    for col in 0..24 {
+        assert_eq!(buf.get(col, 0).bg, title_bg);
+    }
 
     let project_row: String = (0..24).map(|col| buf.get(col, 2).ch).collect();
     assert!(project_row.starts_with("⣿ project "));
     assert_eq!(buf.get(0, 2).fg, groups[0].accent);
+    assert_ne!(buf.get(0, 2).bg, title_bg);
 }
