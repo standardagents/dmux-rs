@@ -206,3 +206,169 @@ mod anim_tests {
         );
     }
 }
+
+/// Opt-in OSC palette provenance (#75): `DMUX_TRACE_PALETTE=1` appends one
+/// decoded line per pane-local palette mutation to
+/// `~/.dmux/logs/palette-trace.log` — metadata only, never terminal content.
+pub(crate) fn trace_palette_enabled() -> bool {
+    std::env::var("DMUX_TRACE_PALETTE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// One trace record: sequence, timestamp, pane identity, slot kind, and the
+/// transition (set with rgb, or reset). Slots follow alacritty's layout:
+/// 0..=255 indexed, 256 default foreground, 257 default background.
+pub(crate) fn palette_trace_record(
+    seq: u64,
+    when: &str,
+    pane: dmux_cc::PaneId,
+    slug: &str,
+    slot: usize,
+    to: Option<(u8, u8, u8)>,
+) -> String {
+    let kind = match slot {
+        256 => "fg".to_string(),
+        257 => "bg".to_string(),
+        i => format!("idx {i}"),
+    };
+    let action = match to {
+        Some((r, g, b)) => format!("set #{r:02x}{g:02x}{b:02x}"),
+        None => "reset".to_string(),
+    };
+    format!("{seq} {when} pane={pane} slug={slug} {kind} {action}")
+}
+
+/// Append a palette mutation to the trace sink with pane attribution.
+pub(crate) fn trace_palette_line(
+    home: &std::path::Path,
+    pane: dmux_cc::PaneId,
+    slug: &str,
+    slot: usize,
+    to: Option<(u8, u8, u8)>,
+) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let line = palette_trace_record(seq, &iso_now(), pane, slug, slot, to);
+    let dir = home.join(".dmux").join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("palette-trace.log"))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+#[cfg(test)]
+mod palette_trace_tests {
+    use super::*;
+
+    #[test]
+    fn records_distinguish_fg_bg_indexed_and_transitions() {
+        // #75: fg/bg/indexed slots and set/reset transitions are explicit,
+        // with pane identity and ordering attached.
+        let r = palette_trace_record(
+            0,
+            "t0",
+            dmux_cc::PaneId(7),
+            "codex-1",
+            257,
+            Some((0x12, 0x0f, 0x1a)),
+        );
+        assert_eq!(r, "0 t0 pane=%7 slug=codex-1 bg set #120f1a");
+        let r = palette_trace_record(1, "t1", dmux_cc::PaneId(7), "codex-1", 256, None);
+        assert_eq!(r, "1 t1 pane=%7 slug=codex-1 fg reset");
+        let r = palette_trace_record(
+            2,
+            "t2",
+            dmux_cc::PaneId(9),
+            "other",
+            4,
+            Some((0xff, 0x00, 0xaa)),
+        );
+        assert_eq!(r, "2 t2 pane=%9 slug=other idx 4 set #ff00aa");
+    }
+}
+
+use std::path::PathBuf;
+
+pub(crate) fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+/// Loose semver comparison: a > b?
+pub(crate) fn is_newer(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.trim_start_matches('v')
+            .split(['.', '-'])
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let (a, b) = (parse(a), parse(b));
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+pub(crate) fn slugify(prompt: &str) -> String {
+    let mut slug = String::new();
+    for word in prompt.split_whitespace().take(4) {
+        let clean: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if clean.is_empty() {
+            continue;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&clean);
+        if slug.len() >= 24 {
+            break;
+        }
+    }
+    slug.truncate(32);
+    if slug.is_empty() {
+        format!("agents-{}", timestamp() % 100_000)
+    } else {
+        slug
+    }
+}
+
+/// React to a pane emulator side effect. Returns clipboard text to forward
+/// (handled by the caller once the pane borrow ends).
+/// Trim leading spinner/status glyphs from a pane-reported title. Agents
+/// animate these in their OSC/ESC-k titles; dmux renders its own status
+/// glyph, so keeping the app's copy showed two spinners per sidebar row
+/// (#9). Strips the known spinner families plus separators, never the name.
+pub(crate) fn strip_status_glyphs(title: &str) -> &str {
+    title.trim_start_matches(|c: char| {
+        matches!(c,
+            // Claude/Codex asterisk-family frames.
+            '✳' | '✻' | '✽' | '✶' | '✢' | '✣' | '✤' | '✥' | '✦' | '✧' | '∗' | '*' | '·' |
+            // Circle/clock spinner families and status dots.
+            '◐' | '◓' | '◑' | '◒' | '◴' | '◷' | '◶' | '◵' | '◜' | '◝' | '◞' | '◟' |
+            '⏺' | '●' | '○' | '◌' | '◍' | '◉' | '⊙' |
+            // dmux's own status glyphs, echoed back by some shells.
+            '△' | '✗' |
+            // Variation selectors that ride along with emoji forms.
+            '\u{fe0e}' | '\u{fe0f}'
+        ) || ('\u{2800}'..='\u{28ff}').contains(&c) // braille spinners
+            || c.is_whitespace()
+    })
+}

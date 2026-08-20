@@ -23,7 +23,10 @@ mod sounds;
 mod style;
 mod tracking;
 mod util;
-pub(crate) use util::{base64, iso_now, shq, timestamp, update_may_apply, AnimClock, Tooltip};
+pub(crate) use util::{
+    base64, dirs_home, is_newer, iso_now, shq, slugify, strip_status_glyphs, timestamp,
+    trace_palette_enabled, trace_palette_line, update_may_apply, AnimClock, Tooltip,
+};
 mod updater;
 mod verify;
 mod view_stack;
@@ -281,12 +284,6 @@ fn init_logging(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         .with_ansi(false)
         .init();
     Ok(())
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 /// Resolve (config, project root, session name). Precedence for the root:
@@ -1960,6 +1957,9 @@ impl App {
 
         for mut new_pane in adopted {
             new_pane.record_stream = self.verify_enabled;
+            if trace_palette_enabled() {
+                new_pane.term.set_trace_palette(true);
+            }
             match self
                 .panes
                 .iter_mut()
@@ -4290,29 +4290,6 @@ impl App {
     }
 }
 
-/// React to a pane emulator side effect. Returns clipboard text to forward
-/// (handled by the caller once the pane borrow ends).
-/// Trim leading spinner/status glyphs from a pane-reported title. Agents
-/// animate these in their OSC/ESC-k titles; dmux renders its own status
-/// glyph, so keeping the app's copy showed two spinners per sidebar row
-/// (#9). Strips the known spinner families plus separators, never the name.
-fn strip_status_glyphs(title: &str) -> &str {
-    title.trim_start_matches(|c: char| {
-        matches!(c,
-            // Claude/Codex asterisk-family frames.
-            '✳' | '✻' | '✽' | '✶' | '✢' | '✣' | '✤' | '✥' | '✦' | '✧' | '∗' | '*' | '·' |
-            // Circle/clock spinner families and status dots.
-            '◐' | '◓' | '◑' | '◒' | '◴' | '◷' | '◶' | '◵' | '◜' | '◝' | '◞' | '◟' |
-            '⏺' | '●' | '○' | '◌' | '◍' | '◉' | '⊙' |
-            // dmux's own status glyphs, echoed back by some shells.
-            '△' | '✗' |
-            // Variation selectors that ride along with emoji forms.
-            '\u{fe0e}' | '\u{fe0f}'
-        ) || ('\u{2800}'..='\u{28ff}').contains(&c) // braille spinners
-            || c.is_whitespace()
-    })
-}
-
 fn handle_side_effect(
     client: &Client<Tag>,
     pane: &mut LogicalPane,
@@ -4340,6 +4317,10 @@ fn handle_side_effect(
                     pane.dirty = true;
                 }
             }
+            None
+        }
+        TermSideEffect::PaletteChange { slot, to } => {
+            trace_palette_line(&dirs_home(), pane.tmux_pane, &pane.slug, slot, to);
             None
         }
         TermSideEffect::Clipboard(text) => Some(text),
@@ -4444,54 +4425,6 @@ async fn check_latest_version() -> Option<String> {
         .ok()?;
     let v: serde_json::Value = resp.json().await.ok()?;
     v["version"].as_str().map(String::from)
-}
-
-/// Loose semver comparison: a > b?
-fn is_newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.trim_start_matches('v')
-            .split(['.', '-'])
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    };
-    let (a, b) = (parse(a), parse(b));
-    for i in 0..a.len().max(b.len()) {
-        let (x, y) = (
-            a.get(i).copied().unwrap_or(0),
-            b.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x > y;
-        }
-    }
-    false
-}
-
-fn slugify(prompt: &str) -> String {
-    let mut slug = String::new();
-    for word in prompt.split_whitespace().take(4) {
-        let clean: String = word
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .flat_map(|c| c.to_lowercase())
-            .collect();
-        if clean.is_empty() {
-            continue;
-        }
-        if !slug.is_empty() {
-            slug.push('-');
-        }
-        slug.push_str(&clean);
-        if slug.len() >= 24 {
-            break;
-        }
-    }
-    slug.truncate(32);
-    if slug.is_empty() {
-        format!("agents-{}", timestamp() % 100_000)
-    } else {
-        slug
-    }
 }
 
 /// Every pane after the first in each window: legacy splits that owner mode

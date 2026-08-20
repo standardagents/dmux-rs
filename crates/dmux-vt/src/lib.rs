@@ -31,7 +31,23 @@ pub enum TermSideEffect {
     /// OSC 52 clipboard store.
     Clipboard(String),
     Bell,
+    /// Opt-in palette provenance (#75): a pane-local OSC 4/10/11 mutation
+    /// changed dynamic palette state. `slot` follows alacritty's layout
+    /// (0..=255 indexed, 256 default foreground, 257 default background);
+    /// `to = None` is a reset back to the default. Emitted only while
+    /// palette tracing is enabled, by diffing dynamic-color state around
+    /// each advance — queries never mutate state, so they can never appear
+    /// here (that is the exclusion rule). Decoded metadata only: no
+    /// surrounding content or raw OSC payloads are retained.
+    PaletteChange {
+        slot: usize,
+        to: Option<(u8, u8, u8)>,
+    },
 }
+
+/// Dynamic palette slots the #75 trace observes: the xterm 256 palette plus
+/// the default foreground/background specials.
+pub const PALETTE_TRACE_SLOTS: usize = 258;
 
 /// Snapshot of the input-relevant terminal modes, used by the input router to
 /// encode keys/mouse the way the pane app expects.
@@ -104,6 +120,9 @@ pub struct PaneTerm {
     screen_title: ScreenTitle,
     /// Rough activity meter the status engine reads.
     bytes_seen: u64,
+    /// Emit PaletteChange side effects (#75). Off = zero cost beyond this
+    /// flag check.
+    trace_palette: bool,
 }
 
 impl PaneTerm {
@@ -124,6 +143,7 @@ impl PaneTerm {
             rows: rows.max(1),
             screen_title: ScreenTitle::Normal,
             bytes_seen: 0,
+            trace_palette: false,
         }
     }
 
@@ -140,11 +160,36 @@ impl PaneTerm {
     }
 
     /// Feed pane output bytes; returns side effects raised while parsing.
+    /// Enable palette-mutation tracing (#75).
+    pub fn set_trace_palette(&mut self, on: bool) {
+        self.trace_palette = on;
+    }
+
+    fn palette_snapshot(&self) -> Vec<Option<(u8, u8, u8)>> {
+        let colors = self.term.colors();
+        (0..PALETTE_TRACE_SLOTS)
+            .map(|i| colors[i].map(|rgb| (rgb.r, rgb.g, rgb.b)))
+            .collect()
+    }
+
     pub fn advance(&mut self, bytes: &[u8]) -> Vec<TermSideEffect> {
         self.bytes_seen += bytes.len() as u64;
+        let before = if self.trace_palette {
+            Some(self.palette_snapshot())
+        } else {
+            None
+        };
         let (filtered, titles) = self.strip_screen_titles(bytes);
         self.parser.advance(&mut self.term, &filtered);
         let mut effects = self.drain_events();
+        if let Some(before) = before {
+            let after = self.palette_snapshot();
+            for (slot, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+                if b != a {
+                    effects.push(TermSideEffect::PaletteChange { slot, to: *a });
+                }
+            }
+        }
         for title in titles {
             effects.push(TermSideEffect::Title(title));
         }
@@ -663,6 +708,39 @@ mod tests {
                 .any(|e| matches!(e, TermSideEffect::PtyResponse(_))),
             "OSC 4 query must be answered, got {fx:?}"
         );
+    }
+
+    #[test]
+    fn palette_tracing_reports_mutations_not_queries() {
+        // #75: sets and resets for fg/bg/indexed slots surface as
+        // PaletteChange; queries never mutate state so they never appear;
+        // disabled tracing emits nothing.
+        let changes = |fx: &[TermSideEffect]| {
+            fx.iter()
+                .filter_map(|e| match e {
+                    TermSideEffect::PaletteChange { slot, to } => Some((*slot, *to)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut t = PaneTerm::new(10, 3, 0);
+        t.set_trace_palette(true);
+        // OSC 11 set: default background.
+        let fx = t.advance(b"\x1b]11;#120f1a\x07");
+        assert_eq!(changes(&fx), vec![(257, Some((0x12, 0x0f, 0x1a)))]);
+        // OSC 4 set: indexed entry 4.
+        let fx = t.advance(b"\x1b]4;4;#ff00aa\x07");
+        assert_eq!(changes(&fx), vec![(4, Some((0xff, 0x00, 0xaa)))]);
+        // OSC 111 reset: background back to default.
+        let fx = t.advance(b"\x1b]111\x07");
+        assert_eq!(changes(&fx), vec![(257, None)]);
+        // Queries do not mutate: no PaletteChange.
+        let fx = t.advance(b"\x1b]10;?\x07");
+        assert!(changes(&fx).is_empty(), "queries must not trace: {fx:?}");
+        // Disabled tracing: silent even for real mutations.
+        let mut off = PaneTerm::new(10, 3, 0);
+        let fx = off.advance(b"\x1b]11;#000000\x07");
+        assert!(changes(&fx).is_empty());
     }
 
     #[test]
