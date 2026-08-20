@@ -122,18 +122,22 @@ pub(crate) fn sidebar_surface(theme: &Theme, _focused: bool) -> Color {
     theme.bg
 }
 
-/// Project action labels: bracketed hotkeys only while the sidebar has the
-/// keyboard (#15) — hotkeys aren't live otherwise.
-pub(crate) fn action_labels(group_active: bool, sidebar_focused: bool) -> (String, String) {
-    if group_active && sidebar_focused {
+/// Project action labels: bracketed hotkeys appear during keyboard navigation
+/// of the active project (#15).
+pub(crate) fn action_labels(group_active: bool, keyboard_navigation: bool) -> (String, String) {
+    if group_active && keyboard_navigation {
         ("[n]ew agent".to_string(), "[t]erminal".to_string())
     } else {
         ("new agent".to_string(), "terminal".to_string())
     }
 }
 
-pub(crate) fn issue_action_label(label: &str, group_active: bool, sidebar_focused: bool) -> String {
-    if !group_active || !sidebar_focused || label.is_empty() {
+pub(crate) fn issue_action_label(
+    label: &str,
+    group_active: bool,
+    keyboard_navigation: bool,
+) -> String {
+    if !group_active || !keyboard_navigation || label.is_empty() {
         return label.to_owned();
     }
     if label == "loading…" {

@@ -213,10 +213,12 @@ pub(crate) fn draw_sidebar(
             clicks.add(row_rect, ClickTarget::SidebarRow(i));
             row += 1;
         }
-        // Per-project creation actions, right-aligned like the TS sidebar;
-        // the active project shows its hotkeys.
+        // Per-project creation actions, right-aligned like the TS sidebar.
+        // Keyboard navigation shows the hotkeys. Pointer navigation keeps
+        // the action words intact while hover supplies the active treatment.
         if row < bottom_limit {
-            let (na, term) = action_labels(project_active, scene.sidebar_focused);
+            let keyboard_navigation = scene.sidebar_focused && scene.hovered.is_none();
+            let (na, term) = action_labels(project_active, keyboard_navigation);
             let total = na.chars().count() as u16 + term.chars().count() as u16 + 2;
             let x0 = area.right().saturating_sub(total + 1);
             let color = if project_active {
@@ -230,7 +232,7 @@ pub(crate) fn draw_sidebar(
                 .map(|project| project.action);
             let issue_max = x0.saturating_sub(area.x + 2) as usize;
             let issue_action =
-                issue_action_label(&group.issue_label, project_active, scene.sidebar_focused);
+                issue_action_label(&group.issue_label, project_active, keyboard_navigation);
             let issue_label = truncate(&issue_action, issue_max);
             let ix = area.x + 1;
             let issue_target = ClickTarget::SidebarGroupIssues(gi);
@@ -382,6 +384,17 @@ pub(crate) fn active_target(
 mod tests {
     use super::*;
 
+    fn buffer_text(buf: &CellBuffer, w: u16, h: u16) -> String {
+        let mut out = String::new();
+        for row in 0..h {
+            for col in 0..w {
+                out.push(buf.get(col, row).ch);
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     fn footer_scene<'a>(
         layout: &'a Layout,
         groups: &'a [SidebarGroup],
@@ -448,14 +461,22 @@ mod tests {
         assert_eq!(buf.get(agent_x, 2).fg, groups[0].accent);
         assert!(buf.get(agent_x, 2).attrs.contains(AttrFlags::BOLD));
         assert_ne!(buf.get(issue_x, 2).bg, theme.bg_selected);
+        let pointer_text = buffer_text(&buf, 40, 20);
+        assert!(pointer_text.contains("new agent"));
+        assert!(pointer_text.contains("terminal"));
+        assert!(pointer_text.contains("2 issues"));
+        assert!(!pointer_text.contains("[n]ew agent"));
+        assert!(!pointer_text.contains("[t]erminal"));
+        assert!(!pointer_text.contains("[i]ssues"));
 
         scene.hovered = None;
         let mut keyboard = CellBuffer::new(40, 20);
         clicks.clear();
         draw_sidebar(&mut keyboard, &scene, &mut clicks);
-        for col in 0..40 {
-            assert_eq!(buf.get(col, 2), keyboard.get(col, 2));
-        }
+        let keyboard_text = buffer_text(&keyboard, 40, 20);
+        assert!(keyboard_text.contains("[n]ew agent"));
+        assert!(keyboard_text.contains("[t]erminal"));
+        assert!(keyboard_text.contains("2 [i]ssues"));
 
         scene.hovered = Some(ClickTarget::SidebarSettings);
         let mut footer = CellBuffer::new(40, 20);
