@@ -8,3 +8,4 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 bash scripts/test-release.sh
 bash scripts/test-work-issue.sh
+bash scripts/test-resolve-build.sh

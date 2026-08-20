@@ -113,7 +113,14 @@ Triage per issue:
   trail — every config save logs a typed, redacted reason for each pane
   record added/removed/reassigned, so "never created" and "removed later"
   are distinguishable; safe on a live session, and the output is
-  what testers should paste into ownership issues); fix; add a regression
+  what testers should paste into ownership issues. When investigating the
+  behavior of a LIVE/installed build, first run `scripts/resolve-build.sh`
+  — the installed binary usually differs from the checkout you are
+  reading. It resolves the binary to its exact source commit (release
+  builds embed it), verifies the release tag matches, reports how far
+  HEAD has drifted from the installed build, and prints `git show
+  <commit>:<path>` commands for reading the exact installed source —
+  all read-only, never fetching or touching branches); fix; add a regression
   test; deliver per the completion lifecycle with a one-paragraph
   explanation the reporter can understand.
 - **Feature/UX request** → implement if the scope is clear and consistent

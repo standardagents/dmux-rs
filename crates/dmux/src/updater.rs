@@ -11,11 +11,13 @@ use std::sync::OnceLock;
 pub const BUILD_TAG: &str = env!("DMUX_BUILD_TAG");
 pub const GIT_SHA: &str = env!("DMUX_GIT_SHA");
 
+/// Human/build identity: release builds carry the exact source commit so
+/// an installed binary can always be resolved to its snapshot (#80).
 fn build_version(build_tag: &str, git_sha: &str) -> String {
     if build_tag.is_empty() {
         format!("dev ({git_sha})")
     } else {
-        build_tag.to_owned()
+        format!("{build_tag} ({git_sha})")
     }
 }
 
@@ -134,7 +136,7 @@ mod tests {
 
     #[test]
     fn formats_release_and_development_builds() {
-        assert_eq!(build_version("v1.2.3", "abc1234"), "v1.2.3");
+        assert_eq!(build_version("v1.2.3", "abc1234"), "v1.2.3 (abc1234)");
         assert_eq!(build_version("", "abc1234"), "dev (abc1234)");
     }
 }
