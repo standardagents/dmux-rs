@@ -37,13 +37,12 @@ SHA=$(git rev-parse --short HEAD)
 # Re-validate: never publish anything the suite or the fidelity harness
 # hasn't blessed (unattended releases have no human eyeball).
 echo "[release] validating…"
-bash scripts/check.sh
-# A concurrent push makes further validation of this commit pointless (#84):
-# check the remote tip between the expensive phases and stop early. The
-# final pre-publication guard below remains the authoritative gate.
-assert_main_unmoved "workspace checks"
-# fidelity.sh builds its own binaries (#59); no separate build needed here.
-bash scripts/fidelity.sh >/dev/null 2>&1 || { echo "fidelity harness FAILED — no release"; exit 1; }
+# One shared orchestration with CI (#87). --between re-checks the remote tip
+# between the expensive phases so a concurrent push stops the release before
+# fidelity starts (#84); the final guard below remains authoritative.
+bash scripts/validate.sh --between \
+  'source scripts/release-lib.sh && assert_main_unmoved "workspace checks"'
+
 
 # Main and the tag set may have advanced during validation. The release lock
 # prevents another local publisher from changing them between this refresh

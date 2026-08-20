@@ -1,5 +1,7 @@
 #!/bin/bash
-# Complete local quality gate. CI and the release path call this same script.
+# Fast quality gate: formatting, Clippy, the full workspace test suite,
+# and the script suites. The COMPLETE pre-push gate is scripts/validate.sh,
+# which runs this and then the rendering-fidelity harness.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

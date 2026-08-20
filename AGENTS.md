@@ -33,10 +33,12 @@ remove the ledger entry once a module reaches the standard limit. Extract
 cohesive boundaries such as rendering, input handling, dialogs, protocol
 handling, state transitions, or test support.
 
-Run `scripts/check.sh` before committing. It checks ordinary Rust formatting,
-runs Clippy across the workspace and every target with warnings denied, then
-runs the complete workspace test suite. CI and `scripts/release.sh` use the
-same command.
+Run `scripts/validate.sh` before pushing — the canonical complete gate. It
+runs `scripts/check.sh` (Rust formatting, Clippy across the workspace and
+every target with warnings denied, the complete workspace test suite, and
+the script suites) and then the rendering-fidelity harness. CI and
+`scripts/release.sh` route through this same orchestration; use bare
+`check.sh` only for fast mid-task iteration.
 
 ## The self-improving loop
 
@@ -175,9 +177,9 @@ Loop rules:
   the sha and version — testers should feel heard, not processed. Keep it
   very short and simple: a few plain sentences a non-expert can skim, not
   a tome — deep technical detail belongs in the commit message.
-- **Validation is non-negotiable**: `cargo test` fully green AND
-  `scripts/fidelity.sh` ALL PASS before any push. A fix that breaks either
-  is not a fix.
+- **Validation is non-negotiable**: `scripts/validate.sh` fully green
+  (workspace tests, script suites, AND fidelity ALL PASS) before any
+  push. A fix that breaks it is not a fix.
 - **Every fixed incident goes into the corpus**
   (`crates/dmux/tests/corpus/<issue-number>.incident`) so it can never
   regress silently.
@@ -222,7 +224,7 @@ For each open issue with label `render-incident`:
    `crates/dmux-compositor` until the replay is clean.
 4. Lock: copy the bundle to `crates/dmux/tests/corpus/<issue>.incident` —
    `corpus_incidents_replay_clean` replays every corpus file forever.
-5. Validate: `cargo test` all green and `scripts/fidelity.sh` ALL PASS.
+5. Validate: `scripts/validate.sh` fully green (tests + fidelity).
 6. Release: `scripts/release.sh patch`, then close the issue referencing
    the commit and the new `vX.Y.Z`. Running heads pick the fix up
    automatically within about a minute.

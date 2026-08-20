@@ -53,14 +53,20 @@ rc=0
 out=$(cd "$T/wt" && source "$SRC/scripts/release-lib.sh" && assert_main_unmoved "workspace checks" 2>&1) || rc=$?
 { [ "$rc" != 0 ] && echo "$out" | /usr/bin/grep -q "advanced during workspace checks"; } \
   || { echo "FAIL: advanced remote must stop the release after the phase"; fail=1; }
-# 9. Ordering in release.sh: the between-phase check sits after check.sh and
-# before fidelity.sh; the authoritative sync guard remains after fidelity.
-CHECK_LINE=$(/usr/bin/grep -n "bash scripts/check.sh" "$SRC/scripts/release.sh" | cut -d: -f1)
-PHASE_LINE=$(/usr/bin/grep -n '^assert_main_unmoved "workspace checks"' "$SRC/scripts/release.sh" | cut -d: -f1)
-FID_LINE=$(/usr/bin/grep -n "bash scripts/fidelity.sh" "$SRC/scripts/release.sh" | cut -d: -f1)
+# 9. Orchestration (#87): release.sh validates through validate.sh, passing
+# the between-phase guard, and keeps the authoritative sync guard after it;
+# validate.sh itself orders check → between-hook → fidelity.
+VAL_LINE=$(/usr/bin/grep -n "bash scripts/validate.sh" "$SRC/scripts/release.sh" | cut -d: -f1)
 FINAL_LINE=$(/usr/bin/grep -n "main advanced during validation" "$SRC/scripts/release.sh" | cut -d: -f1)
-{ [ -n "$PHASE_LINE" ] && [ "$CHECK_LINE" -lt "$PHASE_LINE" ] && [ "$PHASE_LINE" -lt "$FID_LINE" ] && [ "$FID_LINE" -lt "$FINAL_LINE" ]; } \
-  || { echo "FAIL: phase guard must run between check.sh and fidelity.sh, final guard after fidelity"; fail=1; }
+{ [ -n "$VAL_LINE" ] && [ "$VAL_LINE" -lt "$FINAL_LINE" ]; } \
+  || { echo "FAIL: release must validate via validate.sh before the final guard"; fail=1; }
+/usr/bin/grep -A1 "bash scripts/validate.sh" "$SRC/scripts/release.sh" | /usr/bin/grep -q 'assert_main_unmoved "workspace checks"' \
+  || { echo "FAIL: release must pass the between-phase guard to validate.sh"; fail=1; }
+VCHECK=$(/usr/bin/grep -n "bash scripts/check.sh" "$SRC/scripts/validate.sh" | cut -d: -f1)
+VBETWEEN=$(/usr/bin/grep -n 'bash -c "$between"' "$SRC/scripts/validate.sh" | cut -d: -f1)
+VFID=$(/usr/bin/grep -n "bash scripts/fidelity.sh" "$SRC/scripts/validate.sh" | cut -d: -f1)
+{ [ -n "$VCHECK" ] && [ -n "$VBETWEEN" ] && [ -n "$VFID" ] && [ "$VCHECK" -lt "$VBETWEEN" ] && [ "$VBETWEEN" -lt "$VFID" ]; } \
+  || { echo "FAIL: validate.sh must order check → between-hook → fidelity"; fail=1; }
 
 [ "$fail" = 0 ] && echo "release-guards: ALL PASS"
 exit "$fail"
