@@ -124,6 +124,10 @@ Loop rules:
 - **Claim with `issue start <n>`.** It self-assigns and moves the card to
   "In Progress" through the GitHub App. (`scripts/board.sh <n> <status>`
   remains as a fallback for manual card moves.)
+- **Isolate concurrent issue work.** When another contributor or agent may be
+  working in the repository, run `scripts/work-issue.sh <n>` after the claim
+  and work from the path it prints. Each active issue must use its own
+  worktree. Keep the shared root checkout free of issue edits.
 - **Auto-closing commits.** Include `Fixes #<n>` in the fix commit message
   so GitHub closes the issue automatically when the commit lands on
   `main`.
@@ -155,8 +159,9 @@ Loop rules:
   clean): comment findings, label `cannot-reproduce`, close. If the replay
   is clean but the live grid diverged, the bug is likely in the emit/host
   layer — say so in the comment and check the emitter's cursor-trust rules.
-- Work on a branch or worktree per issue if you prefer, but `main` must
-  always be releasable.
+- A single contributor may use a branch in the root checkout when no other
+  work is active. Concurrent work requires one worktree per issue. `main`
+  must always be releasable.
 
 Ordinary feature work loops the same way minus the issue queue: pick from
 ROADMAP.md, validate identically, and keep `main` releasable.
