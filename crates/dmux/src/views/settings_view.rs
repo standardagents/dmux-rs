@@ -9,11 +9,10 @@ use dmux_ui::{
 use serde_json::Value;
 
 use super::{vkeys, AppCmd, ClickTarget, InputPurpose, InputView, View, ViewCtx, ViewResult};
+use crate::settings::SettingKey;
 
 enum Kind {
     Bool,
-    /// Application state that is stored globally in every menu scope.
-    GlobalBool,
     Select(Vec<(String, String)>),
     Number {
         min: i64,
@@ -21,37 +20,45 @@ enum Kind {
     },
     Text,
     /// Opens a dedicated sub-view (checklists, status pages).
-    Sub,
+    Sub(SubView),
+}
+
+#[derive(Clone, Copy)]
+enum SubView {
+    EnabledAgents,
+    NotificationSounds,
+    InferenceProviders,
+    Hooks,
 }
 
 struct Def {
-    key: &'static str,
+    key: Option<SettingKey>,
     label: &'static str,
     kind: Kind,
 }
 
 impl Def {
     fn value<'a>(&self, store: &'a SettingsStore) -> Option<&'a Value> {
-        if matches!(&self.kind, Kind::GlobalBool) {
-            store.get_global(self.key)
+        let key = self.key?;
+        if key.is_global() {
+            store.get_global(key.as_str())
         } else {
-            store.get(self.key)
+            store.get(key.as_str())
         }
     }
 
     fn write_scope(&self, selected: SettingsScope) -> SettingsScope {
-        if matches!(&self.kind, Kind::GlobalBool) {
-            SettingsScope::Global
-        } else {
-            selected
-        }
+        self.key
+            .expect("editable setting must have a key")
+            .write_scope(selected)
     }
 
     fn value_scope(&self, store: &SettingsStore) -> Option<SettingsScope> {
-        if matches!(&self.kind, Kind::GlobalBool) {
+        let key = self.key?;
+        if key.is_global() {
             Some(SettingsScope::Global)
         } else {
-            store.effective_scope(self.key)
+            store.effective_scope(key.as_str())
         }
     }
 }
@@ -78,7 +85,7 @@ fn definitions() -> Vec<Def> {
 
     vec![
         Def {
-            key: "permissionMode",
+            key: Some(SettingKey::PermissionMode),
             label: "Agent Permission Mode",
             kind: Kind::Select(vec![
                 (String::new(), "Agent default (ask)".into()),
@@ -88,42 +95,42 @@ fn definitions() -> Vec<Def> {
             ]),
         },
         Def {
-            key: "defaultAgent",
+            key: Some(SettingKey::DefaultAgent),
             label: "Default Agent",
             kind: Kind::Select(agent_options),
         },
         Def {
-            key: "enableGoalModeByDefault",
+            key: Some(SettingKey::GoalModeByDefault),
             label: "Goal Mode by Default",
             kind: Kind::Bool,
         },
         Def {
-            key: "enableNotifications",
+            key: Some(SettingKey::Notifications),
             label: "Notifications",
             kind: Kind::Bool,
         },
         Def {
-            key: "showFooterTips",
+            key: Some(SettingKey::FooterTips),
             label: "Footer Tips",
             kind: Kind::Bool,
         },
         Def {
-            key: crate::hud::VISIBLE_SETTING,
+            key: Some(SettingKey::PerformanceProfiler),
             label: "Performance Profiler",
-            kind: Kind::GlobalBool,
+            kind: Kind::Bool,
         },
         Def {
-            key: "colorTheme",
+            key: Some(SettingKey::ColorTheme),
             label: "Color Theme",
             kind: Kind::Select(themes),
         },
         Def {
-            key: "baseBranch",
+            key: Some(SettingKey::BaseBranch),
             label: "Base Branch",
             kind: Kind::Text,
         },
         Def {
-            key: "branchPrefix",
+            key: Some(SettingKey::BranchPrefix),
             label: "Branch Name Prefix",
             kind: Kind::Select(vec![
                 (String::new(), "No prefix".into()),
@@ -133,22 +140,22 @@ fn definitions() -> Vec<Def> {
             ]),
         },
         Def {
-            key: "promptForGitOptionsOnCreate",
+            key: Some(SettingKey::PromptForGitOptionsOnCreate),
             label: "Ask Git Options on Create",
             kind: Kind::Bool,
         },
         Def {
-            key: "minPaneWidth",
+            key: Some(SettingKey::MinPaneWidth),
             label: "Min Pane Width",
             kind: Kind::Number { min: 40, max: 120 },
         },
         Def {
-            key: "maxPaneWidth",
+            key: Some(SettingKey::MaxPaneWidth),
             label: "Max Pane Width",
             kind: Kind::Number { min: 60, max: 240 },
         },
         Def {
-            key: "language",
+            key: Some(SettingKey::Language),
             label: "Language",
             kind: Kind::Select(vec![
                 ("en".into(), "English".into()),
@@ -156,24 +163,24 @@ fn definitions() -> Vec<Def> {
             ]),
         },
         Def {
-            key: "enabledAgents",
+            key: Some(SettingKey::EnabledAgents),
             label: "Enabled Agents…",
-            kind: Kind::Sub,
+            kind: Kind::Sub(SubView::EnabledAgents),
         },
         Def {
-            key: "enabledNotificationSounds",
+            key: Some(SettingKey::EnabledNotificationSounds),
             label: "Notification Sounds…",
-            kind: Kind::Sub,
+            kind: Kind::Sub(SubView::NotificationSounds),
         },
         Def {
-            key: "inferenceProviders",
+            key: None,
             label: "Inference Providers…",
-            kind: Kind::Sub,
+            kind: Kind::Sub(SubView::InferenceProviders),
         },
         Def {
-            key: "hooks",
+            key: None,
             label: "Project Hooks…",
-            kind: Kind::Sub,
+            kind: Kind::Sub(SubView::Hooks),
         },
     ]
 }
@@ -216,7 +223,7 @@ impl SettingsView {
 
     fn set(&self, def: &Def, value: Value) -> ViewResult {
         ViewResult::Cmd(AppCmd::SetSetting {
-            key: def.key.to_string(),
+            key: def.key.expect("editable setting must have a key"),
             value,
             scope: def.write_scope(self.scope),
         })
@@ -226,7 +233,7 @@ impl SettingsView {
     fn adjust(&mut self, dir: i64, big: bool) -> ViewResult {
         let def = &self.defs[self.list.selected];
         match &def.kind {
-            Kind::Bool | Kind::GlobalBool => {
+            Kind::Bool => {
                 let cur = self.current_value(def).as_bool().unwrap_or(false);
                 self.set(def, Value::Bool(!cur))
             }
@@ -253,27 +260,25 @@ impl SettingsView {
                     cur.as_str().unwrap_or(""),
                     "empty to unset",
                     InputPurpose::SetTextSetting {
-                        key: def.key.to_string(),
+                        key: def.key.expect("text setting must have a key"),
                         scope: self.scope,
                     },
                 )))
             }
-            Kind::Sub => match def.key {
-                "enabledAgents" => ViewResult::Push(Box::new(super::EnabledAgentsView::new(
+            Kind::Sub(subview) => match subview {
+                SubView::EnabledAgents => ViewResult::Push(Box::new(
+                    super::EnabledAgentsView::new(self.settings.clone(), self.has_project),
+                )),
+                SubView::NotificationSounds => ViewResult::Push(Box::new(super::SoundsView::new(
                     self.settings.clone(),
                     self.has_project,
                 ))),
-                "enabledNotificationSounds" => ViewResult::Push(Box::new(super::SoundsView::new(
-                    self.settings.clone(),
-                    self.has_project,
-                ))),
-                "inferenceProviders" => ViewResult::Push(Box::new(super::InferProvidersView::new(
-                    self.settings.clone(),
-                ))),
-                "hooks" => {
+                SubView::InferenceProviders => ViewResult::Push(Box::new(
+                    super::InferProvidersView::new(self.settings.clone()),
+                )),
+                SubView::Hooks => {
                     ViewResult::Push(Box::new(super::HooksView::new(self.project_root.clone())))
                 }
-                _ => ViewResult::Stay,
             },
         }
     }
@@ -329,7 +334,7 @@ impl View for SettingsView {
             let y = inner.y + row as u16;
             let selected = ctx.active_overlay(i as u64, i == self.list.selected);
             let value_text = match &def.kind {
-                Kind::Bool | Kind::GlobalBool => {
+                Kind::Bool => {
                     let on = values[i].as_bool().unwrap_or(false);
                     if on {
                         "◼ on".to_string()
@@ -358,7 +363,7 @@ impl View for SettingsView {
                         format!("{cur} ✎")
                     }
                 }
-                Kind::Sub => "›".to_string(),
+                Kind::Sub(_) => "›".to_string(),
             };
             let scope_mark = match scopes[i] {
                 Some(SettingsScope::Project) => "ᵖ ",
@@ -476,14 +481,14 @@ mod tests {
         view.list.selected = view
             .defs
             .iter()
-            .position(|def| def.key == crate::hud::VISIBLE_SETTING)
+            .position(|def| def.key == Some(SettingKey::PerformanceProfiler))
             .unwrap();
 
         let ViewResult::Cmd(AppCmd::SetSetting { key, value, scope }) = view.adjust(1, false)
         else {
             panic!("profiler row should emit a setting command");
         };
-        assert_eq!(key, crate::hud::VISIBLE_SETTING);
+        assert_eq!(key, SettingKey::PerformanceProfiler);
         assert_eq!(value, Value::Bool(true));
         assert_eq!(scope, SettingsScope::Global);
     }

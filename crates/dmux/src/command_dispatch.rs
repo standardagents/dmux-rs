@@ -661,7 +661,7 @@ impl App {
                 project_root,
                 identity,
             } => self.launch_agents(prompt, allocations, mode, project_root, identity),
-            AppCmd::SetSetting { key, value, scope } => self.set_setting(&key, value, scope),
+            AppCmd::SetSetting { key, value, scope } => self.set_setting(key, value, scope),
         }
         true
     }

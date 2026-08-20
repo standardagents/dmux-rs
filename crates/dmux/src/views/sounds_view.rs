@@ -8,6 +8,7 @@ use dmux_ui::{
 };
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
+use crate::settings::SettingKey;
 use crate::sounds::SOUNDS;
 
 /// Checklist for the helper's alert sounds (settings
@@ -33,7 +34,7 @@ impl SoundsView {
 
     fn enabled_ids(&self) -> Vec<String> {
         let store = self.settings.lock().unwrap();
-        crate::sounds::resolve_selection(store.get("enabledNotificationSounds"))
+        crate::sounds::resolve_selection(store.get(SettingKey::EnabledNotificationSounds.as_str()))
             .iter()
             .map(|s| s.id.to_string())
             .collect()
@@ -50,7 +51,7 @@ impl SoundsView {
             enabled.push(def.id.to_string());
         }
         ViewResult::Cmd(AppCmd::SetSetting {
-            key: "enabledNotificationSounds".into(),
+            key: SettingKey::EnabledNotificationSounds,
             value: serde_json::Value::Array(
                 enabled.into_iter().map(serde_json::Value::String).collect(),
             ),

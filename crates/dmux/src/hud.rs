@@ -5,18 +5,17 @@
 
 use crate::input::MouseKind;
 use crate::render;
+use crate::settings::SettingKey;
 use crate::views::ClickTarget;
 use crate::App;
 
-pub(crate) const VISIBLE_SETTING: &str = "showPerformanceProfiler";
-
 pub(crate) fn configured_visible(settings: &dmux_core::SettingsStore) -> bool {
-    settings.get_global_bool(VISIBLE_SETTING, false)
+    settings.get_global_bool(SettingKey::PerformanceProfiler.as_str(), false)
 }
 
 fn save_visibility(settings: &mut dmux_core::SettingsStore, visible: bool) -> std::io::Result<()> {
     settings.set(
-        VISIBLE_SETTING,
+        SettingKey::PerformanceProfiler.as_str(),
         serde_json::Value::Bool(visible),
         dmux_core::SettingsScope::Global,
     );
@@ -116,7 +115,9 @@ mod tests {
         save_visibility(&mut settings, true).unwrap();
         let reloaded = dmux_core::SettingsStore::load(&dir, Some(&dir.join("project")));
         assert!(configured_visible(&reloaded));
-        assert!(!reloaded.project.contains_key(VISIBLE_SETTING));
+        assert!(!reloaded
+            .project
+            .contains_key(SettingKey::PerformanceProfiler.as_str()));
 
         let _ = std::fs::remove_dir_all(dir);
     }

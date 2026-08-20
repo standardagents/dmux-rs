@@ -9,6 +9,7 @@ use dmux_ui::{
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 use crate::agents::AGENTS;
+use crate::settings::SettingKey;
 
 /// Checklist controlling which agents appear in the allocator
 /// (settings `enabledAgents`, TS-compatible: array of agent ids).
@@ -34,7 +35,7 @@ impl EnabledAgentsView {
     fn enabled_set(&self) -> Vec<String> {
         let store = self.settings.lock().unwrap();
         match store
-            .get("enabledAgents")
+            .get(SettingKey::EnabledAgents.as_str())
             .and_then(|v| v.as_array().cloned())
         {
             Some(list) => list
@@ -60,7 +61,7 @@ impl EnabledAgentsView {
             enabled.push(def.id.to_string());
         }
         ViewResult::Cmd(AppCmd::SetSetting {
-            key: "enabledAgents".into(),
+            key: SettingKey::EnabledAgents,
             value: serde_json::Value::Array(
                 enabled.into_iter().map(serde_json::Value::String).collect(),
             ),

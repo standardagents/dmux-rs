@@ -12,7 +12,7 @@ const TAG_FIELD: u64 = 500;
 pub enum InputPurpose {
     RenamePane(usize),
     SetTextSetting {
-        key: String,
+        key: crate::settings::SettingKey,
         scope: dmux_core::SettingsScope,
     },
     /// Commit message before merging a dirty worktree.
@@ -56,7 +56,7 @@ impl InputView {
                 }
             }
             InputPurpose::SetTextSetting { key, scope } => AppCmd::SetSetting {
-                key: key.clone(),
+                key: *key,
                 value: serde_json::Value::String(value),
                 scope: *scope,
             },

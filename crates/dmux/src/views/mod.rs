@@ -149,7 +149,7 @@ pub enum AppCmd {
         identity: Option<AgentLaunchIdentity>,
     },
     SetSetting {
-        key: String,
+        key: crate::settings::SettingKey,
         value: serde_json::Value,
         scope: dmux_core::SettingsScope,
     },
