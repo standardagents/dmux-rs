@@ -425,6 +425,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             recent_output: Vec::new(),
             ring_truncated: false,
             last_verify: None,
+            pending_verify: None,
             issue_filed: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,

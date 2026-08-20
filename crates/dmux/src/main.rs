@@ -782,6 +782,12 @@ async fn run(
             .tooltip
             .as_ref()
             .map(|t| tokio::time::Instant::from_std(t.until));
+        let verify_deadline = app
+            .panes
+            .iter()
+            .filter_map(|p| p.pending_verify.as_ref().map(|(_, at)| *at))
+            .min()
+            .map(|at| tokio::time::Instant::from_std(at + verify::POST_CAPTURE_QUIET));
         let tracking_deadline = (!app.tracking_inflight
             && app
                 .panes
@@ -798,6 +804,7 @@ async fn run(
             status_deadline,
             tooltip_deadline,
             tracking_deadline,
+            verify_deadline,
         ]
         .into_iter()
         .flatten()
@@ -1298,33 +1305,14 @@ impl App {
                 if !reply.ok {
                     return;
                 }
-                let mut report: Option<(usize, Option<std::path::PathBuf>, String)> = None;
-                if let Some(p) = self.panes.iter().find(|p| p.tmux_pane == pane_id) {
-                    // Discard if output arrived since the capture was
-                    // requested — comparison is only valid at quiescence.
-                    let quiet = p
-                        .last_output
-                        .map(|t| t.elapsed() >= std::time::Duration::from_millis(500))
-                        .unwrap_or(true);
-                    if quiet && p.reseed_buffer.is_none() && !p.paused {
-                        let diffs = verify::compare(p, &reply);
-                        if diffs.is_empty() {
-                            tracing::debug!(pane = %pane_id, "render verify clean");
-                        }
-                        if !diffs.is_empty() {
-                            let path = verify::write_incident(&dirs_home(), p, &reply, &diffs).ok();
-                            report = Some((diffs.len(), path, p.display_title().to_string()));
-                        }
+                // Comparison waits out post-capture quiescence (#113):
+                // %output delivery can lag behind the capture reply, so an
+                // immediate compare races bytes tmux applied but we have
+                // not received. The stash is finished by the timer loop.
+                if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
+                    if p.reseed_buffer.is_none() && !p.paused && !p.throttled {
+                        p.pending_verify = Some((reply.clone(), std::time::Instant::now()));
                     }
-                }
-                if let Some((n, path, title)) = report {
-                    let loc = path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "(incident write failed)".into());
-                    tracing::warn!(pane = %pane_id, diffs = n, incident = %loc, "render verify mismatch");
-                    self.toast(format!("⚠ render verify: {n} diffs in '{title}' → {loc}"));
-                    self.maybe_file_issue(pane_id, path, &reply);
                 }
             }
             Tag::Cursor(pane_id) => {
@@ -3044,6 +3032,7 @@ impl App {
         if let Some(msg) = attention {
             self.attention_toast(msg);
         }
+        self.finish_pending_verifies(now);
         // Flood-throttled panes due for a refresh.
         let mut resumed = Vec::new();
         for p in &mut self.panes {

@@ -22,6 +22,37 @@ pub const RING_CAP: usize = 256 * 1024;
 pub const QUIESCE: std::time::Duration = std::time::Duration::from_millis(1200);
 /// Minimum spacing between verifications of the same pane.
 pub const INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long a captured grid must sit with NO further pane output before
+/// comparison (#113). tmux updates its grid on pty read but %output
+/// delivery to a control client can lag behind a capture-pane reply under
+/// backpressure — comparing immediately races bytes we haven't received.
+pub const POST_CAPTURE_QUIET: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// Whether a stashed capture is still comparable at `now`: the quiet
+/// window has elapsed AND no output arrived after the capture was taken.
+pub fn capture_ready(
+    stashed_at: std::time::Instant,
+    last_output: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> CaptureVerdict {
+    if last_output.is_some_and(|t| t > stashed_at) {
+        return CaptureVerdict::Raced;
+    }
+    if now.duration_since(stashed_at) < POST_CAPTURE_QUIET {
+        return CaptureVerdict::Waiting;
+    }
+    CaptureVerdict::Ready
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CaptureVerdict {
+    /// Output arrived after the capture: the reply is stale — discard.
+    Raced,
+    /// Quiet window still running — check again later.
+    Waiting,
+    /// Safe to compare.
+    Ready,
+}
 
 fn render_grid(term: &PaneTerm, cols: u16, rows: u16) -> CellBuffer {
     let mut buf = CellBuffer::new(cols, rows);
@@ -288,9 +319,90 @@ pub fn eligible(pane: &LogicalPane, now: Instant) -> bool {
             .unwrap_or(true)
 }
 
+impl crate::App {
+    /// Finish any stashed verify captures whose post-capture quiet window
+    /// has elapsed (#113). Raced captures (output arrived after the
+    /// capture) are discarded; ready ones are compared and reported
+    /// through the incident pipeline.
+    pub(crate) fn finish_pending_verifies(&mut self, now: Instant) {
+        let mut reports = Vec::new();
+        for p in &mut self.panes {
+            let Some((_, stashed_at)) = p.pending_verify.as_ref() else {
+                continue;
+            };
+            match capture_ready(*stashed_at, p.last_output, now) {
+                CaptureVerdict::Waiting => {}
+                CaptureVerdict::Raced => {
+                    tracing::debug!(pane = %p.tmux_pane, "verify capture raced output; discarded");
+                    p.pending_verify = None;
+                }
+                CaptureVerdict::Ready => {
+                    let (reply, _) = p.pending_verify.take().expect("stash present");
+                    if p.paused || p.throttled || p.reseed_buffer.is_some() {
+                        continue;
+                    }
+                    let diffs = compare(p, &reply);
+                    if diffs.is_empty() {
+                        tracing::debug!(pane = %p.tmux_pane, "render verify clean");
+                        continue;
+                    }
+                    let path = write_incident(&crate::dirs_home(), p, &reply, &diffs).ok();
+                    reports.push((
+                        p.tmux_pane,
+                        diffs.len(),
+                        path,
+                        p.display_title().to_string(),
+                        reply,
+                    ));
+                }
+            }
+        }
+        for (pane_id, n, path, title, reply) in reports {
+            let loc = path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(incident write failed)".into());
+            tracing::warn!(pane = %pane_id, diffs = n, incident = %loc, "render verify mismatch");
+            self.toast(format!("⚠ render verify: {n} diffs in '{title}' → {loc}"));
+            self.maybe_file_issue(pane_id, path, &reply);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_capture_gate_orders_race_wait_and_ready() {
+        let t0 = Instant::now();
+        let stash = t0;
+        // Output BEFORE the capture: still valid once the window elapses.
+        assert_eq!(
+            capture_ready(
+                stash,
+                Some(t0 - std::time::Duration::from_secs(2)),
+                t0 + POST_CAPTURE_QUIET
+            ),
+            CaptureVerdict::Ready
+        );
+        // No output ever: ready after the window, waiting before it.
+        assert_eq!(capture_ready(stash, None, t0), CaptureVerdict::Waiting);
+        assert_eq!(
+            capture_ready(stash, None, t0 + POST_CAPTURE_QUIET),
+            CaptureVerdict::Ready
+        );
+        // Output AFTER the capture: the reply is stale regardless of time —
+        // tmux applied bytes we had not received when it captured (#113).
+        assert_eq!(
+            capture_ready(
+                stash,
+                Some(t0 + std::time::Duration::from_millis(1)),
+                t0 + POST_CAPTURE_QUIET
+            ),
+            CaptureVerdict::Raced
+        );
+    }
 
     fn pane_with(content: &[u8]) -> LogicalPane {
         let reply = Reply {

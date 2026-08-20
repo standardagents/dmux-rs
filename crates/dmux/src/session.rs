@@ -121,6 +121,10 @@ pub struct LogicalPane {
     pub ring_truncated: bool,
     /// Last shadow verification of this pane.
     pub last_verify: Option<std::time::Instant>,
+    /// A verify capture waiting out post-capture quiescence (#113): the
+    /// reply is compared only after no further output arrives, closing the
+    /// %output-behind-capture delivery race.
+    pub pending_verify: Option<(Reply, std::time::Instant)>,
     /// An issue was auto-filed for this pane; no more reports until the
     /// process reloads (which is also when a fixed build arrives).
     pub issue_filed: bool,
