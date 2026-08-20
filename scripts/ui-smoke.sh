@@ -147,6 +147,36 @@ if wait_for "process will be killed" keyboard-close-confirm 4; then
   drv_keys Escape; sleep 0.5
 fi
 
+# ---- case 4: overlay placement contract (#91) -------------------------------
+# A sidebar right-click menu opens AT the pointer; a global overlay
+# (Settings) opens immediately right of the sidebar at the top of screen.
+char_col() { # $1 = 1-based row, $2 = glyph → 1-based char column (0 = absent)
+  cap | /usr/bin/sed -n "$1p" | python3 -c "import sys; print(sys.stdin.read().find('$2') + 1)"
+}
+ROWP=$(sidebar_row "other-term")
+right_click 25 "$ROWP"
+wait_for "Open in editor" menu-pointer-open 4 && {
+  COL=$(char_col "$ROWP" "╭")
+  if [ "$COL" = 25 ]; then
+    echo "PASS pointer-anchor (sidebar right-click opens at pointer)"
+  else
+    echo "  expected menu ╭ at col 25 row $ROWP, got col $COL"
+    fail pointer-anchor
+  fi
+  drv_keys Escape; sleep 0.8
+}
+leader s
+wait_for "Settings" settings-open 4 && {
+  COL=$(char_col 1 "╭")
+  if [ "$COL" -gt 40 ]; then
+    echo "PASS global-anchor (Settings right of sidebar, top row)"
+  else
+    echo "  expected Settings ╭ right of sidebar on row 1, got col $COL"
+    fail global-anchor
+  fi
+  drv_keys Escape; sleep 0.8
+}
+
 # ---- result ----------------------------------------------------------------
 if [ "$FAILS" -eq 0 ]; then
   echo "ui-smoke: ALL PASS"

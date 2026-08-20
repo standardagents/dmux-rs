@@ -1,6 +1,6 @@
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, ListState, PanelStyle};
+use dmux_ui::{draw_hint_bar, draw_panel, Anchor, ClickMap, ListState, PanelStyle};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -34,8 +34,8 @@ pub struct MenuView {
     title: String,
     items: Vec<MenuItem>,
     list: ListState,
-    /// Anchor cell for a row-attached flyout (#14); None = centered modal.
-    anchor: Option<(u16, u16)>,
+    /// Placement origin (#91); None = global surface (sidebar top).
+    anchor: Option<Anchor>,
     /// Originating pane surface or sidebar row, kept undimmed by the scrim.
     source: Option<Rect>,
 }
@@ -51,10 +51,16 @@ impl MenuView {
         }
     }
 
-    /// Render as a flyout whose top-left sits at (x, y), clamped to the
-    /// terminal so edge rows stay fully usable.
+    /// Pointer-origin flyout (right-click): top-left at the pointer cell,
+    /// clamped to the terminal so edge rows stay fully usable.
     pub fn anchored(mut self, x: u16, y: u16) -> Self {
-        self.anchor = Some((x, y));
+        self.anchor = Some(Anchor::Pointer { x, y });
+        self
+    }
+
+    /// Sidebar-item flyout: right of the sidebar, aligned with the row.
+    pub fn beside_row(mut self, row: u16) -> Self {
+        self.anchor = Some(Anchor::SidebarRow { row });
         self
     }
 
@@ -70,17 +76,6 @@ impl MenuView {
             None => ViewResult::Stay,
         }
     }
-}
-
-/// Clamp a `w`×`h` flyout anchored at (x, y) into `area` — shifted left/up
-/// as needed so rows near the right or bottom edge keep the whole panel on
-/// screen.
-pub fn flyout_rect(area: Rect, (x, y): (u16, u16), w: u16, h: u16) -> Rect {
-    let w = w.min(area.w);
-    let h = h.min(area.h);
-    let x = x.min(area.right().saturating_sub(w)).max(area.x);
-    let y = y.min(area.bottom().saturating_sub(h)).max(area.y);
-    Rect::new(x, y, w, h)
 }
 
 impl View for MenuView {
@@ -100,10 +95,7 @@ impl View for MenuView {
             .max(self.title.chars().count() + 6) as u16)
             .clamp(28, area.w);
         let h = (self.items.len() as u16 + 4).min(area.h);
-        let rect = match self.anchor {
-            Some(anchor) => flyout_rect(area, anchor, w, h),
-            None => centered(area, w, h),
-        };
+        let rect = ctx.place(area, self.anchor.unwrap_or(Anchor::SidebarTop), w, h);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
 
         let visible = inner.h.saturating_sub(1) as usize;
@@ -242,23 +234,6 @@ impl View for MenuView {
 mod tests {
     use super::*;
     use dmux_host::Modifiers;
-
-    #[test]
-    fn flyout_placement_stays_in_bounds() {
-        let area = Rect::new(0, 0, 120, 40);
-        // Interior anchor: exact position.
-        assert_eq!(flyout_rect(area, (30, 5), 30, 10), Rect::new(30, 5, 30, 10));
-        // Bottom-edge row: shifted up so the panel stays on screen.
-        let r = flyout_rect(area, (30, 38), 30, 10);
-        assert_eq!(r.bottom(), 40);
-        assert_eq!(r.y, 30);
-        // Right-edge anchor: shifted left.
-        let r = flyout_rect(area, (118, 5), 30, 10);
-        assert_eq!(r.right(), 120);
-        // Panel larger than the terminal: clamped to it.
-        let r = flyout_rect(area, (10, 10), 200, 200);
-        assert_eq!((r.w, r.h), (120, 40));
-    }
 
     #[test]
     fn escape_dismisses_the_flyout() {

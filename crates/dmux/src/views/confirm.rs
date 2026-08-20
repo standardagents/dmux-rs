@@ -1,6 +1,6 @@
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
-use dmux_ui::{centered, draw_button, draw_panel, ButtonStyle, ClickMap, PanelStyle};
+use dmux_ui::{draw_button, draw_panel, ButtonStyle, ClickMap, PanelStyle};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -54,7 +54,7 @@ impl View for ConfirmView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let w = (self.message.chars().count() as u16 + 6).clamp(34, area.w.min(70));
-        let rect = centered(area, w, 7);
+        let rect = ctx.global(area, w, 7);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
         buf.draw_text(
             inner.x + 1,
@@ -199,6 +199,7 @@ mod tests {
             theme: &theme,
             anim: 0,
             hovered: None,
+            sidebar_right: 0,
         };
         let mut buf = CellBuffer::new(60, 12);
         let area = buf.area();

@@ -1,8 +1,6 @@
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::KeyEvent;
-use dmux_ui::{
-    centered, draw_hint_bar, draw_panel, frame_height, panel_frame, ClickMap, PanelStyle,
-};
+use dmux_ui::{draw_hint_bar, draw_panel, frame_height, panel_frame, ClickMap, PanelStyle};
 
 use super::{vkeys, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -48,7 +46,7 @@ impl View for ShortcutsView {
         // Two columns: leader table left, direct chords right. Body: column
         // headers, the table, one blank row, then the remap note.
         let table = LEADER_ROWS.len().max(self.direct.len()) as u16;
-        let rect = centered(area, area.w.min(96), frame_height(table + 3).min(area.h));
+        let rect = ctx.global(area, area.w.min(96), frame_height(table + 3).min(area.h));
         let inner = draw_panel(
             buf,
             rect,
@@ -161,6 +159,7 @@ mod tests {
             theme: &theme,
             anim: 0,
             hovered: None,
+            sidebar_right: 0,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);
@@ -175,8 +174,10 @@ mod tests {
         // #42 spacing contract: remap note, one blank row, then the hint bar.
         assert_eq!(hint_y, remap_y + 2);
         let gap = row_text(remap_y + 1);
+        let left = gap.find('│').expect("panel left border");
+        let right = gap.rfind('│').expect("panel right border");
         assert!(
-            gap.chars().skip(3).take(94).all(|c| c == ' '),
+            gap[left + '│'.len_utf8()..right].chars().all(|c| c == ' '),
             "gap row: {gap:?}"
         );
         // The last leader row is separated from the remap note by one blank

@@ -4,8 +4,7 @@ use dmux_compositor::{CellBuffer, Rect};
 use dmux_core::{SettingsScope, SettingsStore};
 use dmux_host::KeyEvent;
 use dmux_ui::{
-    centered, draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState,
-    PanelStyle,
+    draw_checkbox, draw_hint_bar, draw_kv_row, draw_panel, ClickMap, ListState, PanelStyle,
 };
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
@@ -68,7 +67,7 @@ impl View for SoundsView {
         ctx: &ViewCtx<'_>,
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = centered(area, area.w.min(52), (SOUNDS.len() as u16 + 4).min(area.h));
+        let rect = ctx.global(area, area.w.min(52), (SOUNDS.len() as u16 + 4).min(area.h));
         let inner = draw_panel(
             buf,
             rect,

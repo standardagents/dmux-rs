@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, PanelStyle};
+use dmux_ui::{draw_hint_bar, draw_panel, ClickMap, PanelStyle};
 
 use super::{vkeys, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -70,7 +70,7 @@ impl View for HooksView {
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let h = (self.rows.len() as u16 + 6).min(area.h.saturating_sub(2));
-        let rect = centered(area, area.w.min(58), h);
+        let rect = ctx.global(area, area.w.min(58), h);
         let inner = draw_panel(buf, rect, "Project Hooks", ctx.theme, PanelStyle::Modal);
         let bg = ctx.theme.bg_panel;
 

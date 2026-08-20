@@ -4,8 +4,7 @@ use dmux_compositor::{CellBuffer, Rect};
 use dmux_core::{SettingsScope, SettingsStore};
 use dmux_host::{KeyEvent, Modifiers};
 use dmux_ui::{
-    centered, draw_hint_bar, draw_kv_row, draw_panel, draw_select_value, ClickMap, ListState,
-    PanelStyle,
+    draw_hint_bar, draw_kv_row, draw_panel, draw_select_value, ClickMap, ListState, PanelStyle,
 };
 use serde_json::Value;
 
@@ -256,7 +255,7 @@ impl View for SettingsView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let h = (self.defs.len() as u16 + 6).min(area.h.saturating_sub(2));
-        let rect = centered(area, area.w.min(64), h);
+        let rect = ctx.global(area, area.w.min(64), h);
         let scope_label = match self.scope {
             SettingsScope::Project => "project scope",
             SettingsScope::Global => "global scope",

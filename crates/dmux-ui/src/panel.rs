@@ -170,16 +170,75 @@ pub fn frame_height(content_rows: u16) -> u16 {
     content_rows + 5
 }
 
-/// Center a `w`×`h` panel within `area` (clamped).
+/// Center a `w`×`h` panel within `area` (clamped). Non-overlay chrome
+/// only (e.g. in-pane cards) — application overlays place via `Anchor`.
 pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.w);
     let h = h.min(area.h);
     Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
 }
 
+/// Where an overlay came from (#91). Placement communicates the action's
+/// origin: right-click menus open at the pointer, sidebar-item surfaces
+/// beside their row, and global surfaces beside the top of the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    /// Right-click origin: the pointer cell is the requested top-left.
+    Pointer { x: u16, y: u16 },
+    /// A sidebar item's own surface: immediately right of the sidebar,
+    /// vertically aligned with the item's row.
+    SidebarRow { row: u16 },
+    /// A global surface: immediately right of the sidebar, top of screen.
+    SidebarTop,
+}
+
+/// Resolve an anchor to an on-screen rect. Panel placement owns the
+/// terminal bounds: requested origins near an edge shift left/up so the
+/// whole panel stays visible, and width/height never exceed the area.
+pub fn place(area: Rect, sidebar_right: u16, anchor: Anchor, w: u16, h: u16) -> Rect {
+    let w = w.min(area.w);
+    let h = h.min(area.h);
+    let (x, y) = match anchor {
+        Anchor::Pointer { x, y } => (x, y),
+        Anchor::SidebarRow { row } => (sidebar_right.saturating_add(1), row),
+        Anchor::SidebarTop => (sidebar_right.saturating_add(1), area.y),
+    };
+    let x = x.min(area.right().saturating_sub(w)).max(area.x);
+    let y = y.min(area.bottom().saturating_sub(h)).max(area.y);
+    Rect::new(x, y, w, h)
+}
+
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+
+    #[test]
+    fn placement_resolves_each_origin_and_clamps_at_edges() {
+        let area = Rect::new(0, 0, 120, 30);
+        // Pointer origin: exact interior position.
+        assert_eq!(
+            place(area, 40, Anchor::Pointer { x: 60, y: 10 }, 28, 8),
+            Rect::new(60, 10, 28, 8)
+        );
+        // Pointer near the right/bottom edges: shifted left/up, fully on
+        // screen.
+        let clamped = place(area, 40, Anchor::Pointer { x: 118, y: 29 }, 28, 8);
+        assert_eq!(clamped, Rect::new(92, 22, 28, 8));
+        // Sidebar-row origin: right of the sidebar, aligned to the row.
+        assert_eq!(
+            place(area, 40, Anchor::SidebarRow { row: 7 }, 30, 6),
+            Rect::new(41, 7, 30, 6)
+        );
+        // Sidebar-top origin: right of the sidebar, top of the screen.
+        assert_eq!(
+            place(area, 40, Anchor::SidebarTop, 64, 20),
+            Rect::new(41, 0, 64, 20)
+        );
+        // Small terminal: width/height bounded, panel stays usable.
+        let tiny = Rect::new(0, 0, 30, 8);
+        let bounded = place(tiny, 24, Anchor::SidebarTop, 64, 20);
+        assert_eq!(bounded, Rect::new(0, 0, 30, 8));
+    }
 
     #[test]
     fn panel_surface_inherits_the_terminal_background() {

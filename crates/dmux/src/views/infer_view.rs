@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_core::SettingsStore;
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, PanelStyle};
+use dmux_ui::{draw_hint_bar, draw_panel, ClickMap, PanelStyle};
 
 use super::{vkeys, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -58,7 +58,7 @@ impl View for InferProvidersView {
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let h = (self.providers.len() as u16 + 9).min(area.h.saturating_sub(2));
-        let rect = centered(area, area.w.min(64), h);
+        let rect = ctx.global(area, area.w.min(64), h);
         let inner = draw_panel(
             buf,
             rect,

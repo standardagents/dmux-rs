@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
-use dmux_ui::{
-    centered, draw_hint_bar, draw_panel, panel_frame, ClickMap, ListState, PanelStyle, TextInput,
-};
+use dmux_ui::{draw_hint_bar, draw_panel, panel_frame, ClickMap, ListState, PanelStyle, TextInput};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -202,7 +200,7 @@ impl View for PathPickerView {
     ) -> Option<(u16, u16)> {
         let w = area.w.saturating_sub(10).clamp(44, 90);
         let h = area.h.saturating_sub(6).clamp(14, 26);
-        let rect = centered(area, w, h);
+        let rect = ctx.global(area, w, h);
         let inner = draw_panel(buf, rect, "Add project", ctx.theme, PanelStyle::Modal);
         let frame = panel_frame(inner);
         let content = frame.content;

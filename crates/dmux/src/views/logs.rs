@@ -1,6 +1,6 @@
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, PanelStyle};
+use dmux_ui::{draw_hint_bar, draw_panel, ClickMap, PanelStyle};
 
 use super::{vkeys, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -38,7 +38,7 @@ impl View for LogsView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = centered(
+        let rect = ctx.global(
             area,
             area.w.saturating_sub(8).min(140),
             area.h.saturating_sub(4),

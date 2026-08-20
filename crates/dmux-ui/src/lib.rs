@@ -15,8 +15,8 @@ pub use clickmap::ClickMap;
 pub use input::{InputKey, TextInput};
 pub use list::ListState;
 pub use panel::{
-    centered, draw_panel, draw_scrim, draw_scrim_except, frame_height, panel_frame, PanelFrame,
-    PanelStyle,
+    centered, draw_panel, draw_scrim, draw_scrim_except, frame_height, panel_frame, place, Anchor,
+    PanelFrame, PanelStyle,
 };
 pub use theme::{
     project_theme, project_theme_auto_order, Theme, DEFAULT_PROJECT_THEME, PROJECT_THEME_NAMES,

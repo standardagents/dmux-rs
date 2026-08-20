@@ -1,6 +1,6 @@
 use dmux_compositor::{CellBuffer, Rect};
 use dmux_host::KeyEvent;
-use dmux_ui::{centered, draw_hint_bar, draw_panel, ClickMap, PanelStyle, TextInput};
+use dmux_ui::{draw_hint_bar, draw_panel, ClickMap, PanelStyle, TextInput};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -84,7 +84,7 @@ impl View for InputView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = centered(area, area.w.min(56), 6);
+        let rect = ctx.global(area, area.w.min(56), 6);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
         let cursor = self.input.draw(
             buf,

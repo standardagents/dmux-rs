@@ -10,6 +10,7 @@ use crate::hooks;
 use crate::pane_actions;
 use crate::views::{AppCmd, ClickTarget, ContextMenuTarget, MenuItem, MenuView, ViewResult};
 use crate::App;
+use dmux_ui::Anchor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PaneMenuClose {
@@ -93,15 +94,19 @@ impl App {
     fn open_pane_flyout(
         &mut self,
         idx: usize,
-        x: u16,
-        y: u16,
+        anchor: Anchor,
         source: Option<Rect>,
         close: PaneMenuClose,
     ) -> bool {
         if let Some(pane) = self.panes.get(idx) {
             let title = pane.display_title().to_string();
             let items = self.pane_menu_items(idx, close);
-            let mut menu = MenuView::new(title, items).anchored(x, y);
+            let mut menu = MenuView::new(title, items);
+            menu = match anchor {
+                Anchor::Pointer { x, y } => menu.anchored(x, y),
+                Anchor::SidebarRow { row } => menu.beside_row(row),
+                Anchor::SidebarTop => menu,
+            };
             if let Some(source) = source {
                 menu = menu.with_source(source);
             }
@@ -111,23 +116,25 @@ impl App {
         true
     }
 
-    pub(super) fn open_sidebar_pane_flyout(&mut self, idx: usize, y: u16) -> bool {
-        self.open_sidebar_pane_flyout_with_close(idx, y, PaneMenuClose::Confirm)
-    }
-
-    fn open_sidebar_pane_flyout_with_close(
-        &mut self,
-        idx: usize,
-        y: u16,
-        close: PaneMenuClose,
-    ) -> bool {
+    fn select_sidebar_pane(&mut self, idx: usize) {
         if self.selected != idx || self.sidebar_project.is_some() {
             self.selected = idx;
             self.sidebar_project = None;
             self.rebuild_sidebar_groups();
         }
+    }
+
+    /// Sidebar-item action (not a right click): flyout beside the row,
+    /// with the confirmed close of a non-pointer gesture (#85).
+    pub(super) fn open_sidebar_pane_flyout(&mut self, idx: usize, y: u16) -> bool {
+        self.select_sidebar_pane(idx);
         let source = Rect::new(self.layout.sidebar.x, y, self.layout.sidebar.w, 1);
-        self.open_pane_flyout(idx, self.layout.sidebar.right() + 1, y, Some(source), close)
+        self.open_pane_flyout(
+            idx,
+            Anchor::SidebarRow { row: y },
+            Some(source),
+            PaneMenuClose::Confirm,
+        )
     }
 
     pub(super) fn open_context_menu(
@@ -136,6 +143,8 @@ impl App {
         col: u16,
         row: u16,
     ) -> bool {
+        // Every right-click menu opens at the pointer (#91); the source
+        // rect (kept undimmed) still marks where the action came from.
         match target.and_then(ClickTarget::context_menu) {
             Some(ContextMenuTarget::Pane(idx)) => {
                 let source = self
@@ -143,10 +152,22 @@ impl App {
                     .get(idx)
                     .and_then(|pane| pane.rect)
                     .map(pane_actions::surface_rect);
-                self.open_pane_flyout(idx, col, row, source, PaneMenuClose::Immediate)
+                self.open_pane_flyout(
+                    idx,
+                    Anchor::Pointer { x: col, y: row },
+                    source,
+                    PaneMenuClose::Immediate,
+                )
             }
             Some(ContextMenuTarget::SidebarPane(idx)) => {
-                self.open_sidebar_pane_flyout_with_close(idx, row, PaneMenuClose::Immediate)
+                self.select_sidebar_pane(idx);
+                let source = Rect::new(self.layout.sidebar.x, row, self.layout.sidebar.w, 1);
+                self.open_pane_flyout(
+                    idx,
+                    Anchor::Pointer { x: col, y: row },
+                    Some(source),
+                    PaneMenuClose::Immediate,
+                )
             }
             None => true,
         }

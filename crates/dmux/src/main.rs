@@ -4159,6 +4159,7 @@ impl App {
                 theme: &self.theme,
                 anim: self.anim,
                 hovered: self.hovered,
+                sidebar_right: self.layout.sidebar.right(),
             };
             let full = Rect::new(0, 0, self.size.0, self.size.1);
             let last = self.views.len() - 1;

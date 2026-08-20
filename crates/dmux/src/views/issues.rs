@@ -13,8 +13,8 @@ use std::collections::BTreeSet;
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
 use dmux_ui::{
-    centered, draw_button, draw_hint_bar, draw_panel, frame_height, panel_frame, spinner_frame,
-    ButtonStyle, ClickMap, ListState, PanelStyle,
+    draw_button, draw_hint_bar, draw_panel, frame_height, panel_frame, spinner_frame, ButtonStyle,
+    ClickMap, ListState, PanelStyle,
 };
 
 use crate::github::{issue_section, GitHubIssue, IssueLoadState, IssueSection, SharedIssueState};
@@ -262,7 +262,7 @@ impl View for IssueBrowserView {
         let h = frame_height(list_rows + 2)
             .min(max_h)
             .max(max_h.min(frame_height(4)));
-        let rect = centered(area, area.w.min(100), h);
+        let rect = ctx.global(area, area.w.min(100), h);
         let title = match self.repository(&state) {
             Some(repository) => format!("Issues · {repository}"),
             None => "Issues".to_string(),
@@ -704,6 +704,7 @@ mod tests {
             theme: &theme,
             anim: 0,
             hovered: None,
+            sidebar_right: 0,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);
@@ -751,6 +752,7 @@ mod tests {
             theme: &theme,
             anim: 0,
             hovered: None,
+            sidebar_right: 0,
         };
         let mut clicks = ClickMap::new();
 
@@ -817,6 +819,7 @@ mod tests {
                 theme: &theme,
                 anim: 0,
                 hovered: None,
+                sidebar_right: 0,
             };
             let mut clicks = ClickMap::new();
             let area = buf.area();

@@ -136,6 +136,7 @@ fn render_case(case: PreviewCase) -> CellBuffer {
         theme: &theme,
         anim: 0,
         hovered: None,
+        sidebar_right: 0,
     };
     let mut buf = CellBuffer::new(case.cols, case.rows);
     let mut clicks = ClickMap::new();
