@@ -48,7 +48,7 @@ pub enum Action {
     RenameFocused,
     HideFocused,
     CloseFocused,
-    ToggleHud,
+    ToggleProfiler,
     Quit,
     FocusNext,
     FocusPrev,
@@ -66,7 +66,7 @@ const ACTION_NAMES: &[(&str, Action)] = &[
     ("rename", Action::RenameFocused),
     ("hide", Action::HideFocused),
     ("close", Action::CloseFocused),
-    ("hud", Action::ToggleHud),
+    ("profiler", Action::ToggleProfiler),
     ("quit", Action::Quit),
     ("focus-next", Action::FocusNext),
     ("focus-prev", Action::FocusPrev),
@@ -193,7 +193,7 @@ impl Keymap {
             ("ctrl+,", Action::OpenSettings),
             // Long-standing bare chords.
             ("ctrl+q", Action::Quit),
-            ("ctrl+y", Action::ToggleHud),
+            ("ctrl+y", Action::ToggleProfiler),
             // Navigation.
             ("alt+right", Action::FocusNext),
             ("alt+left", Action::FocusPrev),
@@ -289,7 +289,7 @@ impl Keymap {
                 Action::RenameFocused => "rename pane",
                 Action::HideFocused => "hide/show pane",
                 Action::CloseFocused => "close pane",
-                Action::ToggleHud => "perf HUD",
+                Action::ToggleProfiler => "profiler",
                 Action::Quit => "detach",
                 Action::FocusNext => "next pane",
                 Action::FocusPrev => "previous pane",
@@ -350,7 +350,7 @@ mod tests {
     fn overrides_replace_defaults() {
         let mut o = serde_json::Map::new();
         o.insert("settings".into(), serde_json::Value::String("f2".into()));
-        o.insert("hud".into(), serde_json::Value::String("none".into()));
+        o.insert("profiler".into(), serde_json::Value::String("none".into()));
         o.insert("leader".into(), serde_json::Value::String("ctrl+a".into()));
         let km = Keymap::from_overrides(&o);
         // New binding works; old defaults for that action are gone.

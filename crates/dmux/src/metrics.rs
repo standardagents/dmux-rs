@@ -1,4 +1,4 @@
-//! Frame/latency instrumentation. Everything the HUD shows lives here so the
+//! Frame/latency instrumentation. Everything the profiler shows lives here so the
 //! perf budget in the plan is measured, not asserted.
 
 use std::time::{Duration, Instant};
@@ -7,7 +7,7 @@ use hdrhistogram::Histogram;
 
 use crate::interaction::{Kind, Observation};
 
-pub(crate) const HUD_REFRESH: Duration = Duration::from_millis(500);
+pub(crate) const PROFILER_REFRESH: Duration = Duration::from_millis(500);
 const FPS_BUCKET: Duration = Duration::from_millis(250);
 const FPS_HISTORY_BUCKETS: usize = 32;
 const FPS_RATE_BUCKETS: usize = 8;
@@ -193,8 +193,8 @@ impl Metrics {
         self.started.elapsed()
     }
 
-    /// HUD lines, ready to draw.
-    pub fn hud_lines(&self) -> Vec<String> {
+    /// profiler lines, ready to draw.
+    pub fn profiler_lines(&self) -> Vec<String> {
         let p = |h: &Histogram<u64>, q: f64| h.value_at_quantile(q) as f64 / 1000.0;
         let observed = |h: &Histogram<u64>, q: f64| {
             if h.is_empty() {
@@ -301,9 +301,9 @@ mod tests {
     }
 
     #[test]
-    fn hud_includes_framerate_and_fixed_width_history() {
+    fn profiler_includes_framerate_and_fixed_width_history() {
         let metrics = Metrics::new();
-        let line = &metrics.hud_lines()[1];
+        let line = &metrics.profiler_lines()[1];
 
         assert!(line.starts_with("fps   0.0/60  "), "{line}");
         assert_eq!(line.chars().rev().take(FPS_HISTORY_BUCKETS).count(), 32);

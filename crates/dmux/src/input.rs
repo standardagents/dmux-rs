@@ -16,7 +16,7 @@ use dmux_vt::InputModes;
 pub enum Routed {
     Quit,
     Detach,
-    ToggleHud,
+    ToggleProfiler,
     FocusNext,
     FocusPrev,
     FocusIndex(usize),
@@ -56,7 +56,7 @@ fn action_to_routed(action: crate::keys::Action) -> Routed {
         Action::RenameFocused => Routed::RenameFocused,
         Action::HideFocused => Routed::HideFocused,
         Action::CloseFocused => Routed::CloseFocused,
-        Action::ToggleHud => Routed::ToggleHud,
+        Action::ToggleProfiler => Routed::ToggleProfiler,
         Action::Quit => Routed::Quit,
         Action::FocusNext => Routed::FocusNext,
         Action::FocusPrev => Routed::FocusPrev,
@@ -117,7 +117,7 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
         (KeyCode::Char('l'), _) => Routed::OpenLogs,
         (KeyCode::Char('/'), _) => Routed::SearchScrollback,
         (KeyCode::Char('?'), _) => Routed::OpenShortcuts,
-        (KeyCode::Char('y'), _) => Routed::ToggleHud,
+        (KeyCode::Char('y'), _) => Routed::ToggleProfiler,
         (KeyCode::Char(c @ '1'..='9'), _) => Routed::FocusIndex(*c as usize - '1' as usize),
         (KeyCode::RightArrow, _) => Routed::FocusNext,
         (KeyCode::LeftArrow, _) => Routed::FocusPrev,
@@ -375,7 +375,7 @@ mod tests {
                 true,
                 &km()
             ),
-            Routed::ToggleHud
+            Routed::ToggleProfiler
         );
         // Double leader = literal Ctrl+b to the pane.
         assert_eq!(

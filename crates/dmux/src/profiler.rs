@@ -1,4 +1,4 @@
-//! Perf-HUD pointer behavior (#103): the title row drags the card (grab
+//! Profiler pointer behavior (#103): the title row drags the card (grab
 //! offset preserved, position clamped so the overlay is always
 //! recoverable), the ✕ dismisses it, and every visibility control writes the
 //! same global setting.
@@ -23,13 +23,13 @@ fn save_visibility(settings: &mut dmux_core::SettingsStore, visible: bool) -> st
 }
 
 impl App {
-    pub(crate) fn apply_hud_visibility(&mut self, visible: bool) {
-        self.hud = visible;
+    pub(crate) fn apply_profiler_visibility(&mut self, visible: bool) {
+        self.profiler = visible;
         self.force_full = true;
         self.dirty = true;
     }
 
-    pub(crate) fn set_hud_visibility(&mut self, visible: bool) {
+    pub(crate) fn set_profiler_visibility(&mut self, visible: bool) {
         let save = {
             let mut settings = self.settings.lock().unwrap();
             save_visibility(&mut settings, visible)
@@ -37,48 +37,54 @@ impl App {
         if let Err(err) = save {
             tracing::warn!(%err, "profiler visibility save failed");
         }
-        self.apply_hud_visibility(visible);
+        self.apply_profiler_visibility(visible);
     }
 
-    /// Handle a press on a HUD control. `HudClose` dismisses; `HudTitle`
+    /// Handle a press on a profiler control. `ProfilerClose` dismisses; `ProfilerTitle`
     /// starts a drag anchored at the pointer's offset within the card.
-    pub(crate) fn hud_press(&mut self, target: Option<ClickTarget>, col: u16, row: u16) -> bool {
+    pub(crate) fn profiler_press(
+        &mut self,
+        target: Option<ClickTarget>,
+        col: u16,
+        row: u16,
+    ) -> bool {
         match target {
-            Some(ClickTarget::HudClose) => {
-                self.set_hud_visibility(false);
+            Some(ClickTarget::ProfilerClose) => {
+                self.set_profiler_visibility(false);
             }
-            Some(ClickTarget::HudTitle) => {
-                let rect = render::hud_layout(
+            Some(ClickTarget::ProfilerTitle) => {
+                let rect = render::profiler_layout(
                     self.back.area(),
                     &self.metrics,
-                    self.hud_pos,
+                    self.profiler_pos,
                     self.layout.sidebar.right(),
                 );
-                self.hud_drag = Some((col.saturating_sub(rect.x), row.saturating_sub(rect.y)));
+                self.profiler_drag = Some((col.saturating_sub(rect.x), row.saturating_sub(rect.y)));
             }
             _ => {}
         }
         true
     }
 
-    /// While a HUD drag is active, follow the pointer (minus the grab
+    /// While a profiler drag is active, follow the pointer (minus the grab
     /// offset, clamped on screen) and swallow the mouse until release.
     /// Returns None when no drag is active.
-    pub(crate) fn hud_drag_motion(
+    pub(crate) fn profiler_drag_motion(
         &mut self,
         kind: MouseKind,
         is_press: bool,
         col: u16,
         row: u16,
     ) -> Option<bool> {
-        let (gx, gy) = self.hud_drag?;
+        let (gx, gy) = self.profiler_drag?;
         match kind {
             MouseKind::LeftHeld if !is_press => {
                 let area = self.back.area();
                 let sidebar_right = self.layout.sidebar.right();
-                let rect = render::hud_layout(area, &self.metrics, self.hud_pos, sidebar_right);
-                let workspace = render::hud_workspace(area, sidebar_right);
-                self.hud_pos = Some(render::hud_clamp(
+                let rect =
+                    render::profiler_layout(area, &self.metrics, self.profiler_pos, sidebar_right);
+                let workspace = render::profiler_workspace(area, sidebar_right);
+                self.profiler_pos = Some(render::profiler_clamp(
                     (col.saturating_sub(gx), row.saturating_sub(gy)),
                     (rect.w, rect.h),
                     workspace,
@@ -87,7 +93,7 @@ impl App {
                 Some(true)
             }
             MouseKind::Release => {
-                self.hud_drag = None;
+                self.profiler_drag = None;
                 Some(true)
             }
             _ => None,
@@ -100,9 +106,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn setting_key_survives_the_rename() {
+        // Persisted installations keep their visibility (#115): the key is
+        // the pre-rename spelling and must never change.
+        assert_eq!(VISIBLE_SETTING, "showPerformanceProfiler");
+    }
+
+    #[test]
     fn visibility_round_trips_through_the_global_settings_file() {
         let dir = std::env::temp_dir().join(format!(
-            "dmux-hud-setting-{}-{}",
+            "dmux-profiler-setting-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

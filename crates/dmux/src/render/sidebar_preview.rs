@@ -148,8 +148,8 @@ fn render_case(case: PreviewCase) -> CellBuffer {
         focused: 0,
         selected: 0,
         project_name: "dmux-rs",
-        hud: case.diagnostics.then_some(&metrics),
-        hud_pos: None,
+        profiler: case.diagnostics.then_some(&metrics),
+        profiler_pos: None,
         status_line: case.status,
         theme: &theme,
         anim: 0,
@@ -183,8 +183,8 @@ fn render_project_overlay(group_index: usize) -> (CellBuffer, Rect, dmux_composi
         focused: 0,
         selected: 0,
         project_name: "dmux-rs",
-        hud: None,
-        hud_pos: None,
+        profiler: None,
+        profiler_pos: None,
         status_line: "^b for commands · ^b ? help",
         theme: &theme,
         anim: 0,
@@ -325,7 +325,7 @@ fn plain_preview_covers_widths_and_interaction_states() {
     }
     assert!(output.contains("? shortcuts"));
     assert!(output.contains("? help"));
-    assert!(output.contains("perf"));
+    assert!(output.contains("profiler"));
     assert!(output.contains("worktree provisioning is waiting for …"));
     assert!(output.contains("tiny status"));
 }

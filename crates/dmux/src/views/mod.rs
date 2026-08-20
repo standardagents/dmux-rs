@@ -175,10 +175,10 @@ pub enum ClickTarget {
     SidebarRow(usize),
     SidebarNewProject,
     SidebarSettings,
-    /// Perf-HUD title row: the drag handle (#103).
-    HudTitle,
-    /// Perf-HUD close icon.
-    HudClose,
+    /// Profiler title row: the drag handle (#103).
+    ProfilerTitle,
+    /// Profiler close icon.
+    ProfilerClose,
     SidebarHelp,
     /// The 🐛 issues chip: opens the newest filed issue in the browser.
     /// Per-project creation actions (index into the sidebar groups).

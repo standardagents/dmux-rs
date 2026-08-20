@@ -111,9 +111,9 @@ impl App {
             SettingKey::PerformanceProfiler => {
                 let visible = {
                     let settings = self.settings.lock().unwrap();
-                    crate::hud::configured_visible(&settings)
+                    crate::profiler::configured_visible(&settings)
                 };
-                self.apply_hud_visibility(visible);
+                self.apply_profiler_visibility(visible);
             }
             _ => {}
         }

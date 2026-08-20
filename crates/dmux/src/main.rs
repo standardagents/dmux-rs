@@ -13,7 +13,6 @@ mod git;
 mod github;
 mod hooks;
 mod hover;
-mod hud;
 mod input;
 mod interaction;
 mod keys;
@@ -21,6 +20,7 @@ mod layout;
 mod metrics;
 mod notify;
 mod pane_actions;
+mod profiler;
 mod registry;
 mod render;
 mod report;
@@ -101,9 +101,9 @@ struct Cli {
     /// tmux socket name (tmux -L), mainly for tests.
     #[arg(short = 'L', long)]
     socket: Option<String>,
-    /// Start with the perf HUD visible.
-    #[arg(long)]
-    hud: bool,
+    /// Start with the performance profiler visible (alias: --hud).
+    #[arg(long, alias = "hud")]
+    profiler: bool,
     /// Log file (default: ~/.dmux/logs/dmux-rs.log).
     #[arg(long)]
     log_file: Option<PathBuf>,
@@ -362,7 +362,7 @@ struct App {
     back: CellBuffer,
     emitter: Emitter,
     metrics: metrics::Metrics,
-    hud: bool,
+    profiler: bool,
     size: (u16, u16),
     layout: layout::Layout,
     dirty: bool,
@@ -428,10 +428,10 @@ struct App {
     tooltip: Option<Tooltip>,
     /// Sidebar drag-reorder gesture state (#26).
     sidebar_drag: Option<SidebarDrag>,
-    /// Dragged perf-HUD origin (#103); None = default anchor.
-    hud_pos: Option<(u16, u16)>,
-    /// Active HUD drag: pointer grab offset within the card.
-    hud_drag: Option<(u16, u16)>,
+    /// Dragged profiler origin (#103); None = default anchor.
+    profiler_pos: Option<(u16, u16)>,
+    /// Active profiler drag: pointer grab offset within the card.
+    profiler_drag: Option<(u16, u16)>,
     /// Server octal-escapes command-reply payloads (probed at attach, #19).
     /// None until the probe reply lands; no decoding happens before that,
     /// and the probe is the first tagged command so nothing races it.
@@ -484,7 +484,7 @@ async fn run(
         &dirs_home(),
         Some(&project_root),
     )));
-    let hud_visible = cli.hud || hud::configured_visible(&settings.lock().unwrap());
+    let hud_visible = cli.profiler || profiler::configured_visible(&settings.lock().unwrap());
     let installed_agents = agents::detect_installed();
     let host = HostTerminal::setup()?;
     let size = host.size();
@@ -587,7 +587,7 @@ async fn run(
         back: CellBuffer::new(size.0, size.1),
         emitter: Emitter::new(),
         metrics: metrics::Metrics::new(),
-        hud: hud_visible,
+        profiler: hud_visible,
         size,
         layout: layout::compute(size.0, size.1, 0),
         dirty: true,
@@ -636,8 +636,8 @@ async fn run(
         pending_restore: Vec::new(),
         tooltip: None,
         sidebar_drag: None,
-        hud_pos: None,
-        hud_drag: None,
+        profiler_pos: None,
+        profiler_drag: None,
         replies_escaped: None,
         closing: std::collections::HashSet::new(),
         pending_focus: None,
@@ -761,9 +761,9 @@ async fn run(
             .filter_map(|p| p.last_output)
             .min()
             .map(|t| tokio::time::Instant::from_std(t + SETTLE_AFTER));
-        let hud_deadline = app
-            .hud
-            .then(|| tokio::time::Instant::from_std(now + metrics::HUD_REFRESH));
+        let profiler_deadline = app
+            .profiler
+            .then(|| tokio::time::Instant::from_std(now + metrics::PROFILER_REFRESH));
         let resume_deadline = app
             .panes
             .iter()
@@ -807,7 +807,7 @@ async fn run(
             render_deadline,
             scroll_deadline,
             settle_deadline,
-            hud_deadline,
+            profiler_deadline,
             resume_deadline,
             anim_deadline,
             injection_deadline,
@@ -2350,8 +2350,8 @@ impl App {
                 _ => {}
             }
         }
-        // A HUD drag captures the mouse until release (#103).
-        if let Some(handled) = self.hud_drag_motion(kind, is_press, col, row) {
+        // A profiler drag captures the mouse until release (#103).
+        if let Some(handled) = self.profiler_drag_motion(kind, is_press, col, row) {
             return handled;
         }
         // A sidebar reorder drag captures the mouse until release (#26).
@@ -2519,8 +2519,8 @@ impl App {
                 }
             }
             MouseKind::LeftHeld if is_press => match target {
-                Some(ClickTarget::HudClose) | Some(ClickTarget::HudTitle) => {
-                    return self.hud_press(target, col, row);
+                Some(ClickTarget::ProfilerClose) | Some(ClickTarget::ProfilerTitle) => {
+                    return self.profiler_press(target, col, row);
                 }
                 Some(ClickTarget::SidebarRow(i)) => {
                     // Click selects (sidebar keeps the keyboard);
@@ -2657,8 +2657,8 @@ impl App {
                 self.leader_armed = true;
                 self.dirty = true;
             }
-            Routed::ToggleHud => {
-                self.set_hud_visibility(!self.hud);
+            Routed::ToggleProfiler => {
+                self.set_profiler_visibility(!self.profiler);
             }
             Routed::FocusNext => return self.focus_step(1),
             Routed::FocusPrev => return self.focus_step(-1),
@@ -3101,7 +3101,7 @@ impl App {
                 self.dirty = true;
             }
         }
-        if self.hud {
+        if self.profiler {
             self.dirty = true;
         }
         if self.dirty && self.frame_clock.due(now) {
@@ -3158,8 +3158,8 @@ impl App {
             focused: self.focused,
             selected: self.selected,
             project_name: &project_name,
-            hud: self.hud.then_some(&self.metrics),
-            hud_pos: self.hud_pos,
+            profiler: self.profiler.then_some(&self.metrics),
+            profiler_pos: self.profiler_pos,
             status_line: &footer_text,
             theme: &self.theme,
             anim: self.anim,
@@ -3430,170 +3430,4 @@ fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slugify_prompts() {
-        assert_eq!(slugify("Fix the auth bug"), "fix-the-auth-bug");
-        assert_eq!(
-            slugify("Add   OAuth2!! support, please"),
-            "add-oauth2-support-please"
-        );
-        assert!(slugify("").starts_with("agents-"));
-    }
-
-    #[test]
-    fn shell_quoting() {
-        assert_eq!(shq("/tmp/simple-path"), "/tmp/simple-path");
-        assert_eq!(shq("a path"), "'a path'");
-        assert_eq!(shq("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn iso_timestamp_shape() {
-        let ts = iso_now();
-        assert_eq!(ts.len(), 24);
-        assert!(ts.ends_with("Z"));
-        assert!(ts.starts_with("20"));
-    }
-
-    #[test]
-    fn reported_titles_lose_their_leading_spinners() {
-        // Claude Code animates an asterisk-family glyph in its titles.
-        assert_eq!(strip_status_glyphs("✳ dmux-rs"), "dmux-rs");
-        assert_eq!(strip_status_glyphs("✻ ✳ dmux-rs"), "dmux-rs");
-        // Braille spinner frames.
-        assert_eq!(strip_status_glyphs("⠹ building"), "building");
-        // Plain titles pass through, including mid-title glyphs.
-        assert_eq!(
-            strip_status_glyphs("cargo build ✳ hot"),
-            "cargo build ✳ hot"
-        );
-        // A title that is ONLY a spinner strips to empty (then ignored).
-        assert_eq!(strip_status_glyphs("✳"), "");
-    }
-
-    #[test]
-    fn legacy_multi_pane_windows_break_out_extras() {
-        let mk = |pane: u32, window: u32| session::TmuxPaneInfo {
-            pane: PaneId(pane),
-            window: dmux_cc::WindowId(window),
-            title: String::new(),
-            width: 80,
-            height: 24,
-            alternate_on: false,
-            current_command: "bash".into(),
-            window_name: "w".into(),
-            pane_pid: 1,
-            start_command: String::new(),
-            extended_keys_mode2: false,
-            current_path: String::new(),
-        };
-        // Window 0 has three panes, window 1 has one: only the two extras
-        // of window 0 are broken out; a re-run on the result is a no-op.
-        let infos = vec![mk(0, 0), mk(1, 0), mk(2, 0), mk(3, 1)];
-        assert_eq!(panes_to_break_out(&infos), vec![PaneId(1), PaneId(2)]);
-        let after = vec![mk(0, 0), mk(1, 2), mk(2, 3), mk(3, 1)];
-        assert!(panes_to_break_out(&after).is_empty());
-    }
-
-    #[test]
-    fn sidebar_typing_never_leaks_or_drops_focus() {
-        use dmux_host::{KeyCode, Modifiers};
-        let keymap = keys::Keymap::from_overrides(&Default::default());
-        let key = |k: KeyCode, m: Modifiers| dmux_host::KeyEvent {
-            key: k,
-            modifiers: m,
-        };
-        // A word typed while sidebar-focused: every unbound letter is a
-        // no-op — never PassThrough (which would reach a pane), never
-        // LeaveFocus (#27). Letters with sidebar meanings map to actions.
-        for c in "wordy".chars() {
-            let action = sidebar_key_action(&key(KeyCode::Char(c), Modifiers::NONE), &keymap);
-            assert!(
-                !matches!(
-                    action,
-                    SidebarKeyAction::PassThrough | SidebarKeyAction::LeaveFocus
-                ),
-                "typed '{c}' must stay in the sidebar, got {action:?}"
-            );
-        }
-        // Unknown modified keys are consumed too.
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Char('z'), Modifiers::CTRL), &keymap),
-            SidebarKeyAction::Ignore
-        );
-        // The leader chord passes through so global bindings keep working.
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Char('b'), Modifiers::CTRL), &keymap),
-            SidebarKeyAction::PassThrough
-        );
-        // Recognized hotkeys, Enter, and Escape keep their meanings.
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Char('j'), Modifiers::NONE), &keymap),
-            SidebarKeyAction::Down
-        );
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Char('i'), Modifiers::NONE), &keymap),
-            SidebarKeyAction::Issues
-        );
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Enter, Modifiers::NONE), &keymap),
-            SidebarKeyAction::Activate
-        );
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Escape, Modifiers::NONE), &keymap),
-            SidebarKeyAction::LeaveFocus
-        );
-        assert_eq!(
-            sidebar_key_action(&key(KeyCode::Char('q'), Modifiers::NONE), &keymap),
-            SidebarKeyAction::Ignore
-        );
-    }
-
-    #[test]
-    fn sidebar_drag_thresholds_and_follows() {
-        // #26: a press+release on the same row is a click, never a reorder.
-        let armed = SidebarDrag::Armed {
-            src: 2,
-            start_row: 5,
-        };
-        assert_eq!(armed.reordering(), None);
-        assert_eq!(armed.motion(5), armed, "same-row motion stays armed");
-        // Crossing a row enters reorder mode and then follows the pointer.
-        let dragging = armed.motion(6);
-        assert_eq!(dragging.reordering(), Some((2, 6)));
-        assert_eq!(dragging.motion(9).reordering(), Some((2, 9)));
-    }
-
-    #[test]
-    fn tooltip_clamps_to_bounds_and_expires() {
-        let area = dmux_compositor::Rect::new(0, 0, 100, 30);
-        // Interior release: one row above the cursor.
-        assert_eq!(
-            tooltip_rect(area, (40, 10), 22),
-            dmux_compositor::Rect::new(40, 9, 22, 1)
-        );
-        // Top edge: stays on screen (no row above to use).
-        assert_eq!(tooltip_rect(area, (40, 0), 22).y, 0);
-        // Right edge: shifted left so the whole box fits.
-        let r = tooltip_rect(area, (95, 10), 22);
-        assert_eq!(r.right(), 100);
-        // Bottom edge: still inside.
-        assert!(tooltip_rect(area, (40, 29), 22).bottom() <= 30);
-        // Wider than the terminal: clamped to it.
-        assert_eq!(tooltip_rect(area, (0, 5), 200).w, 100);
-        // Expiry: a later copy restarts the clock; the deadline decides.
-        let t = Tooltip {
-            text: "Copied to clipboard".into(),
-            x: 1,
-            y: 1,
-            until: Instant::now(),
-        };
-        assert!(
-            Instant::now() >= t.until,
-            "an elapsed deadline reads as expired"
-        );
-    }
-}
+mod tests;

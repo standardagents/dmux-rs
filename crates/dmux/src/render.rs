@@ -1,5 +1,5 @@
 //! Frame composition: sidebar, pane title bars (with click buttons), pane
-//! bodies, overlays, and the debug HUD, painted into the back `CellBuffer`.
+//! bodies, overlays, and the debug profiler, painted into the back `CellBuffer`.
 //! Every interactive region is registered in the frame's `ClickMap` as it is
 //! drawn — whatever you see is what you can click.
 
@@ -26,9 +26,9 @@ pub struct Scene<'a> {
     pub selected: usize,
     #[allow(dead_code)]
     pub project_name: &'a str,
-    pub hud: Option<&'a Metrics>,
-    /// Dragged HUD origin (#103); None = default top-right anchor.
-    pub hud_pos: Option<(u16, u16)>,
+    pub profiler: Option<&'a Metrics>,
+    /// Dragged profiler origin (#103); None = default top-right anchor.
+    pub profiler_pos: Option<(u16, u16)>,
     pub status_line: &'a str,
     pub theme: &'a Theme,
     pub anim: u64,
@@ -129,11 +129,11 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
             draw_pane_badge(buf, scene.theme, pane, rect);
         }
     }
-    if let Some(metrics) = scene.hud {
-        draw_hud(
+    if let Some(metrics) = scene.profiler {
+        draw_profiler(
             buf,
             metrics,
-            scene.hud_pos,
+            scene.profiler_pos,
             scene.layout.sidebar.right(),
             clicks,
         );
@@ -348,9 +348,9 @@ fn draw_pane_badge(buf: &mut CellBuffer, theme: &Theme, pane: &LogicalPane, body
     );
 }
 
-/// Clamp a HUD origin so the whole card stays inside `area` (#103): the
+/// Clamp a profiler origin so the whole card stays inside `area` (#103): the
 /// overlay must remain recoverable at every viewport size.
-pub(crate) fn hud_clamp(pos: (u16, u16), size: (u16, u16), area: Rect) -> (u16, u16) {
+pub(crate) fn profiler_clamp(pos: (u16, u16), size: (u16, u16), area: Rect) -> (u16, u16) {
     let width = size.0.min(area.w);
     let height = size.1.min(area.h);
     (
@@ -361,7 +361,7 @@ pub(crate) fn hud_clamp(pos: (u16, u16), size: (u16, u16), area: Rect) -> (u16, 
 
 /// Workspace available to the profiler. The sidebar and its gutter remain
 /// unobstructed at every viewport width.
-pub(crate) fn hud_workspace(area: Rect, sidebar_right: u16) -> Rect {
+pub(crate) fn profiler_workspace(area: Rect, sidebar_right: u16) -> Rect {
     let x = sidebar_right
         .saturating_add(1)
         .max(area.x)
@@ -369,64 +369,64 @@ pub(crate) fn hud_workspace(area: Rect, sidebar_right: u16) -> Rect {
     Rect::new(x, area.y, area.right().saturating_sub(x), area.h)
 }
 
-/// The HUD's on-screen rect: a dragged position when one is stored, or the
+/// The profiler's on-screen rect: a dragged position when one is stored, or the
 /// shared top-of-sidebar attachment. The renderer and drag logic consume the
 /// same clamped geometry.
-pub(crate) fn hud_layout(
+pub(crate) fn profiler_layout(
     area: Rect,
     metrics: &Metrics,
     pos: Option<(u16, u16)>,
     sidebar_right: u16,
 ) -> Rect {
-    let lines = metrics.hud_lines();
-    let workspace = hud_workspace(area, sidebar_right);
+    let lines = metrics.profiler_lines();
+    let workspace = profiler_workspace(area, sidebar_right);
     let w =
         (lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 2).min(workspace.w);
     let h = (lines.len() as u16 + 1).min(workspace.h);
     let attached = dmux_ui::place(area, sidebar_right, Anchor::SidebarTop, w, h);
     let default = (attached.x, attached.y);
-    let (x, y) = hud_clamp(pos.unwrap_or(default), (w, h), workspace);
+    let (x, y) = profiler_clamp(pos.unwrap_or(default), (w, h), workspace);
     Rect::new(x, y, w, h).intersect(&workspace)
 }
 
-fn draw_hud(
+fn draw_profiler(
     buf: &mut CellBuffer,
     metrics: &Metrics,
     pos: Option<(u16, u16)>,
     sidebar_right: u16,
     clicks: &mut ClickMap<ClickTarget>,
 ) {
-    let lines = metrics.hud_lines();
+    let lines = metrics.profiler_lines();
     let area = buf.area();
-    let rect = hud_layout(area, metrics, pos, sidebar_right);
+    let rect = profiler_layout(area, metrics, pos, sidebar_right);
     // Distinct title-bar surface (#109): the drag handle reads as a bar
     // above the metrics, not one flat slab. Diagnostic blues, no project
     // theming.
-    const HUD_BAR_BG: Color = Color::Indexed(24);
-    const HUD_BODY_BG: Color = Color::Indexed(17);
+    const PROFILER_BAR_BG: Color = Color::Indexed(24);
+    const PROFILER_BODY_BG: Color = Color::Indexed(17);
     if rect.is_empty() {
         return;
     }
     buf.fill(
         rect,
         &Cell {
-            bg: HUD_BODY_BG,
+            bg: PROFILER_BODY_BG,
             ..Cell::default()
         },
     );
     buf.fill(
         Rect::new(rect.x, rect.y, rect.w, 1),
         &Cell {
-            bg: HUD_BAR_BG,
+            bg: PROFILER_BAR_BG,
             ..Cell::default()
         },
     );
     buf.draw_text(
         rect.x + 4,
         rect.y,
-        "perf",
+        "profiler",
         Color::Indexed(159),
-        HUD_BAR_BG,
+        PROFILER_BAR_BG,
         AttrFlags::BOLD,
         rect,
     );
@@ -439,15 +439,15 @@ fn draw_hud(
         rect.y,
         "✕",
         Color::Indexed(210),
-        HUD_BAR_BG,
+        PROFILER_BAR_BG,
         AttrFlags::BOLD,
         rect,
     );
     clicks.add(
         Rect::new(rect.x + close_w, rect.y, rect.w.saturating_sub(close_w), 1),
-        ClickTarget::HudTitle,
+        ClickTarget::ProfilerTitle,
     );
-    clicks.add(close, ClickTarget::HudClose);
+    clicks.add(close, ClickTarget::ProfilerClose);
     for (i, line) in lines.iter().enumerate() {
         buf.draw_text(
             rect.x + 1,
@@ -478,7 +478,7 @@ mod attention_tests;
 #[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]
-mod hud_tests;
+mod profiler_tests;
 #[cfg(test)]
 mod sidebar_preview;
 #[cfg(test)]
