@@ -551,6 +551,8 @@ async fn run(
     let _ = client.send(format!(
         "set -g window-active-style 'fg={default_fg},bg={default_bg}'"
     ));
+    // Mirror pane mode 2 with tmux's CSI-u extended-key format.
+    session::configure_extended_keys(&client);
     // Reply-escaping probe must be the FIRST tagged command: its verdict
     // gates decoding of every later reply, and tmux answers in order (#19).
     client.send_tagged(
@@ -1269,7 +1271,9 @@ impl App {
             }
             CcEvent::WindowAdd(_)
             | CcEvent::LayoutChange { .. }
-            | CcEvent::WindowPaneChanged { .. } => {
+            | CcEvent::WindowPaneChanged { .. }
+            | CcEvent::PaneModeChanged(_)
+            | CcEvent::SubscriptionChanged { .. } => {
                 self.request_reconcile();
                 true
             }
@@ -2042,6 +2046,7 @@ impl App {
                     // Keep the alt-screen flag fresh: begin_reseed seeds
                     // onto the grid tmux says the pane is on (#12).
                     existing.alt_screen = new_pane.alt_screen;
+                    existing.extended_keys_mode2 = new_pane.extended_keys_mode2;
                     // tmux still lists the pane: whatever marked it dead was
                     // wrong (or it recovered) — resurrect.
                     if existing.status == PaneStatus::Dead {
@@ -2301,8 +2306,8 @@ impl App {
                         return handled;
                     }
                 }
-                let routed =
-                    input::route_key(&key, self.focused_modes(), leader_was_armed, &self.keymap);
+                let modes = session::pane_input_modes(&self.panes, self.focused);
+                let routed = input::route_key(&key, modes, leader_was_armed, &self.keymap);
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
@@ -2319,7 +2324,8 @@ impl App {
                     self.dirty = true;
                     return self.apply_view_result(result);
                 }
-                self.send_pane_bytes(&input::encode_paste(&text, self.focused_modes()));
+                let modes = session::pane_input_modes(&self.panes, self.focused);
+                self.send_pane_bytes(&input::encode_paste(&text, modes));
                 true
             }
             InputEvent::Resized { cols, rows } => {
@@ -4034,13 +4040,6 @@ impl App {
         }
     }
 
-    fn focused_modes(&self) -> dmux_vt::InputModes {
-        self.panes
-            .get(self.focused)
-            .map(|p| p.term.input_modes())
-            .unwrap_or_default()
-    }
-
     fn send_pane_bytes(&mut self, bytes: &[u8]) {
         let Some(p) = self.panes.get_mut(self.focused) else {
             return;
@@ -4822,6 +4821,7 @@ mod tests {
             window_name: "w".into(),
             pane_pid: 1,
             start_command: String::new(),
+            extended_keys_mode2: false,
         };
         // Window 0 has three panes, window 1 has one: only the two extras
         // of window 0 are broken out; a re-run on the result is a no-op.

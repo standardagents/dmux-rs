@@ -7,8 +7,7 @@
 //! keyboard protocol, plus a small set of Alt alternates.
 
 use dmux_host::{
-    KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, KittyKeyboardFlags, Modifiers,
-    MouseButtons, MouseEvent,
+    KeyCode, KeyCodeEncodeModes, KeyEvent, KeyboardEncoding, Modifiers, MouseButtons, MouseEvent,
 };
 use dmux_vt::InputModes;
 
@@ -138,10 +137,10 @@ fn route_leader_command(key: &KeyEvent, modes: InputModes) -> Routed {
 }
 
 pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
-    let encoding = if modes.kitty_keyboard {
-        // The pane app pushed kitty keyboard flags: encode CSI-u so it gets
+    let encoding = if modes.extended_keys_mode2 {
+        // The pane requested mode 2 extended keys: encode CSI-u so it gets
         // the disambiguated keys it asked for.
-        KeyboardEncoding::Kitty(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+        KeyboardEncoding::CsiU
     } else if legacy_encoding_loses_modifiers(key) {
         // tmux `extended-keys on` semantics: keys the legacy encoding cannot
         // express (shift/ctrl+Enter, ctrl+Tab, ctrl+shift+char) pass through
@@ -158,7 +157,10 @@ pub fn encode_key(key: &KeyEvent, modes: InputModes) -> Option<Vec<u8>> {
         encoding,
         application_cursor_keys: modes.app_cursor,
         newline_mode: false,
-        modify_other_keys: None,
+        // termwiz routes modified Tab through this gate before consulting
+        // the selected encoding. CSI-u panes need the gate enabled so
+        // Shift+Tab becomes CSI 9;2u instead of legacy back-tab.
+        modify_other_keys: modes.extended_keys_mode2.then_some(2),
     };
     key.key
         .encode(key.modifiers, encode_modes, true)
@@ -502,9 +504,72 @@ mod tests {
             b"\x1b[Z"
         );
         assert_eq!(
+            encode_key(&key(KeyCode::Tab, Modifiers::NONE), m).unwrap(),
+            b"\t"
+        );
+        assert_eq!(
+            encode_key(&key(KeyCode::Tab, Modifiers::CTRL), m).unwrap(),
+            b"\x1b[9;5u"
+        );
+        assert_eq!(
             encode_key(&key(KeyCode::Char('c'), Modifiers::CTRL), m).unwrap(),
             b"\x03"
         );
+
+        let extended = InputModes {
+            extended_keys_mode2: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&key(KeyCode::Tab, Modifiers::SHIFT), extended).unwrap(),
+            b"\x1b[9;2u"
+        );
+        assert_eq!(
+            encode_key(&key(KeyCode::Enter, Modifiers::SHIFT), extended).unwrap(),
+            b"\x1b[13;2u"
+        );
+    }
+
+    #[test]
+    fn raw_shift_tab_reaches_the_tmux_payload() {
+        let fixtures: &[(&[u8], InputModes, &[u8])] = &[
+            (b"\x1b[Z", InputModes::default(), b"\x1b[Z"),
+            (
+                b"\x1b[9;2u",
+                InputModes {
+                    extended_keys_mode2: true,
+                    ..Default::default()
+                },
+                b"\x1b[9;2u",
+            ),
+            (b"\x1b[27;2;9~", InputModes::default(), b"\x1b[Z"),
+        ];
+
+        for &(raw, modes, expected) in fixtures {
+            let mut events = Vec::new();
+            dmux_host::InputDecoder::new().parse(raw, |event| events.push(event), false);
+            let [dmux_host::InputEvent::Key(key)] = events.as_slice() else {
+                panic!("expected one key event for {raw:?}, got {events:?}");
+            };
+            assert_eq!(key.key, KeyCode::Tab);
+            assert!(key.modifiers.contains(Modifiers::SHIFT));
+
+            let Routed::PaneBytes(bytes) = route_key(key, modes, false, &km()) else {
+                panic!("Shift+Tab was consumed before reaching the pane");
+            };
+            assert_eq!(bytes, expected);
+            assert_eq!(
+                send_keys_hex(dmux_cc::PaneId(5), &bytes),
+                format!(
+                    "send-keys -t %5 -H {}",
+                    expected
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            );
+        }
     }
 
     #[test]

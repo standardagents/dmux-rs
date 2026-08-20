@@ -11,6 +11,12 @@ use dmux_vt::PaneTerm;
 pub const PANE_SCROLLBACK: usize = 10_000;
 pub const SEED_HISTORY_LINES: u32 = 2_000;
 
+pub fn configure_extended_keys<T>(client: &dmux_cc::Client<T>) {
+    let _ = client.send("set -g extended-keys on");
+    let _ = client.send("set -g extended-keys-format csi-u");
+    let _ = client.send("refresh-client -B 'dmux-key-mode:%*:#{pane_key_mode}'");
+}
+
 /// Names that mark dmux-owned infrastructure we never render: the TS-era
 /// control/welcome/spacer panes plus our own session-keepalive window.
 fn is_infra(title: &str, window_name: &str) -> bool {
@@ -121,6 +127,9 @@ pub struct LogicalPane {
     pub worktree_path: Option<String>,
     /// The tmux pane was on the alternate screen at adoption time.
     pub alt_screen: bool,
+    /// tmux's `pane_key_mode` is `Ext 2`, which requires every modified key
+    /// to use the configured extended-key format.
+    pub extended_keys_mode2: bool,
     pub pane_pid: u32,
     /// Owning project root (None = the main project).
     pub project_root: Option<String>,
@@ -222,6 +231,16 @@ impl LogicalPane {
     }
 }
 
+pub fn pane_input_modes(panes: &[LogicalPane], focused: usize) -> dmux_vt::InputModes {
+    panes
+        .get(focused)
+        .map_or_else(dmux_vt::InputModes::default, |pane| {
+            let mut modes = pane.term.input_modes();
+            modes.extended_keys_mode2 |= pane.extended_keys_mode2;
+            modes
+        })
+}
+
 /// Turn a `capture-pane -epqN` reply into the byte stream that reconstructs
 /// tmux's grid exactly when fed to a fresh emulator. Shared by the reseed
 /// path and the shadow verifier so both replay with identical semantics.
@@ -274,10 +293,11 @@ pub struct TmuxPaneInfo {
     pub pane_pid: u32,
     /// `#{pane_start_command}` — survives window renames (keepalive identity).
     pub start_command: String,
+    pub extended_keys_mode2: bool,
 }
 
 pub fn list_panes_command() -> String {
-    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}\u{1}#{pane_pid}\u{1}#{pane_start_command}'".to_string()
+    "list-panes -s -F '#{pane_id}\u{1}#{window_id}\u{1}#{pane_title}\u{1}#{pane_width}\u{1}#{pane_height}\u{1}#{alternate_on}\u{1}#{pane_current_command}\u{1}#{window_name}\u{1}#{pane_pid}\u{1}#{pane_start_command}\u{1}#{pane_key_mode}'".to_string()
 }
 
 pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
@@ -311,6 +331,7 @@ pub fn parse_pane_list(reply: &Reply) -> Vec<TmuxPaneInfo> {
             window_name: parts[7].to_string(),
             pane_pid,
             start_command: parts.get(9).unwrap_or(&"").to_string(),
+            extended_keys_mode2: parts.get(10) == Some(&"Ext 2"),
         });
     }
     out
@@ -523,6 +544,7 @@ pub fn adopt_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec<L
             issue_filed: false,
             worktree_path: config_pane.and_then(|p| p.worktree_path.clone()),
             alt_screen: info.alternate_on,
+            extended_keys_mode2: info.extended_keys_mode2,
             pane_pid: info.pane_pid,
             project_root: config_pane.and_then(|p| p.project_root.clone()),
             agent: config_pane.and_then(|p| p.agent.clone()),
@@ -686,6 +708,7 @@ mod tests {
             window_name: window_name.into(),
             pane_pid: 42,
             start_command: start.into(),
+            extended_keys_mode2: false,
         };
         // Renamed by automatic-rename: still a keepalive.
         assert!(is_keepalive(&mk("sleep", KEEPALIVE_CMD)));
@@ -862,6 +885,12 @@ mod tests {
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].start_command, "sleep 2147483647");
         assert!(is_keepalive(&infos[0]));
+
+        let extended = reply_of(&[
+            "%4\u{1}@3\u{1}agent\u{1}80\u{1}24\u{1}0\u{1}codex\u{1}work\u{1}10\u{1}/usr/bin/codex\u{1}Ext 2",
+        ]);
+        let panes = adopt_panes(None, &parse_pane_list(&extended));
+        assert!(pane_input_modes(&panes, 0).extended_keys_mode2);
         // Older 9-field listings still parse (start_command empty).
         let line9 = "%3\u{1}@2\u{1}t\u{1}80\u{1}24\u{1}0\u{1}zsh\u{1}w\u{1}9";
         let reply9 = Reply {

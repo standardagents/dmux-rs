@@ -46,7 +46,8 @@ pub struct InputModes {
     pub alt_screen: bool,
     pub alternate_scroll: bool,
     pub focus_in_out: bool,
-    pub kitty_keyboard: bool,
+    /// The pane expects all modified keys in an extended, unambiguous form.
+    pub extended_keys_mode2: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,7 +313,7 @@ impl PaneTerm {
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
             alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
             focus_in_out: mode.contains(TermMode::FOCUS_IN_OUT),
-            kitty_keyboard: mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL),
+            extended_keys_mode2: mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL),
         }
     }
 

@@ -223,6 +223,39 @@ fn normalize_key(mut ev: InputEvent) -> InputEvent {
     ev
 }
 
+/// Incremental host-input decoder shared by the live stdin reader and input
+/// pipeline tests. Every emitted key has dmux's protocol-independent form.
+pub struct InputDecoder {
+    parser: InputParser,
+}
+
+impl InputDecoder {
+    pub fn new() -> Self {
+        Self {
+            parser: InputParser::new(),
+        }
+    }
+
+    pub fn parse(
+        &mut self,
+        bytes: &[u8],
+        mut callback: impl FnMut(InputEvent),
+        more_data_may_arrive: bool,
+    ) {
+        self.parser.parse(
+            bytes,
+            |event| callback(normalize_key(event)),
+            more_data_may_arrive,
+        );
+    }
+}
+
+impl Default for InputDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Spawn the blocking stdin reader thread. Parsed events land on the returned
 /// channel; the thread exits when stdin closes or the receiver is dropped.
 pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
@@ -230,7 +263,7 @@ pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
     std::thread::Builder::new()
         .name("dmux-input".into())
         .spawn(move || {
-            let mut parser = InputParser::new();
+            let mut decoder = InputDecoder::new();
             let mut stdin = std::io::stdin().lock();
             let mut buf = [0u8; 4096];
             loop {
@@ -238,10 +271,10 @@ pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
                     Ok(0) => break,
                     Ok(n) => {
                         let mut closed = false;
-                        parser.parse(
+                        decoder.parse(
                             &buf[..n],
                             |event| {
-                                if tx.blocking_send(normalize_key(event)).is_err() {
+                                if tx.blocking_send(event).is_err() {
                                     closed = true;
                                 }
                             },

@@ -84,7 +84,39 @@ printf '\033[5H\033[34mindexed-4 remapped\033[39m'
 printf '\033[7H\033[48;5;236m\033[Kband over theme\033[49m'
 exec sleep 600
 EOF
+cat > cases/shift-tab-composer.py <<'PY'
+#!/usr/bin/env python3
+import os
+import select
+import termios
+import tty
+
+fd = 0
+saved = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    os.write(1, b'\033[2J\033[HMRKR composer mode: DEFAULT\r\n')
+    # Request xterm extended-key mode 2, as agent composers do under tmux.
+    os.write(1, b'\033[>4;2m')
+    pending = b''
+    while True:
+        readable, _, _ = select.select([fd], [], [], 2)
+        if not readable:
+            os.write(1, b'\r\ncomposer input: ' + pending.hex().encode() + b'\r\n')
+            break
+        pending = (pending + os.read(fd, 32))[-64:]
+        if b'\033[9;2u' in pending:
+            os.write(1, b'\r\ncomposer mode: BYPASS\r\n')
+            break
+        if b'\033[Z' in pending:
+            os.write(1, b'\r\ncomposer input: LEGACY\r\n')
+            break
+finally:
+    os.write(1, b'\033[>4m')
+    termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+PY
 chmod +x cases/*.sh
+chmod +x cases/*.py
 
 # ---- helpers --------------------------------------------------------------
 compare() { # $1=truth.grid $2=ours.grid $3=label [$4=tolerate-trailing-bg]
@@ -186,6 +218,21 @@ for case_sh in cases/rich-static.sh cases/scrolled-bands.sh cases/wide-and-style
   tmux -L $DRV send-keys -t drv "env -u TMUX HOME=$WORKDIR/home $BIN --socket $TGT" Enter; sleep 4
   run_case "$case_sh" seed "$mode"
 done
+
+# A fixture composer requests Kitty keyboard encoding and changes its visible
+# mode only after receiving Shift+Tab as CSI-u. Feed raw host bytes through
+# dmux so this covers host parsing, pane mode detection, routing, and tmux.
+tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
+tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/cases/shift-tab-composer.py" Enter; sleep 1
+tmux -L $DRV send-keys -t drv -H 1b 5b 39 3b 32 75; sleep 2
+if tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep -q "composer mode: BYPASS"; then
+  echo "PASS shift-tab/composer (extended CSI-u reached pane)"
+else
+  echo "FAIL shift-tab/composer: mode did not change"
+  tmux -L $TGT display-message -p -t "$PANE" 'tmux pane mode: #{pane_key_mode}'
+  tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep "composer" || true
+  FAILS=$((FAILS+1))
+fi
 
 # osc-colors: pane-local dynamic palettes (OSC 10/11/4). Contract: written
 # cells render with the theme, live. (Full-grid compare vs tmux is not
