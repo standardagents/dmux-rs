@@ -5,7 +5,7 @@ use dmux_ui::{
     panel_frame, ButtonStyle, ClickMap, CounterHighlight, PanelStyle, TextInput,
 };
 
-use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
+use super::{vkeys, AgentLaunchIdentity, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 use crate::agents::{AgentDef, AGENTS};
 use dmux_core::i18n::t;
 
@@ -42,6 +42,7 @@ pub struct AgentSelectView {
     focus: usize,
     permission_idx: usize,
     project_root: Option<String>,
+    launch_identity: Option<AgentLaunchIdentity>,
     close_parent_on_launch: bool,
     /// Prompt rect width from the last render, for wrapped click mapping.
     prompt_w: u16,
@@ -96,14 +97,16 @@ impl AgentSelectView {
             focus: 0,
             permission_idx,
             project_root,
+            launch_identity: None,
             close_parent_on_launch: false,
             prompt_w: 0,
         }
     }
 
-    pub fn with_issue_prompt(mut self, prompt: String) -> Self {
+    pub fn with_issue_prompt(mut self, prompt: String, identity: AgentLaunchIdentity) -> Self {
         let placeholder = std::mem::take(&mut self.prompt.placeholder);
         self.prompt = TextInput::with_value(prompt).placeholder(placeholder);
+        self.launch_identity = Some(identity);
         self.close_parent_on_launch = true;
         self
     }
@@ -136,6 +139,7 @@ impl AgentSelectView {
             allocations,
             mode: PERMISSION_MODES[self.permission_idx].0.to_string(),
             project_root: self.project_root.clone(),
+            identity: self.launch_identity.clone(),
         };
         if self.close_parent_on_launch {
             ViewResult::CloseTwoAnd(command)
@@ -518,6 +522,13 @@ mod tests {
     use super::*;
     use dmux_host::Modifiers;
 
+    fn issue_identity() -> AgentLaunchIdentity {
+        AgentLaunchIdentity {
+            slug: "issue-1-work".into(),
+            display: "#1 Work".into(),
+        }
+    }
+
     #[test]
     fn launch_retains_the_sidebar_project_root() {
         let agent = &AGENTS[0];
@@ -548,12 +559,12 @@ mod tests {
             "",
             Some("/projects/coordinator".into()),
         )
-        .with_issue_prompt("Work on owner/repo#1".into());
+        .with_issue_prompt("Work on owner/repo#1".into(), issue_identity());
 
-        assert!(matches!(
-            view.launch(),
-            ViewResult::CloseTwoAnd(AppCmd::LaunchAgents { .. })
-        ));
+        let ViewResult::CloseTwoAnd(AppCmd::LaunchAgents { identity, .. }) = view.launch() else {
+            panic!("expected an issue launch command");
+        };
+        assert_eq!(identity, Some(issue_identity()));
     }
 
     #[test]
@@ -569,6 +580,7 @@ mod tests {
         )
         .with_issue_prompt(
             "Work on these assigned issues:\n\n- owner/repo#123: A long issue title that wraps\n  https://github.com/owner/repo/issues/123".into(),
+            issue_identity(),
         );
         assert!(view.prompt_rows(58, 28) > 1);
         assert_eq!(view.prompt.cursor, view.prompt.value.len());
@@ -585,7 +597,7 @@ mod tests {
             "",
             None,
         )
-        .with_issue_prompt("Work on owner/repo#1".into());
+        .with_issue_prompt("Work on owner/repo#1".into(), issue_identity());
         let escape = KeyEvent {
             key: KeyCode::Escape,
             modifiers: Modifiers::NONE,

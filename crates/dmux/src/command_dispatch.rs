@@ -11,8 +11,8 @@ use dmux_core::PaneKind;
 use crate::session::LogicalPane;
 use crate::view_stack::OverlayOrigin;
 use crate::views::{
-    AgentSelectView, AppCmd, ConfirmView, InputPurpose, InputView, IssueBrowserView, MenuItem,
-    MenuView, PathPickerView, SettingsView, ShortcutsView,
+    AgentLaunchIdentity, AgentSelectView, AppCmd, ConfirmView, InputPurpose, InputView,
+    IssueBrowserView, MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView,
 };
 use crate::window_launch::NewWindowCtx;
 use crate::{
@@ -76,7 +76,7 @@ impl App {
     fn open_agent_select(
         &mut self,
         project_root: Option<String>,
-        prompt: Option<String>,
+        issue: Option<(String, AgentLaunchIdentity)>,
         origin: OverlayOrigin,
     ) {
         let (default_agent, default_mode, enabled) = {
@@ -110,8 +110,8 @@ impl App {
             &default_mode,
             project_root,
         );
-        if let Some(prompt) = prompt {
-            view = view.with_issue_prompt(prompt);
+        if let Some((prompt, identity)) = issue {
+            view = view.with_issue_prompt(prompt, identity);
         }
         self.views.push_at(Box::new(view), origin);
         self.dirty = true;
@@ -172,7 +172,8 @@ impl App {
             AppCmd::ChooseAgentForIssues {
                 project_root,
                 prompt,
-            } => self.open_agent_select(Some(project_root), Some(prompt), origin),
+                identity,
+            } => self.open_agent_select(Some(project_root), Some((prompt, identity)), origin),
             AppCmd::RefreshIssues { project_root } => self.refresh_project_issues(project_root),
             AppCmd::OpenUrl(url) => {
                 tokio::task::spawn_blocking(move || {
@@ -354,7 +355,7 @@ impl App {
                     .get_str("permissionMode")
                     .unwrap_or("")
                     .to_string();
-                self.launch_agents(prompt, vec![(agent, 1)], mode, project_root);
+                self.launch_agents(prompt, vec![(agent, 1)], mode, project_root, None);
             }
             AppCmd::RunHook { idx, name } => {
                 let Some(p) = self.panes.get(idx) else {
@@ -658,7 +659,8 @@ impl App {
                 allocations,
                 mode,
                 project_root,
-            } => self.launch_agents(prompt, allocations, mode, project_root),
+                identity,
+            } => self.launch_agents(prompt, allocations, mode, project_root, identity),
             AppCmd::SetSetting { key, value, scope } => self.set_setting(&key, value, scope),
         }
         true

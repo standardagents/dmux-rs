@@ -40,6 +40,15 @@ use dmux_compositor::{CellBuffer, Rect};
 use dmux_host::KeyEvent;
 use dmux_ui::{ClickMap, Theme};
 
+/// Stable naming supplied by a source flow such as the Issues pane. The
+/// launch planner applies one base identity across pane, branch, and worktree
+/// surfaces while retaining a reader-facing title for the pane toolbar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLaunchIdentity {
+    pub slug: String,
+    pub display: String,
+}
+
 /// Commands views hand back to the app loop for execution.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppCmd {
@@ -63,6 +72,7 @@ pub enum AppCmd {
     ChooseAgentForIssues {
         project_root: String,
         prompt: String,
+        identity: AgentLaunchIdentity,
     },
     RefreshIssues {
         project_root: String,
@@ -136,6 +146,7 @@ pub enum AppCmd {
         allocations: Vec<(String, u8)>,
         mode: String,
         project_root: Option<String>,
+        identity: Option<AgentLaunchIdentity>,
     },
     SetSetting {
         key: String,

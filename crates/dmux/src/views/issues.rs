@@ -20,12 +20,69 @@ use dmux_ui::{
 use crate::github::{issue_section, GitHubIssue, IssueLoadState, IssueSection, SharedIssueState};
 
 use super::issues_table::IssueTable;
-use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
+use super::{vkeys, AgentLaunchIdentity, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
 const TAG_ROW: u64 = 100;
 const TAG_REFRESH: u64 = 1;
 const TAG_OPEN: u64 = 2;
 const TAG_CONTINUE: u64 = 3;
+const MAX_ISSUE_SLUG_LEN: usize = 56;
+const MAX_BATCH_NUMBERS: usize = 4;
+const MAX_BATCH_DISPLAY_REFS: usize = 3;
+
+fn issue_title_slug(title: &str) -> String {
+    if title.chars().any(|ch| ch.is_ascii_alphanumeric()) {
+        crate::slugify(title)
+    } else {
+        "work".into()
+    }
+}
+
+fn bounded_issue_slug(prefix: &str, title: &str) -> String {
+    let mut slug = format!("{prefix}-{}", issue_title_slug(title));
+    slug.truncate(MAX_ISSUE_SLUG_LEN);
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug
+}
+
+fn issue_launch_identity(issues: &[&GitHubIssue]) -> Option<AgentLaunchIdentity> {
+    let first = issues.first()?;
+    if issues.len() == 1 {
+        return Some(AgentLaunchIdentity {
+            slug: bounded_issue_slug(&format!("issue-{}", first.number), &first.title),
+            display: format!("#{} {}", first.number, first.title.trim()),
+        });
+    }
+
+    let numbers = issues
+        .iter()
+        .take(MAX_BATCH_NUMBERS)
+        .map(|issue| issue.number.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let hidden = issues.len().saturating_sub(MAX_BATCH_NUMBERS);
+    let prefix = if hidden == 0 {
+        format!("issues-{numbers}")
+    } else {
+        format!("issues-{numbers}-plus-{hidden}")
+    };
+    let mut references = issues
+        .iter()
+        .take(MAX_BATCH_DISPLAY_REFS)
+        .map(|issue| format!("{}#{}", issue.repository, issue.number))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hidden_references = issues.len().saturating_sub(MAX_BATCH_DISPLAY_REFS);
+    if hidden_references > 0 {
+        references.push_str(&format!(" +{hidden_references}"));
+    }
+    Some(AgentLaunchIdentity {
+        slug: bounded_issue_slug(&prefix, &first.title),
+        display: format!("Issues {references}"),
+    })
+}
 
 /// The issue assignment surface for one sidebar project.
 pub struct IssueBrowserView {
@@ -118,20 +175,39 @@ impl IssueBrowserView {
 
     /// Build the prompt passed to the chooser and then to the new agent.
     pub fn generated_prompt(&self, state: &IssueLoadState) -> String {
-        let IssueLoadState::Loaded { issues, .. } = state else {
+        let issues = self.selected_issues(state);
+        if issues.is_empty() {
             return String::new();
-        };
+        }
         let mut prompt = String::from("Work on these assigned issues:\n\n");
-        for issue in issues.iter().filter(|issue| {
-            self.selected
-                .contains(&(issue.repository.clone(), issue.number))
-        }) {
+        for issue in issues {
             prompt.push_str(&format!(
                 "- {}#{}: {}\n  {}\n",
                 issue.repository, issue.number, issue.title, issue.url
             ));
         }
         prompt.trim_end_matches('\n').to_string()
+    }
+
+    fn selected_issues<'a>(&self, state: &'a IssueLoadState) -> Vec<&'a GitHubIssue> {
+        let Some(issues) = loaded_issues(state) else {
+            return Vec::new();
+        };
+        let mut selected: Vec<_> = issues
+            .iter()
+            .filter(|issue| {
+                self.selected
+                    .contains(&(issue.repository.clone(), issue.number))
+            })
+            .collect();
+        selected.sort_by(|a, b| {
+            (&a.repository, a.number, &a.title).cmp(&(&b.repository, b.number, &b.title))
+        });
+        selected
+    }
+
+    pub fn generated_identity(&self, state: &IssueLoadState) -> Option<AgentLaunchIdentity> {
+        issue_launch_identity(&self.selected_issues(state))
     }
 
     fn continue_to_agent(&self, state: &IssueLoadState) -> ViewResult {
@@ -142,9 +218,13 @@ impl IssueBrowserView {
         if prompt.is_empty() {
             return ViewResult::Stay;
         }
+        let Some(identity) = self.generated_identity(state) else {
+            return ViewResult::Stay;
+        };
         ViewResult::Cmd(AppCmd::ChooseAgentForIssues {
             project_root: self.project_root.clone(),
             prompt,
+            identity,
         })
     }
 }
@@ -624,6 +704,59 @@ mod tests {
         assert!(prompt.contains("owner/repo#1: First"));
         assert!(prompt.contains("owner/repo#2: Second"));
         assert!(prompt.contains("https://github.com/owner/repo/issues/1"));
+    }
+
+    #[test]
+    fn single_issue_identity_uses_number_and_title() {
+        let (_, mut view) = loaded();
+        let state = state_snapshot(&view.state);
+        view.on_key(&key(KeyCode::Char(' ')));
+
+        assert_eq!(
+            view.generated_identity(&state),
+            Some(AgentLaunchIdentity {
+                slug: "issue-1-first".into(),
+                display: "#1 First".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn batch_identity_is_deterministic_and_recognizable() {
+        let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
+            repository: "2 repositories".into(),
+            viewer_login: "andrew".into(),
+            issues: vec![
+                issue_in("owner/second", 20, "Second selected issue"),
+                issue_in("owner/first", 7, "First selected issue"),
+            ],
+        }));
+        let mut view = IssueBrowserView::new("/projects/coordinator".into(), state.clone());
+        view.selected.insert(("owner/second".into(), 20));
+        view.selected.insert(("owner/first".into(), 7));
+
+        assert_eq!(
+            view.generated_identity(&state_snapshot(&state)),
+            Some(AgentLaunchIdentity {
+                slug: "issues-7-20-first-selected-issue".into(),
+                display: "Issues owner/first#7, owner/second#20".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn long_issue_titles_keep_identity_within_the_slug_limit() {
+        let issue = issue(
+            9876,
+            "Implement a very long and detailed issue title whose remaining words exceed branch limits",
+        );
+        let identity = issue_launch_identity(&[&issue]).expect("one issue has an identity");
+
+        assert!(identity
+            .slug
+            .starts_with("issue-9876-implement-a-very-long"));
+        assert!(identity.slug.len() <= MAX_ISSUE_SLUG_LEN);
+        assert!(identity.display.starts_with("#9876 Implement"));
     }
 
     #[test]

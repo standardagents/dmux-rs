@@ -3,6 +3,7 @@
 //! composites panes + sidebar + native overlays into the host terminal with
 //! damage-diffed, synchronized-output frames.
 
+mod agent_launch;
 mod agents;
 mod audit;
 mod bootstrap;
@@ -61,7 +62,7 @@ use sidebar::{key_action as sidebar_key_action, SidebarKeyAction};
 use sidebar::{ProjectSelection, SidebarDrag};
 use view_stack::{OverlayOrigin, OverlayStack};
 use views::{AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView};
-use window_launch::{BootstrapSpec, NewWindowCtx};
+use window_launch::NewWindowCtx;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
@@ -2922,126 +2923,6 @@ impl App {
         }
         self.relayout();
         self.toast(format!("Closed '{}'", pane.display_title()));
-    }
-
-    fn launch_agents(
-        &mut self,
-        prompt: String,
-        allocations: Vec<(String, u8)>,
-        mode: String,
-        project_root: Option<String>,
-    ) {
-        let total: u32 = allocations.iter().map(|(_, c)| *c as u32).sum();
-        if total == 0 {
-            return;
-        }
-        let project_root = project_root
-            .or_else(|| self.active_project_root())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let project_context = registry::project_context(
-            &self.project_root,
-            Some(project_root.to_string_lossy().into_owned()),
-        );
-        let base_slug = slugify(&prompt);
-        let (base_branch, branch_prefix) = {
-            let s = self.settings.lock().unwrap();
-            (
-                s.get_str("baseBranch").unwrap_or("").to_string(),
-                s.get_str("branchPrefix").unwrap_or("").to_string(),
-            )
-        };
-
-        for (agent_id, count) in &allocations {
-            let Some(def) = agents::agent(agent_id) else {
-                continue;
-            };
-            for i in 1..=*count {
-                let mut slug = if total == 1 {
-                    base_slug.clone()
-                } else {
-                    format!("{base_slug}-{}-{i}", def.short)
-                };
-                // Uniquify against existing records.
-                let mut n = 1;
-                while self.config.panes.iter().any(|p| p.slug == slug)
-                    || self.panes.iter().any(|p| p.slug == slug)
-                {
-                    n += 1;
-                    slug = format!("{base_slug}-{}-{n}", def.short);
-                }
-
-                let prompt_file = (!prompt.is_empty()).then(|| {
-                    let dir = project_root.join(".dmux").join("prompts");
-                    let _ = std::fs::create_dir_all(&dir);
-                    let path = dir.join(format!("{slug}-{}.txt", timestamp()));
-                    let _ = std::fs::write(&path, &prompt);
-                    path.to_string_lossy().into_owned()
-                });
-
-                let injection = match def.transport {
-                    agents::Transport::SendKeys { ready_delay_ms } if !prompt.is_empty() => {
-                        Some((prompt.clone(), ready_delay_ms))
-                    }
-                    _ => None,
-                };
-                let agent_cmd = agents::compose_launch(def, prompt_file.as_deref(), &mode);
-
-                // Git projects bootstrap natively: the pane opens straight
-                // into a loader card while dmux runs worktree add + the
-                // worktree_created hook itself, then starts the agent.
-                let (launch_cmd, injection, worktree_path, bootstrap) =
-                    if git::git_main_worktree_root(&project_root).is_some() {
-                        let branch = format!("{branch_prefix}{slug}");
-                        let wt = project_root.join(".dmux").join("worktrees").join(&slug);
-                        let wt_str = wt.to_string_lossy().into_owned();
-                        let root = project_root.to_string_lossy().into_owned();
-                        let spec = BootstrapSpec {
-                            plan: bootstrap::Plan {
-                                root: root.clone(),
-                                wt: wt_str.clone(),
-                                branch,
-                                base_branch: base_branch.clone(),
-                                slug: slug.clone(),
-                                has_hook: hooks::hook_path(&project_root, "worktree_created")
-                                    .is_some(),
-                            },
-                            launch: bootstrap::Launch {
-                                agent_cmd,
-                                wt: wt_str.clone(),
-                                root,
-                                injection,
-                            },
-                            agent_label: def.name.to_string(),
-                        };
-                        (None, None, Some(wt_str), Some(spec))
-                    } else {
-                        (Some(format!("clear; {agent_cmd}")), injection, None, None)
-                    };
-
-                self.create_window(NewWindowCtx {
-                    bootstrap,
-                    prompt: prompt.clone(),
-                    display: if total == 1 {
-                        base_slug.clone()
-                    } else {
-                        format!("{base_slug} ({}{i})", def.short)
-                    },
-                    slug,
-                    kind: PaneKind::Worktree,
-                    agent: Some(def.id.to_string()),
-                    launch_cmd,
-                    injection,
-                    worktree_path,
-                    cwd: None,
-                    project_root: project_context.clone(),
-                });
-            }
-        }
-        self.toast(format!(
-            "Launching {total} pane{}…",
-            if total == 1 { "" } else { "s" }
-        ));
     }
 
     fn send_pane_bytes(&mut self, bytes: &[u8]) {
