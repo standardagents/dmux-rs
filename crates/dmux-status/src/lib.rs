@@ -1,6 +1,7 @@
-//! Pane status detection: a faithful port of the TS heuristics
-//! (`src/utils/paneAttentionHeuristics.ts`) re-targeted onto live emulator
-//! grid text, plus a per-pane settle engine. Event-driven — the app calls
+//! Pane status detection over live emulator grid text, plus a per-pane
+//! settle engine. Originally ported from the retired TS dmux's attention
+//! heuristics and since diverged (#50 tightened working detection); the
+//! unit tests in this module are the contract. Event-driven — the app calls
 //! `on_settle` only when a pane's output has gone quiet, so idle cost is zero.
 
 use std::sync::OnceLock;
