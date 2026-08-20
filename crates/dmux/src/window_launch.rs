@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use dmux_cc::{PaneId, Reply};
 use dmux_core::{encode_pane_title, DmuxPane, PaneKind};
 
+use crate::project_context;
 use crate::{bootstrap, hooks, input, shq, timestamp, App, AppMsg, Tag};
 
 /// Context for a window dmux-rs created and is waiting on.
@@ -153,6 +154,41 @@ impl App {
             .send_tagged(new_window_command(&cwd), Tag::NewWindow(Box::new(ctx)));
     }
 
+    pub(super) fn new_terminal(&mut self, project_root: Option<String>) {
+        // Slug must not collide with live panes OR persisted records from
+        // any project (#76: a reused terminal-N repointed another project's
+        // record and stole its ownership metadata).
+        let taken = |slug: &str| {
+            self.panes.iter().any(|p| p.slug == slug)
+                || self.config.panes.iter().any(|r| r.slug == slug)
+        };
+        let mut n = 1 + self
+            .panes
+            .iter()
+            .filter(|p| p.slug.starts_with("terminal-"))
+            .count();
+        while taken(&format!("terminal-{n}")) {
+            n += 1;
+        }
+        let slug = format!("terminal-{n}");
+        let project_root = project_root.or_else(|| self.active_project_root());
+        let cwd = project_root.clone();
+        let project_root = project_context(&self.project_root, project_root);
+        self.create_window(NewWindowCtx {
+            bootstrap: None,
+            prompt: String::new(),
+            display: slug.clone(),
+            slug,
+            kind: PaneKind::Shell,
+            agent: None,
+            launch_cmd: None,
+            injection: None,
+            worktree_path: None,
+            cwd,
+            project_root,
+        });
+    }
+
     pub(super) fn finish_new_window(&mut self, mut ctx: NewWindowCtx, reply: &Reply) {
         let Some(pane_id) = created_pane_id(reply) else {
             self.toast("Pane creation failed");
@@ -227,9 +263,28 @@ impl App {
 
         // Config record first so reconcile adoption pairs slug → agent.
         // Resumed worktrees reuse their existing record (fresh pane id).
-        if let Some(existing) = self.config.panes.iter_mut().find(|r| r.slug == ctx.slug) {
+        if let Some(existing) = self
+            .config
+            .panes
+            .iter_mut()
+            .find(|r| r.slug == ctx.slug && r.project_root == ctx.project_root)
+        {
+            // Same slug in the SAME project: a resume — refresh the pane id
+            // and complete ownership metadata (#76: updating only
+            // pane_id/agent let a reused slug keep another context's
+            // projectRoot/kind/cwd).
             existing.pane_id = pane_id.to_string();
             existing.agent = ctx.agent.clone().or_else(|| existing.agent.clone());
+            existing.kind = Some(ctx.kind);
+            existing.worktree_path = ctx.worktree_path.clone();
+            existing.shell_cwd = ctx.cwd.clone();
+            existing.project_root = ctx.project_root.clone();
+            existing.project_name = ctx.project_root.as_deref().map(|r| {
+                Path::new(r)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| r.to_string())
+            });
         } else {
             let mut record = DmuxPane::new_record(
                 format!("pane-{}", timestamp()),

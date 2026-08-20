@@ -334,7 +334,7 @@ fn git_main_worktree_root(dir: &std::path::Path) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn project_context(main_root: &Path, target: Option<String>) -> Option<String> {
+pub(crate) fn project_context(main_root: &Path, target: Option<String>) -> Option<String> {
     target.filter(|root| Path::new(root) != main_root)
 }
 
@@ -1717,7 +1717,8 @@ impl App {
     /// pane-derived; colors from `colorTheme` with TS auto-assignment for
     /// entries that lack one, persisted back to the shared config).
     fn rebuild_sidebar_groups(&mut self) {
-        let norm = |r: &str| r.trim_end_matches('/').to_string();
+        // Canonical identity (#76): aliases of one directory form one group.
+        let norm = |r: &str| session::canon_root(r);
         let main_root = norm(&self.project_root.to_string_lossy());
         let main_name = self
             .project_root
@@ -1970,6 +1971,14 @@ impl App {
                     // Keep the alt-screen flag fresh: begin_reseed seeds
                     // onto the grid tmux says the pane is on (#12).
                     existing.alt_screen = new_pane.alt_screen;
+                    // Reconciliation established a newer authoritative
+                    // ownership association (#76): refresh it.
+                    if existing.project_root != new_pane.project_root {
+                        tracing::info!(pane = %existing.tmux_pane,
+                            from = ?existing.project_root, to = ?new_pane.project_root,
+                            "pane ownership refreshed by reconcile");
+                        existing.project_root = new_pane.project_root.clone();
+                    }
                     existing.extended_keys_mode2 = new_pane.extended_keys_mode2;
                     // tmux still lists the pane: whatever marked it dead was
                     // wrong (or it recovered) — resurrect.
@@ -3631,7 +3640,22 @@ impl App {
             ("DMUX_PANE_ID", pane.tmux_pane.to_string()),
         ];
         hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
-        self.config.panes.retain(|r| r.slug != pane.slug);
+        // Same slugs exist across projects (#76): only this pane's own
+        // record may be removed.
+        let removed: Vec<String> = self
+            .config
+            .panes
+            .iter()
+            .filter(|r| r.slug == pane.slug && r.project_root == pane.project_root)
+            .map(|r| r.slug.clone())
+            .collect();
+        if !removed.is_empty() {
+            tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
+                root = ?pane.project_root, "removing pane record");
+        }
+        self.config
+            .panes
+            .retain(|r| !(r.slug == pane.slug && r.project_root == pane.project_root));
         self.save_config();
         if self.focused >= self.panes.len() {
             self.focused = self.panes.len().saturating_sub(1);
@@ -3641,31 +3665,6 @@ impl App {
         }
         self.relayout();
         self.toast(format!("Closed '{}'", pane.display_title()));
-    }
-
-    fn new_terminal(&mut self, project_root: Option<String>) {
-        let n = 1 + self
-            .panes
-            .iter()
-            .filter(|p| p.slug.starts_with("terminal-"))
-            .count();
-        let slug = format!("terminal-{n}");
-        let project_root = project_root.or_else(|| self.active_project_root());
-        let cwd = project_root.clone();
-        let project_root = project_context(&self.project_root, project_root);
-        self.create_window(NewWindowCtx {
-            bootstrap: None,
-            prompt: String::new(),
-            display: slug.clone(),
-            slug,
-            kind: PaneKind::Shell,
-            agent: None,
-            launch_cmd: None,
-            injection: None,
-            worktree_path: None,
-            cwd,
-            project_root,
-        });
     }
 
     fn launch_agents(
@@ -4509,6 +4508,7 @@ mod tests {
             pane_pid: 1,
             start_command: String::new(),
             extended_keys_mode2: false,
+            current_path: String::new(),
         };
         // Window 0 has three panes, window 1 has one: only the two extras
         // of window 0 are broken out; a re-run on the result is a no-op.
