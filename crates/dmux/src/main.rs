@@ -21,6 +21,8 @@ mod sidebar;
 mod sounds;
 mod style;
 mod tracking;
+mod util;
+pub(crate) use util::{base64, iso_now, shq, timestamp};
 mod updater;
 mod verify;
 mod view_stack;
@@ -71,6 +73,16 @@ struct Tooltip {
     x: u16,
     y: u16,
     until: Instant,
+}
+
+/// A wedged worktree hook must not block updates forever (#53).
+const UPDATE_DEFER_CAP: Duration = Duration::from_secs(600);
+
+/// Whether a deferred self-update may re-exec now (#53): only at a safe
+/// boundary — no bootstrap mid-provisioning and no prompt injection queued —
+/// or once the deferral cap expires.
+fn update_may_apply(bootstraps_active: bool, injections_pending: usize, waited: Duration) -> bool {
+    (!bootstraps_active && injections_pending == 0) || waited >= UPDATE_DEFER_CAP
 }
 
 #[derive(Default)]
@@ -472,6 +484,10 @@ struct App {
     /// A staged self-update: swap + re-exec after clean shutdown.
     reexec_after: Option<PathBuf>,
     want_exit: bool,
+    /// Staged self-update held back while a bootstrap or prompt injection
+    /// is in flight (#53) — re-exec at the wrong moment strands the route
+    /// as an idle shell. (tag, staged path, first deferred at).
+    pending_update: Option<(String, PathBuf, Instant)>,
     own_sizing: bool,
     /// Welcome-screen state (shown when no panes are visible).
     welcome_cards: Vec<welcome::WelcomeCard>,
@@ -674,6 +690,7 @@ async fn run(
         pane_accents: Vec::new(),
         reexec_after: None,
         want_exit: false,
+        pending_update: None,
         own_sizing: false,
         welcome_cards: Vec::new(),
         welcome_sel: 0,
@@ -1061,6 +1078,31 @@ impl App {
                 ));
             }
             Err(err) => tracing::warn!(%err, "clipboard buffer write failed"),
+        }
+    }
+
+    /// Apply a deferred self-update once no bootstrap is provisioning and
+    /// no prompt injection is queued (#53) — or once the deferral cap
+    /// expires, so a wedged hook can't block updates forever.
+    fn try_apply_pending_update(&mut self) {
+        let Some((_, _, since)) = &self.pending_update else {
+            return;
+        };
+        let active = self.bootstraps.values().any(|ui| ui.done_at.is_none());
+        if !update_may_apply(active, self.pending_injections.len(), since.elapsed()) {
+            return;
+        }
+        let (tag, staged, _) = self.pending_update.take().unwrap();
+        match updater::apply(&staged) {
+            Ok(exe) => {
+                self.toast(format!("⬆ updating to {tag}…"));
+                self.reexec_after = Some(exe);
+                self.want_exit = true;
+            }
+            Err(err) => {
+                tracing::warn!(%err, "update apply failed");
+                self.toast(format!("update failed: {err}"));
+            }
         }
     }
 
@@ -1709,6 +1751,7 @@ impl App {
                 if let Some(msg) = fail_toast {
                     self.toast(msg);
                 }
+                self.try_apply_pending_update();
             }
             AppMsg::IssueFiled(result) => {
                 match result {
@@ -1727,17 +1770,18 @@ impl App {
                 }
                 self.dirty = true;
             }
-            AppMsg::UpdateStaged { tag, staged } => match updater::apply(&staged) {
-                Ok(exe) => {
-                    self.toast(format!("⬆ updating to {tag}…"));
-                    self.reexec_after = Some(exe);
-                    self.want_exit = true;
+            AppMsg::UpdateStaged { tag, staged } => {
+                // Never re-exec across an in-flight bootstrap or pending
+                // prompt injection: the launch state lives only in this
+                // process, and dropping it leaves the pane an idle shell in
+                // the source repo (#53). Hold the update until the safe
+                // boundary; try_apply_pending_update fires there.
+                self.pending_update = Some((tag, staged, Instant::now()));
+                self.try_apply_pending_update();
+                if self.pending_update.is_some() {
+                    self.toast("⬆ update staged — waiting for agent setup to finish…");
                 }
-                Err(err) => {
-                    tracing::warn!(%err, "update apply failed");
-                    self.toast(format!("update failed: {err}"));
-                }
-            },
+            }
             AppMsg::NamingDone { pane, name } => {
                 let mut apply = false;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
@@ -4141,6 +4185,7 @@ impl App {
         // pass — the ioctl is microseconds and handle_resize no-ops on an
         // unchanged size.
         self.handle_resize(dmux_host::term_size());
+        self.try_apply_pending_update();
         // Settle classification: quiet panes get a heuristic verdict
         // (working spinner text / waiting on the user / idle).
         let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
@@ -4663,33 +4708,6 @@ fn handle_side_effect(
     }
 }
 
-/// Minimal base64 (standard alphabet, padded) for OSC 52 payloads.
-fn base64(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// AI auto-merge: re-establish the conflicts, resolve each conflicted file
 /// with the inference provider, stage, and commit. Aborts the merge on any
 /// failure so the root is left clean.
@@ -4807,17 +4825,6 @@ fn is_newer(a: &str, b: &str) -> bool {
     false
 }
 
-/// Shell-quote a path/branch for the bootstrap command line.
-fn shq(s: &str) -> String {
-    if s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/'))
-    {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
-}
-
 fn slugify(prompt: &str) -> String {
     let mut slug = String::new();
     for word in prompt.split_whitespace().take(4) {
@@ -4845,13 +4852,6 @@ fn slugify(prompt: &str) -> String {
     }
 }
 
-fn timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 /// Every pane after the first in each window: legacy splits that owner mode
 /// breaks out into their own windows (one pane per window is dmux's model).
 fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
@@ -4861,55 +4861,6 @@ fn panes_to_break_out(infos: &[session::TmuxPaneInfo]) -> Vec<PaneId> {
         .filter(|i| !seen.insert(i.window))
         .map(|i| i.pane)
         .collect()
-}
-
-fn iso_now() -> String {
-    // Close-enough ISO timestamp without a chrono dependency (UTC seconds).
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = secs / 86_400;
-    let (mut y, mut rem_days) = (1970u64, days);
-    loop {
-        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-        let len = if leap { 366 } else { 365 };
-        if rem_days < len {
-            break;
-        }
-        rem_days -= len;
-        y += 1;
-    }
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let month_lens = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut m = 0;
-    while rem_days >= month_lens[m] {
-        rem_days -= month_lens[m];
-        m += 1;
-    }
-    let tod = secs % 86_400;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
-        y,
-        m + 1,
-        rem_days + 1,
-        tod / 3600,
-        (tod % 3600) / 60,
-        tod % 60
-    )
 }
 
 #[cfg(test)]
@@ -5087,6 +5038,24 @@ mod tests {
         assert!(
             Instant::now() >= t.until,
             "an elapsed deadline reads as expired"
+        );
+    }
+
+    #[test]
+    fn updates_defer_until_bootstraps_and_injections_settle() {
+        // #53: an update arriving between pane creation and Ev::Done must
+        // wait; it applies once the launch dispatched (or on cap expiry).
+        let short = Duration::from_secs(1);
+        assert!(!update_may_apply(true, 0, short), "mid-bootstrap defers");
+        assert!(
+            !update_may_apply(false, 1, short),
+            "queued injection defers"
+        );
+        assert!(!update_may_apply(true, 2, short));
+        assert!(update_may_apply(false, 0, short), "safe boundary applies");
+        assert!(
+            update_may_apply(true, 1, UPDATE_DEFER_CAP),
+            "cap breaks a wedge"
         );
     }
 
