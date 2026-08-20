@@ -9,11 +9,12 @@ cd "$(dirname "$0")/.."
 REPO=${DMUX_RS_REPO:-standardagents/dmux-rs}
 BUMP=${1:-patch}
 
-# Guards: main, clean, and in sync with origin.
-[ "$(git branch --show-current)" = "main" ] || { echo "release only from main"; exit 1; }
+# Guards (#60): clean tree and HEAD identical to origin/main. Commit
+# identity — not the local branch name — is what makes a release safe, so
+# per-issue worktrees and detached HEADs qualify when fully synchronized.
 [ -z "$(git status --porcelain)" ] || { echo "working tree dirty"; exit 1; }
 git fetch -q origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main not in sync with origin"; exit 1; }
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD not in sync with origin/main"; exit 1; }
 
 # Next version from the latest v* tag.
 git fetch -q --tags origin
