@@ -16,6 +16,7 @@ pub enum Activity {
 }
 
 const GENERIC_PROGRESS_WORDS: &[&str] = &[
+    "germinating",
     "working",
     "thinking",
     "planning",
@@ -83,22 +84,22 @@ fn progress_suffix() -> &'static Regex {
     })
 }
 
-fn progress_word() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
-    re(&C, || {
-        format!(r"(?i)(?:{})(?:\b|\.\.\.|…|\s)", progress_alt())
-    })
-}
-
 fn claude_working() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     re(&C, || r"(?i)claude\s+is\s+working".into())
 }
 
-fn claude_gerund_tail() -> &'static Regex {
+/// A whole line that IS a live status: optional spinner glyph, a progress
+/// word, optional ellipsis, optional trailing `(…)` timer. Prose that merely
+/// mentions a progress word ("its drainer is running.") must not match —
+/// transcript history sits on screen long after the agent settles (#50).
+fn status_gerund_line() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     re(&C, || {
-        r"(?i)(?:germinating|thinking|planning|writing|reading|analyzing|building|testing|running|searching|reviewing|understanding)[.…]*$".into()
+        format!(
+            r"(?i)^\s*(?:{SPINNER_PREFIX}\s*)?(?:{})(?:\.\.\.|…)?\s*(?:\(.*)?$",
+            progress_alt()
+        )
     })
 }
 
@@ -156,30 +157,31 @@ pub fn activity_fingerprint(content: &str, max_lines: usize) -> String {
         .join("\n")
 }
 
-/// Port of `hasAgentWorkingIndicators`.
+/// Port of `hasAgentWorkingIndicators`, tightened (#50): live status shapes
+/// only. Idle transcripts keep prose and stale progress lines on screen, so
+/// bare progress-word mentions anywhere in the tail must never count.
 pub fn has_working_indicators(content: &str, agent: Option<&str>) -> bool {
     let lines = recent_relevant_lines(content, 10);
     if lines.is_empty() {
         return false;
     }
     let recent = lines.join("\n");
+    // Agents show an interrupt hint only while actually running.
     if esc_to_interrupt().is_match(&recent) {
         return true;
     }
-    if lines
-        .iter()
-        .any(|l| spinner_line().is_match(l) || progress_suffix().is_match(l))
-    {
+    // Everything softer counts only near the bottom, where live status
+    // lives; higher rows are transcript history.
+    let skip = lines.len().saturating_sub(6);
+    let bottom = &lines[skip..];
+    if bottom.iter().any(|l| {
+        spinner_line().is_match(l)
+            || progress_suffix().is_match(l)
+            || status_gerund_line().is_match(l)
+    }) {
         return true;
     }
-    match agent {
-        Some("claude") => lines.iter().any(|l| {
-            claude_working().is_match(l)
-                || claude_gerund_tail().is_match(l)
-                || progress_word().is_match(l)
-        }),
-        _ => lines.iter().any(|l| progress_word().is_match(l)),
-    }
+    matches!(agent, Some("claude")) && bottom.iter().any(|l| claude_working().is_match(l))
 }
 
 /// Port of `isLikelyUserTyping`: bottom-of-screen prompt-shaped edits only.
@@ -370,6 +372,38 @@ mod tests {
         assert!(has_working_indicators("Compiling foo v0.1 ... 42%", None));
         assert!(!has_working_indicators("❯ ", Some("claude")));
         assert!(!has_working_indicators("Done. All tests passed.", None));
+    }
+
+    #[test]
+    fn prose_mentions_of_progress_words_are_not_working() {
+        // #50: transcript history sits on screen while an agent is idle —
+        // sentences that merely mention a progress word kept panes spinning.
+        assert!(!has_working_indicators(
+            "The completion comment was queued; its drainer is running.\n❯ ",
+            Some("claude")
+        ));
+        assert!(!has_working_indicators(
+            "checking connectivity was fine yesterday\n$ ",
+            None
+        ));
+        // A stale status line scrolled above the bottom window is history.
+        let tail = "● Running 1 shell command…\na\nb\nc\nd\ne\nf\n❯ ";
+        assert!(!has_working_indicators(tail, Some("claude")));
+        // A live whole-line status at the bottom still counts.
+        assert!(has_working_indicators("thinking…", Some("claude")));
+        assert!(has_working_indicators(
+            "✻ Germinating… (12s)",
+            Some("claude")
+        ));
+    }
+
+    #[test]
+    fn settled_prose_transcript_classifies_idle_and_stays_idle() {
+        // #50: the fingerprint cache must cache Idle, not a false Working.
+        let mut e = PaneStatusEngine::new();
+        let tail = "Ran 2 shell commands\nthe issue drainer is running.\n❯ ";
+        assert_eq!(e.on_settle(tail, Some("claude")), Activity::Idle);
+        assert_eq!(e.on_settle(tail, Some("claude")), Activity::Idle);
     }
 
     #[test]
