@@ -251,7 +251,7 @@ fn draw_pane_title(
             Color::Indexed(65),
         ),
     ];
-    let dots_w = dots.len() as u16 * 2 + 3;
+    let dots_w = dots.len() as u16 * 2 + 1;
     let dots_x = bar.x;
     let label_x = bar.x.saturating_add(dots_w.min(bar.w));
     let title_width = bar.right().saturating_sub(label_x).saturating_sub(4);
@@ -296,21 +296,21 @@ fn draw_pane_title(
 
     // Left side (#110): macOS-style traffic lights in conventional red,
     // yellow, green order — red closes, yellow hides, green renames.
-    // #98 round 3: TIGHT pitch-2 glyphs (`● ● ●`) with two blank columns
-    // either side of the group — centered AND close together. Hit slots
-    // are contiguous 3-cell thirds of the group area; hover emphasizes the
-    // glyph cell only, so the slot shape never shows.
-    for (slot, (target, vivid, dim)) in dots.into_iter().enumerate() {
-        let slot = slot as u16;
-        if (dots_x + slot * 3).saturating_add(3) > bar.right() {
+    // #98 round 4: tight pitch-2 glyphs one cell in from the left edge
+    // (`_● ● ●_`), hugging the pane corner like real macOS controls.
+    // Contiguous hit slots partition the strip; hover emphasizes the
+    // glyph cell only, so slot shapes never show.
+    let slots: [(u16, u16); 3] = [(0, 2), (2, 2), (4, 3)];
+    for ((slot_x, slot_w), (target, vivid, dim)) in slots.into_iter().zip(dots) {
+        if (dots_x + slot_x).saturating_add(slot_w) > bar.right() {
             break;
         }
         let hovered = scene.hovered == Some(target);
         let fg = if focused || hovered { vivid } else { dim };
-        let hit = Rect::new(dots_x + slot * 3, bar.y, 3, 1);
+        let hit = Rect::new(dots_x + slot_x, bar.y, slot_w, 1);
         let dot_bg = if hovered { t.bg_selected } else { bg };
         buf.draw_text(
-            dots_x + 2 + slot * 2,
+            dots_x + 1 + slot_x,
             bar.y,
             "●",
             fg,

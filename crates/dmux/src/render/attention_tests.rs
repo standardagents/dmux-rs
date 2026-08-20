@@ -72,7 +72,9 @@ fn attention_uses_filled_orange_status_circles_in_both_blink_phases() {
     let (bright, theme) = render_phase(0);
     let (dim, _) = render_phase(3);
 
-    for (x, y) in [(2, 2), (41, 0)] {
+    // Title-bar circle: label_x + 1 = pane.x + dots strip (7, #98 round 4)
+    // + 1.
+    for (x, y) in [(2, 2), (39, 0)] {
         assert_eq!(bright.get(x, y).ch, '●');
         assert_eq!(bright.get(x, y).fg, theme.warn);
         assert!(bright.get(x, y).attrs.contains(AttrFlags::BOLD));

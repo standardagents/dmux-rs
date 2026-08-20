@@ -69,8 +69,8 @@ fn build_identity_title_uses_pane_bar_surface_without_project_braille() {
 
 #[test]
 fn toolbar_uses_dimension_space_and_centers_dots() {
-    // #98 round 3: tight pitch-2 glyphs, group-centered padding, and
-    // contiguous 3-cell hit slots. #99 removes dimensions
+    // #98 round 4: tight pitch-2 glyphs one cell from the left edge, and
+    // contiguous hit slots partitioning the strip. #99 removes dimensions
     // and makes their former columns available to long pane titles.
     use crate::registry::adopt_panes;
     use crate::session::TmuxPaneInfo;
@@ -132,25 +132,22 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     let bar_y = 0;
     let dot_cols: Vec<u16> = (0..90).filter(|x| buf.get(*x, bar_y).ch == '●').collect();
     assert_eq!(dot_cols.len(), 3, "three window dots: {dot_cols:?}");
-    // #98 round 3 on the LEFT edge (#110): tight pitch-2 glyphs with
-    // symmetric two-column padding around the group: `  ● ● ●  ` starting
-    // at the bar's left edge.
+    // #98 round 4: tight pitch-2 glyphs ONE cell in from the left edge —
+    // `_● ● ●_` hugging the pane corner.
     assert_eq!(dot_cols[1] - dot_cols[0], 2);
     assert_eq!(dot_cols[2] - dot_cols[1], 2);
-    assert_eq!(dot_cols[0], panes[0].rect.unwrap().x + 2);
+    assert_eq!(dot_cols[0], panes[0].rect.unwrap().x + 1);
     for x in [
-        dot_cols[0] - 2,
         dot_cols[0] - 1,
         dot_cols[0] + 1,
         dot_cols[1] + 1,
         dot_cols[2] + 1,
-        dot_cols[2] + 2,
     ] {
         assert_eq!(buf.get(x, bar_y).ch, ' ', "gap at {x}");
     }
     // Contiguous 3-cell hit slots partition the group area.
     use crate::views::ClickTarget;
-    let strip_x = dot_cols[0] - 2;
+    let strip_x = dot_cols[0] - 1;
     for (dot_x, want) in dot_cols.iter().zip([
         ClickTarget::TitleClose(0),
         ClickTarget::TitleHide(0),
@@ -158,7 +155,7 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     ]) {
         assert_eq!(clicks.hit(*dot_x, bar_y), Some(&want), "glyph cell");
     }
-    for offset in 0..9 {
+    for offset in 0..7 {
         assert!(
             matches!(
                 clicks.hit(strip_x + offset, bar_y),
@@ -225,10 +222,11 @@ fn narrow_title_bars_show_only_complete_left_control_slots() {
     let mut clicks = ClickMap::new();
     compose(&mut buf, &scene, &mut clicks);
 
-    // Round-3 geometry: the first glyph sits two cells in (`  ●`), its
-    // 3-cell slot starting at the bar edge; the second slot doesn't fit.
-    assert_eq!(buf.get(12, 0).ch, '●');
+    // Round-4 geometry on a 5-wide bar: close (x+1) and hide (x+3) fit;
+    // the rename slot (needs cols x+4..x+7) does not.
+    assert_eq!(buf.get(11, 0).ch, '●');
+    assert_eq!(buf.get(13, 0).ch, '●');
     assert_eq!(clicks.hit(10, 0), Some(&ClickTarget::TitleClose(0)));
-    assert_eq!(clicks.hit(12, 0), Some(&ClickTarget::TitleClose(0)));
-    assert_ne!(clicks.hit(13, 0), Some(&ClickTarget::TitleHide(0)));
+    assert_eq!(clicks.hit(13, 0), Some(&ClickTarget::TitleHide(0)));
+    assert!(!(10..16).any(|x| clicks.hit(x, 0) == Some(&ClickTarget::TitleRename(0))));
 }
