@@ -336,10 +336,6 @@ fn resolve_session(
     Ok((config, root, session))
 }
 
-fn sidebar_group_project_root(groups: &[render::SidebarGroup], index: usize) -> Option<String> {
-    groups.get(index).map(|group| group.root.clone())
-}
-
 struct App {
     client: Client<Tag>,
     router: ReplyRouter<Tag>,
@@ -2600,37 +2596,13 @@ impl App {
                     )
                 }
                 Some(ClickTarget::SidebarGroupIssues(gi)) => {
-                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
-                    {
-                        return self.open_project_issue_browser_at(
-                            project_root,
-                            OverlayOrigin::SidebarTarget {
-                                target: ClickTarget::SidebarGroupIssues(gi),
-                                align: VerticalAlign::Top,
-                            },
-                        );
-                    }
-                    return true;
+                    return self.open_sidebar_project_issues(gi);
                 }
                 Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
-                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
-                    {
-                        return self.execute_cmd_at(
-                            AppCmd::OpenNewAgentAt { project_root },
-                            OverlayOrigin::SidebarTarget {
-                                target: ClickTarget::SidebarGroupNewAgent(gi),
-                                align: VerticalAlign::Top,
-                            },
-                        );
-                    }
-                    return true;
+                    return self.open_sidebar_project_agents(gi);
                 }
                 Some(ClickTarget::SidebarGroupNewTerminal(gi)) => {
-                    if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
-                    {
-                        return self.execute_cmd(AppCmd::NewTerminalInProject { project_root });
-                    }
-                    return true;
+                    return self.open_sidebar_project_terminal(gi);
                 }
                 Some(ClickTarget::PaneTitle(i)) => {
                     // Double-click the title = rename.

@@ -3,12 +3,13 @@
 use std::fmt::Write as _;
 
 use dmux_compositor::{CellBuffer, Emitter, Rect};
-use dmux_ui::{project_theme, ClickMap, Theme};
+use dmux_ui::{draw_panel, place, project_theme, ClickMap, PanelStyle, Theme, VerticalAlign};
 
 use super::{compose, Scene, SidebarGroup};
 use crate::layout::Layout;
 use crate::metrics::Metrics;
 use crate::sidebar::{ProjectAction, ProjectSelection};
+use crate::view_stack::OverlayOrigin;
 use crate::views::ClickTarget;
 
 #[derive(Clone, Copy)]
@@ -167,6 +168,64 @@ fn render_case(case: PreviewCase) -> CellBuffer {
     buffer
 }
 
+fn render_project_overlay(group_index: usize) -> (CellBuffer, Rect, dmux_compositor::Color) {
+    let theme = Theme::named("violet");
+    let groups = groups();
+    let cols = 90;
+    let rows = 20;
+    let layout = Layout {
+        sidebar: Rect::new(0, 0, 36, rows),
+        ..Default::default()
+    };
+    let scene = Scene {
+        panes: &[],
+        layout: &layout,
+        focused: 0,
+        selected: 0,
+        project_name: "dmux-rs",
+        hud: None,
+        hud_pos: None,
+        status_line: "^b for commands · ^b ? help",
+        theme: &theme,
+        anim: 0,
+        leader_armed: false,
+        sidebar_focused: false,
+        sidebar_project: None,
+        version: "dmux-rs v0.23.0",
+        groups: &groups,
+        pane_accents: &[],
+        reorder: None,
+        hovered: None,
+    };
+    let mut buffer = CellBuffer::new(cols, rows);
+    let mut clicks = ClickMap::new();
+    compose(&mut buffer, &scene, &mut clicks);
+
+    let origin = OverlayOrigin::project(
+        groups[group_index].root.clone(),
+        ProjectAction::NewAgent,
+        VerticalAlign::Top,
+    );
+    let source = origin.source(&clicks, &groups);
+    dmux_ui::draw_scrim_except(&mut buffer, Rect::new(0, 0, cols, rows), source);
+    let panel_theme = origin.theme(theme, &groups);
+    let panel = place(
+        Rect::new(0, 0, cols, rows),
+        layout.sidebar.right(),
+        origin.resolve(&clicks, &groups),
+        48,
+        10,
+    );
+    draw_panel(
+        &mut buffer,
+        panel,
+        "New Agents",
+        &panel_theme,
+        PanelStyle::Modal,
+    );
+    (buffer, panel, groups[group_index].accent)
+}
+
 fn plain_preview() -> String {
     let mut output = String::new();
     for (index, case) in CASES.iter().copied().enumerate() {
@@ -180,6 +239,20 @@ fn plain_preview() -> String {
         )
         .unwrap();
         let buffer = render_case(case);
+        for row in 0..buffer.rows() {
+            for cell in buffer.row(row) {
+                output.push(cell.ch);
+            }
+            output.push('\n');
+        }
+    }
+    for (group_index, name) in ["dmux-rs", "agentbuilder-coordinator"]
+        .into_iter()
+        .enumerate()
+    {
+        output.push('\n');
+        writeln!(output, "=== project overlay / {name} (90x20) ===").unwrap();
+        let (buffer, _, _) = render_project_overlay(group_index);
         for row in 0..buffer.rows() {
             for cell in buffer.row(row) {
                 output.push(cell.ch);
@@ -212,6 +285,25 @@ fn ansi_preview() -> Vec<u8> {
             output.push(b'\n');
         }
     }
+    for (group_index, name) in ["dmux-rs", "agentbuilder-coordinator"]
+        .into_iter()
+        .enumerate()
+    {
+        output.push(b'\n');
+        output.extend_from_slice(format!("=== project overlay / {name} (90x20) ===\n").as_bytes());
+        let (buffer, _, _) = render_project_overlay(group_index);
+        let mut emitter = Emitter::new();
+        for row in 0..buffer.rows() {
+            for cell in buffer.row(row) {
+                if !cell.wide_spacer() {
+                    emitter.put_cell(cell);
+                }
+            }
+            emitter.reset_style();
+            output.extend_from_slice(&emitter.take());
+            output.push(b'\n');
+        }
+    }
     output
 }
 
@@ -226,6 +318,8 @@ fn plain_preview_covers_widths_and_interaction_states() {
         "standard / long status",
         "compact / 35 columns",
         "tiny / 24 columns",
+        "project overlay / dmux-rs",
+        "project overlay / agentbuilder-coordinator",
     ] {
         assert!(output.contains(heading), "missing {heading}");
     }
@@ -234,6 +328,16 @@ fn plain_preview_covers_widths_and_interaction_states() {
     assert!(output.contains("── perf ──"));
     assert!(output.contains("worktree provisioning is waiting for …"));
     assert!(output.contains("tiny status"));
+}
+
+#[test]
+fn project_overlay_preview_uses_each_source_accent() {
+    let (first, first_panel, first_accent) = render_project_overlay(0);
+    let (second, second_panel, second_accent) = render_project_overlay(1);
+
+    assert_ne!(first_accent, second_accent);
+    assert_eq!(first.get(first_panel.x, first_panel.y).fg, first_accent);
+    assert_eq!(second.get(second_panel.x, second_panel.y).fg, second_accent);
 }
 
 #[test]

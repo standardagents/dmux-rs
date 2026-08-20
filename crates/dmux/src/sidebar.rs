@@ -256,13 +256,47 @@ pub(crate) fn key_action(key: &dmux_host::KeyEvent, keymap: &keys::Keymap) -> Si
 }
 
 impl App {
+    fn sidebar_group_root(&self, group: usize) -> Option<String> {
+        self.sidebar_groups
+            .get(group)
+            .map(|group| group.root.clone())
+    }
+
+    pub(super) fn open_sidebar_project_issues(&mut self, group: usize) -> bool {
+        let Some(root) = self.sidebar_group_root(group) else {
+            return true;
+        };
+        self.open_project_issue_browser_at(
+            root.clone(),
+            OverlayOrigin::project(root, ProjectAction::Issues, VerticalAlign::Top),
+        )
+    }
+
+    pub(super) fn open_sidebar_project_agents(&mut self, group: usize) -> bool {
+        let Some(root) = self.sidebar_group_root(group) else {
+            return true;
+        };
+        self.execute_cmd_at(
+            AppCmd::OpenNewAgentAt {
+                project_root: root.clone(),
+            },
+            OverlayOrigin::project(root, ProjectAction::NewAgent, VerticalAlign::Top),
+        )
+    }
+
+    pub(super) fn open_sidebar_project_terminal(&mut self, group: usize) -> bool {
+        let Some(project_root) = self.sidebar_group_root(group) else {
+            return true;
+        };
+        self.execute_cmd(AppCmd::NewTerminalInProject { project_root })
+    }
+
     fn sidebar_project_origin(&self, project: &ProjectSelection) -> OverlayOrigin {
-        project_click_target(project, &self.sidebar_groups)
-            .map(|target| OverlayOrigin::SidebarTarget {
-                target,
-                align: VerticalAlign::Top,
-            })
-            .unwrap_or(OverlayOrigin::Global)
+        if project_click_target(project, &self.sidebar_groups).is_some() {
+            OverlayOrigin::project(project.root.clone(), project.action, VerticalAlign::Top)
+        } else {
+            OverlayOrigin::Global
+        }
     }
 
     pub(super) fn step_sidebar_selection(&mut self, delta: i32) {

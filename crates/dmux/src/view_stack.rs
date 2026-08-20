@@ -8,36 +8,82 @@ use dmux_core::i18n::t;
 
 use crate::hooks;
 use crate::pane_actions;
+use crate::render::SidebarGroup;
+use crate::sidebar::{project_click_target, ProjectAction, ProjectSelection};
 use crate::views::{
     AppCmd, ClickTarget, ContextMenuTarget, MenuItem, MenuView, ViewCtx, ViewResult,
 };
 use crate::App;
 use dmux_ui::{Anchor, ClickMap, VerticalAlign};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayOrigin {
     Global,
     SidebarTarget {
         target: ClickTarget,
         align: VerticalAlign,
     },
+    SidebarProject {
+        project: ProjectSelection,
+        align: VerticalAlign,
+    },
 }
 
 impl OverlayOrigin {
-    pub(crate) fn resolve(self, clicks: &ClickMap<ClickTarget>) -> Anchor {
-        match self {
-            Self::Global => Anchor::SidebarTop,
-            Self::SidebarTarget { target, align } => clicks
-                .rect_for(&target)
-                .map(|rect| Anchor::SidebarRow { row: rect.y, align })
-                .unwrap_or(Anchor::SidebarTop),
+    pub(crate) fn project(root: String, action: ProjectAction, align: VerticalAlign) -> Self {
+        Self::SidebarProject {
+            project: ProjectSelection { root, action },
+            align,
         }
     }
 
-    pub(crate) fn source(self, clicks: &ClickMap<ClickTarget>) -> Option<Rect> {
+    fn target(&self, groups: &[SidebarGroup]) -> Option<ClickTarget> {
         match self {
             Self::Global => None,
-            Self::SidebarTarget { target, .. } => clicks.rect_for(&target),
+            Self::SidebarTarget { target, .. } => Some(*target),
+            Self::SidebarProject { project, .. } => project_click_target(project, groups),
+        }
+    }
+
+    fn align(&self) -> Option<VerticalAlign> {
+        match self {
+            Self::Global => None,
+            Self::SidebarTarget { align, .. } | Self::SidebarProject { align, .. } => Some(*align),
+        }
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        clicks: &ClickMap<ClickTarget>,
+        groups: &[SidebarGroup],
+    ) -> Anchor {
+        self.target(groups)
+            .and_then(|target| clicks.rect_for(&target))
+            .zip(self.align())
+            .map(|(rect, align)| Anchor::SidebarRow { row: rect.y, align })
+            .unwrap_or(Anchor::SidebarTop)
+    }
+
+    pub(crate) fn source(
+        &self,
+        clicks: &ClickMap<ClickTarget>,
+        groups: &[SidebarGroup],
+    ) -> Option<Rect> {
+        self.target(groups)
+            .and_then(|target| clicks.rect_for(&target))
+    }
+
+    pub(crate) fn theme(&self, base: dmux_ui::Theme, groups: &[SidebarGroup]) -> dmux_ui::Theme {
+        let Self::SidebarProject { project, .. } = self else {
+            return base;
+        };
+        let Some(group) = groups.iter().find(|group| group.root == project.root) else {
+            return base;
+        };
+        dmux_ui::Theme {
+            accent: group.accent,
+            accent_soft: group.accent_soft,
+            ..base
         }
     }
 }
@@ -117,22 +163,27 @@ impl App {
             return;
         }
         let area = self.back.area();
-        let anchors: Vec<_> = self
+        let contexts: Vec<_> = self
             .views
             .iter()
-            .map(|entry| entry.origin.resolve(&self.click_map))
+            .map(|entry| {
+                (
+                    entry.origin.resolve(&self.click_map, &self.sidebar_groups),
+                    entry.origin.theme(self.theme, &self.sidebar_groups),
+                )
+            })
             .collect();
         let except = self.views.last().and_then(|entry| {
             entry
                 .scrim_exception()
-                .or_else(|| entry.origin.source(&self.click_map))
+                .or_else(|| entry.origin.source(&self.click_map, &self.sidebar_groups))
         });
         dmux_ui::draw_scrim_except(&mut self.back, area, except);
         let full = Rect::new(0, 0, self.size.0, self.size.1);
         let last = self.views.len() - 1;
-        for (index, (view, anchor)) in self.views.iter_mut().zip(anchors).enumerate() {
+        for (index, (view, (anchor, theme))) in self.views.iter_mut().zip(contexts).enumerate() {
             let ctx = ViewCtx {
-                theme: &self.theme,
+                theme: &theme,
                 anim: self.anim,
                 hovered: self.hovered,
                 sidebar_right: self.layout.sidebar.right(),
@@ -297,7 +348,7 @@ impl App {
         let origin = self
             .views
             .last()
-            .map(|entry| entry.origin)
+            .map(|entry| entry.origin.clone())
             .unwrap_or(OverlayOrigin::Global);
         if !matches!(&result, ViewResult::Stay)
             && matches!(self.hovered, Some(ClickTarget::Overlay(_)))
@@ -336,6 +387,19 @@ impl App {
 mod tests {
     use super::*;
 
+    fn group(root: &str, theme: &str) -> SidebarGroup {
+        let (accent, accent_soft) = dmux_ui::project_theme(theme);
+        SidebarGroup {
+            name: root.rsplit('/').next().unwrap_or(root).into(),
+            root: root.into(),
+            accent,
+            accent_soft,
+            pane_indices: vec![],
+            issue_label: "1 issue".into(),
+            active: false,
+        }
+    }
+
     #[test]
     fn pane_menu_close_policy_distinguishes_context_and_confirmed_paths() {
         assert_eq!(PaneMenuClose::Immediate.command(4), AppCmd::ClosePane(4));
@@ -352,22 +416,85 @@ mod tests {
         let mut clicks = ClickMap::new();
         clicks.add(Rect::new(12, 26, 10, 1), target);
         assert_eq!(
-            origin.resolve(&clicks),
+            origin.resolve(&clicks, &[]),
             Anchor::SidebarRow {
                 row: 26,
                 align: VerticalAlign::Bottom,
             }
         );
-        assert_eq!(origin.source(&clicks), Some(Rect::new(12, 26, 10, 1)));
+        assert_eq!(origin.source(&clicks, &[]), Some(Rect::new(12, 26, 10, 1)));
 
         clicks.clear();
         clicks.add(Rect::new(12, 16, 10, 1), target);
         assert_eq!(
-            origin.resolve(&clicks),
+            origin.resolve(&clicks, &[]),
             Anchor::SidebarRow {
                 row: 16,
                 align: VerticalAlign::Bottom,
             }
+        );
+    }
+
+    #[test]
+    fn project_origins_follow_identity_for_position_and_theme() {
+        let base = dmux_ui::Theme::named("violet");
+        let mut groups = vec![
+            group("/work/first", "orange"),
+            group("/work/second", "cyan"),
+        ];
+        let origin = OverlayOrigin::project(
+            "/work/second".into(),
+            ProjectAction::NewAgent,
+            VerticalAlign::Top,
+        );
+        let mut clicks = ClickMap::new();
+        clicks.add(
+            Rect::new(0, 12, 32, 1),
+            ClickTarget::SidebarGroupNewAgent(1),
+        );
+
+        assert_eq!(
+            origin.resolve(&clicks, &groups),
+            Anchor::SidebarRow {
+                row: 12,
+                align: VerticalAlign::Top,
+            }
+        );
+        assert_eq!(origin.theme(base, &groups).accent, groups[1].accent);
+
+        groups.swap(0, 1);
+        let (updated, updated_soft) = dmux_ui::project_theme("green");
+        groups[0].accent = updated;
+        groups[0].accent_soft = updated_soft;
+        clicks.clear();
+        clicks.add(Rect::new(0, 4, 32, 1), ClickTarget::SidebarGroupNewAgent(0));
+
+        assert_eq!(
+            origin.resolve(&clicks, &groups),
+            Anchor::SidebarRow {
+                row: 4,
+                align: VerticalAlign::Top,
+            }
+        );
+        let updated_theme = origin.theme(base, &groups);
+        assert_eq!(updated_theme.accent, updated);
+        assert_eq!(updated_theme.accent_soft, updated_soft);
+    }
+
+    #[test]
+    fn issue_origins_use_project_accents_and_global_origins_keep_the_app_accent() {
+        let base = dmux_ui::Theme::named("violet");
+        let groups = vec![group("/work/issues", "blue")];
+        let project = OverlayOrigin::project(
+            "/work/issues".into(),
+            ProjectAction::Issues,
+            VerticalAlign::Top,
+        );
+
+        assert_eq!(project.theme(base, &groups).accent, groups[0].accent);
+        assert_eq!(
+            OverlayOrigin::Global.theme(base, &groups).accent,
+            base.accent
         );
     }
 }
