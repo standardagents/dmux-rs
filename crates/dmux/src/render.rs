@@ -245,7 +245,7 @@ fn draw_pane_title(
             Color::Indexed(65),
         ),
     ];
-    let dots_w = dots.len() as u16 * 3;
+    let dots_w = dots.len() as u16 * 2 + 3;
     let dots_x = bar.x;
     let label_x = bar.x.saturating_add(dots_w.min(bar.w));
     let title_width = bar.right().saturating_sub(label_x).saturating_sub(4);
@@ -288,30 +288,23 @@ fn draw_pane_title(
     }
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
-    // Left side: macOS-style traffic lights in conventional red, yellow,
-    // green order. Red closes, yellow hides, and green renames. Each dot is
-    // centered in a 3-cell slot (#98 round 2): ` ● ` per slot.
-    let mut x = dots_x;
-    for (target, vivid, dim) in dots {
-        if x.saturating_add(3) > bar.right() {
+    // Left side (#110): macOS-style traffic lights in conventional red,
+    // yellow, green order — red closes, yellow hides, green renames.
+    // #98 round 3: TIGHT pitch-2 glyphs (`● ● ●`) with two blank columns
+    // either side of the group — centered AND close together. Hit slots
+    // are contiguous 3-cell thirds of the group area; hover emphasizes the
+    // glyph cell only, so the slot shape never shows.
+    for (slot, (target, vivid, dim)) in dots.into_iter().enumerate() {
+        let slot = slot as u16;
+        if (dots_x + slot * 3).saturating_add(3) > bar.right() {
             break;
         }
         let hovered = scene.hovered == Some(target);
         let fg = if focused || hovered { vivid } else { dim };
-        let bx = x;
-        let hit = Rect::new(bx, bar.y, 3, 1);
+        let hit = Rect::new(dots_x + slot * 3, bar.y, 3, 1);
         let dot_bg = if hovered { t.bg_selected } else { bg };
-        if hovered {
-            buf.fill(
-                hit,
-                &Cell {
-                    bg: dot_bg,
-                    ..Cell::default()
-                },
-            );
-        }
         buf.draw_text(
-            bx + 1,
+            dots_x + 2 + slot * 2,
             bar.y,
             "●",
             fg,
@@ -324,7 +317,6 @@ fn draw_pane_title(
             bar,
         );
         clicks.add(hit, target);
-        x = bx + 3;
     }
 }
 
