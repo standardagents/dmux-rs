@@ -31,7 +31,11 @@ module grows, when a new module crosses 1,000 lines, or when a ceiling remains
 stale after the module shrinks. Lower the ceiling after every reduction, and
 remove the ledger entry once a module reaches the standard limit. Extract
 cohesive boundaries such as rendering, input handling, dialogs, protocol
-handling, state transitions, or test support.
+handling, state transitions, or test support. The metric is a proxy for
+responsibility, not the goal: collapsing logic onto fewer physical lines
+(joining statements, compressing call sites) does NOT satisfy this policy —
+when a change would grow an oversized module, extract a cohesive boundary
+instead.
 
 Run `scripts/validate.sh` before pushing — the canonical complete gate. It
 runs `scripts/check.sh` (Rust formatting, Clippy across the workspace and
