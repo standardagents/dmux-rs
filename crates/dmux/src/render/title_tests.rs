@@ -13,7 +13,7 @@ fn group(name: &str, theme: &Theme) -> SidebarGroup {
 }
 
 #[test]
-fn session_title_uses_pane_bar_surface_without_project_braille() {
+fn build_identity_title_uses_pane_bar_surface_without_project_braille() {
     let theme = Theme::named("violet");
     let layout = Layout {
         sidebar: Rect::new(0, 0, 24, 12),
@@ -25,7 +25,6 @@ fn session_title_uses_pane_bar_surface_without_project_braille() {
         layout: &layout,
         focused: 0,
         selected: 0,
-        session_name: "dmux-session-name-that-truncates",
         project_name: "project",
         hud: None,
         status_line: "",
@@ -33,8 +32,7 @@ fn session_title_uses_pane_bar_surface_without_project_braille() {
         anim: 0,
         leader_armed: false,
         sidebar_focused: false,
-        version: "v0.0.0",
-        issues: (0, 0),
+        version: "dmux-rs v0.22.27 (cdd6fbb-long-tail)",
         groups: &groups,
         pane_accents: &[],
         reorder: None,
@@ -46,8 +44,10 @@ fn session_title_uses_pane_bar_surface_without_project_braille() {
 
     draw_sidebar(&mut buf, &scene, &mut clicks);
 
+    // #101: the title carries the build identity, not the tmux session name.
     let title: String = (0..24).map(|col| buf.get(col, 0).ch).collect();
-    assert!(title.starts_with("  dmux-session"));
+    assert!(title.starts_with("  dmux-rs v0.22.27"));
+    assert!(!title.contains("dmux-session"));
     assert!(title.ends_with('…'));
     assert!(!title
         .chars()
@@ -104,7 +104,6 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
         layout: &layout,
         focused: 0,
         selected: 0,
-        session_name: "s",
         project_name: "p",
         hud: None,
         status_line: "",
@@ -114,7 +113,6 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
         sidebar_focused: false,
         sidebar_project: None,
         version: "v0.0.0",
-        issues: (0, 0),
         groups: &[],
         pane_accents: &[(theme.accent, theme.accent_soft)],
         reorder: None,

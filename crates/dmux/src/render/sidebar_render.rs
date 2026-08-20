@@ -42,6 +42,8 @@ pub(crate) fn draw_sidebar(
 
     // Use the inactive pane-title surface for application context (#49).
     // Project headers retain the brighter braille separators below it.
+    // The title carries the build identity (#101): name, version, and
+    // commit — the generated tmux session name is plumbing, not identity.
     let title_area = Rect::new(area.x, 0, area.w, 1);
     let (title_fg, title_bg) = title_bar_style(t, (t.accent, t.accent_soft), false, false);
     buf.fill(
@@ -53,7 +55,7 @@ pub(crate) fn draw_sidebar(
     );
     let header = format!(
         "  {}",
-        truncate(scene.session_name, area.w.saturating_sub(2) as usize)
+        truncate(scene.version, area.w.saturating_sub(2) as usize)
     );
     buf.draw_text(
         area.x,
@@ -69,7 +71,7 @@ pub(crate) fn draw_sidebar(
     // per-group creation actions, blank spacing between groups).
     let multi = scene.groups.len() > 1;
     let mut row = 2u16;
-    let bottom_limit = area.bottom().saturating_sub(5);
+    let bottom_limit = area.bottom().saturating_sub(4);
     for (gi, group) in scene.groups.iter().enumerate() {
         if row >= bottom_limit {
             break;
@@ -405,7 +407,6 @@ mod tests {
             layout,
             focused: 0,
             selected: 0,
-            session_name: "s",
             project_name: "p",
             hud: None,
             status_line: "",
@@ -414,7 +415,6 @@ mod tests {
             leader_armed: false,
             sidebar_focused: false,
             version: "v0.0.0",
-            issues: (0, 0),
             groups,
             pane_accents: &[],
             reorder: None,
@@ -483,8 +483,8 @@ mod tests {
         clicks.clear();
         draw_sidebar(&mut footer, &scene, &mut clicks);
         let settings_x = (0..40)
-            .find(|x| clicks.hit(*x, 16) == Some(&ClickTarget::SidebarSettings))
+            .find(|x| clicks.hit(*x, 17) == Some(&ClickTarget::SidebarSettings))
             .unwrap();
-        assert_eq!(footer.get(settings_x, 16).bg, theme.bg_selected);
+        assert_eq!(footer.get(settings_x, 17).bg, theme.bg_selected);
     }
 }

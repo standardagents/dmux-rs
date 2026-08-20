@@ -166,7 +166,6 @@ pub enum ClickTarget {
     SidebarSettings,
     SidebarHelp,
     /// The 🐛 issues chip: opens the newest filed issue in the browser.
-    SidebarIssues,
     /// Per-project creation actions (index into the sidebar groups).
     SidebarGroupIssues(usize),
     SidebarGroupNewAgent(usize),

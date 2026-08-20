@@ -2618,17 +2618,6 @@ impl App {
                     }
                     return true;
                 }
-                Some(ClickTarget::SidebarIssues) => {
-                    if let Some(issue) = self.filed_issues.last() {
-                        let url = issue.url.clone();
-                        self.new_issue_count = 0;
-                        self.dirty = true;
-                        tokio::task::spawn_blocking(move || {
-                            let _ = std::process::Command::new("open").arg(url).status();
-                        });
-                    }
-                    return true;
-                }
                 Some(ClickTarget::PaneTitle(i)) => {
                     // Double-click the title = rename.
                     if is_double {
@@ -3401,7 +3390,6 @@ impl App {
             layout: &self.layout,
             focused: self.focused,
             selected: self.selected,
-            session_name: &self.session_name,
             project_name: &project_name,
             hud: self.hud.then_some(&self.metrics),
             status_line: &footer_text,
@@ -3411,7 +3399,6 @@ impl App {
             sidebar_focused: self.sidebar_focused,
             sidebar_project: self.sidebar_project.as_ref(),
             version: &self.version_line,
-            issues: (self.filed_issues.len(), self.new_issue_count),
             groups: &self.sidebar_groups,
             pane_accents: &self.pane_accents,
             reorder: self.sidebar_drag.as_ref().and_then(|d| d.reordering()),

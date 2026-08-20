@@ -1,4 +1,5 @@
-//! Structured sidebar footer: global actions, build state, and command status.
+//! Structured sidebar footer: global actions and command status. Build
+//! identity lives in the sidebar title (#101).
 
 use dmux_compositor::{AttrFlags, Cell, CellBuffer, Color, Rect};
 use dmux_ui::ClickMap;
@@ -23,10 +24,9 @@ pub(super) fn draw(
     }
 
     let inner_width = area.w.saturating_sub(SIDE_INSET * 2);
-    if area.h >= 10 && inner_width >= COMPACT_ACTION_WIDTH {
+    if area.h >= 9 && inner_width >= COMPACT_ACTION_WIDTH {
         draw_actions(buf, scene, clicks, area, background, inner_width);
     }
-    draw_build_state(buf, scene, clicks, area, background);
     draw_status(buf, scene, area);
 }
 
@@ -39,7 +39,7 @@ fn draw_actions(
     inner_width: u16,
 ) {
     let theme = scene.theme;
-    let divider_row = area.bottom().saturating_sub(5);
+    let divider_row = area.bottom().saturating_sub(4);
     let divider: String = "─".repeat(area.w as usize);
     buf.draw_text(
         area.x,
@@ -51,7 +51,7 @@ fn draw_actions(
         area,
     );
 
-    let row = area.bottom().saturating_sub(4);
+    let row = area.bottom().saturating_sub(3);
     let help_label = if inner_width >= FULL_ACTION_WIDTH {
         "? shortcuts"
     } else {
@@ -90,85 +90,6 @@ fn draw_actions(
         );
         clicks.add(Rect::new(start, row, x.saturating_sub(start), 1), target);
     }
-}
-
-fn draw_build_state(
-    buf: &mut CellBuffer,
-    scene: &Scene<'_>,
-    clicks: &mut ClickMap<ClickTarget>,
-    area: Rect,
-    background: Color,
-) {
-    let row = area.bottom().saturating_sub(2);
-    let left = area.x + SIDE_INSET;
-    let right = area.right().saturating_sub(SIDE_INSET);
-    let (total, fresh) = scene.issues;
-
-    if total == 0 {
-        let width = right.saturating_sub(left) as usize;
-        buf.draw_text(
-            left,
-            row,
-            &truncate(scene.version, width),
-            scene.theme.text_faint,
-            background,
-            AttrFlags::empty(),
-            area,
-        );
-        return;
-    }
-
-    let issue_label = if fresh > 0 {
-        format!("issues {total} ({fresh} new)")
-    } else {
-        format!("issues {total}")
-    };
-    let issue_width = issue_label.chars().count() as u16;
-    let issue_x = right.saturating_sub(issue_width).max(left);
-    let separator_x = issue_x.saturating_sub(2);
-    let version_width = separator_x.saturating_sub(left + 1) as usize;
-    if version_width > 0 {
-        buf.draw_text(
-            left,
-            row,
-            &truncate(scene.version, version_width),
-            scene.theme.text_faint,
-            background,
-            AttrFlags::empty(),
-            area,
-        );
-        buf.draw_text(
-            separator_x,
-            row,
-            "│",
-            scene.theme.border,
-            background,
-            AttrFlags::empty(),
-            area,
-        );
-    }
-    let color = if fresh > 0 {
-        scene.theme.warn
-    } else {
-        scene.theme.text_faint
-    };
-    let target = ClickTarget::SidebarIssues;
-    let end = draw_sidebar_action(
-        buf,
-        issue_x,
-        row,
-        &issue_label,
-        scene.hovered == Some(target),
-        color,
-        scene.theme.accent,
-        background,
-        scene.theme,
-        area,
-    );
-    clicks.add(
-        Rect::new(issue_x, row, end.saturating_sub(issue_x), 1),
-        target,
-    );
 }
 
 fn draw_status(buf: &mut CellBuffer, scene: &Scene<'_>, area: Rect) {
@@ -214,7 +135,6 @@ mod tests {
             layout,
             focused: 0,
             selected: 0,
-            session_name: "s",
             project_name: "p",
             hud: None,
             status_line: status,
@@ -223,7 +143,6 @@ mod tests {
             leader_armed: false,
             sidebar_focused: false,
             version: "dmux-rs v0.18.2",
-            issues: (1, 0),
             groups: &[] as &[SidebarGroup],
             pane_accents: &[],
             reorder: None,
@@ -253,24 +172,26 @@ mod tests {
             theme.bg,
         );
 
-        assert!(row_text(&buf, 40, 25).starts_with("────"));
+        // #101: the build-state row is gone — divider, actions, one blank
+        // spacer, then the status row; no version or issue aggregate here.
+        assert!(row_text(&buf, 40, 26).starts_with("────"));
         assert_eq!(
-            row_text(&buf, 40, 26).trim_end(),
+            row_text(&buf, 40, 27).trim_end(),
             " + project │ ⚙ settings │ ? shortcuts"
         );
-        assert!(row_text(&buf, 40, 27).trim().is_empty());
-        assert_eq!(
-            row_text(&buf, 40, 28).trim_end(),
-            " dmux-rs v0.18.2             │ issues 1"
-        );
+        assert!(row_text(&buf, 40, 28).trim().is_empty());
         assert!(row_text(&buf, 40, 29).starts_with(" ^b for commands"));
         assert_eq!(buf.get(0, 29).bg, theme.bg_raised);
         assert_eq!(buf.get(39, 29).bg, theme.bg_raised);
-        assert_eq!(clicks.hit(2, 26), Some(&ClickTarget::SidebarNewProject));
-        assert_eq!(clicks.hit(15, 26), Some(&ClickTarget::SidebarSettings));
-        assert_eq!(clicks.hit(31, 26), Some(&ClickTarget::SidebarHelp));
-        assert_eq!(clicks.hit(12, 26), None);
-        assert_eq!(clicks.hit(35, 28), Some(&ClickTarget::SidebarIssues));
+        for row in 25..30 {
+            let text = row_text(&buf, 40, row);
+            assert!(!text.contains("v0.18.2"), "row {row}: {text:?}");
+            assert!(!text.contains("issues"), "row {row}: {text:?}");
+        }
+        assert_eq!(clicks.hit(2, 27), Some(&ClickTarget::SidebarNewProject));
+        assert_eq!(clicks.hit(15, 27), Some(&ClickTarget::SidebarSettings));
+        assert_eq!(clicks.hit(31, 27), Some(&ClickTarget::SidebarHelp));
+        assert_eq!(clicks.hit(12, 27), None);
     }
 
     #[test]
@@ -289,10 +210,10 @@ mod tests {
             layout.sidebar,
             theme.bg,
         );
-        let actions = row_text(&buf, 35, 16);
+        let actions = row_text(&buf, 35, 17);
         assert!(actions.contains("? help"));
         assert!(!actions.contains("short"));
-        assert_eq!(clicks.hit(31, 16), Some(&ClickTarget::SidebarHelp));
+        assert_eq!(clicks.hit(31, 17), Some(&ClickTarget::SidebarHelp));
     }
 
     #[test]

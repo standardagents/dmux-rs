@@ -24,7 +24,6 @@ pub struct Scene<'a> {
     pub layout: &'a Layout,
     pub focused: usize,
     pub selected: usize,
-    pub session_name: &'a str,
     #[allow(dead_code)]
     pub project_name: &'a str,
     pub hud: Option<&'a Metrics>,
@@ -39,8 +38,6 @@ pub struct Scene<'a> {
     pub sidebar_project: Option<&'a ProjectSelection>,
     /// Build identity (sidebar bottom line).
     pub version: &'a str,
-    /// (total filed issues, filed this session) for the sidebar bottom line.
-    pub issues: (usize, usize),
     /// Project groups in TS order (main first, then config, then
     /// pane-derived), with their resolved colors.
     pub groups: &'a [SidebarGroup],
