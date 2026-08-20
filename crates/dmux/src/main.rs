@@ -22,7 +22,7 @@ mod sounds;
 mod style;
 mod tracking;
 mod util;
-pub(crate) use util::{base64, iso_now, shq, timestamp};
+pub(crate) use util::{base64, iso_now, shq, timestamp, update_may_apply, AnimClock, Tooltip};
 mod updater;
 mod verify;
 mod view_stack;
@@ -61,55 +61,6 @@ const SETTLE_AFTER: Duration = Duration::from_millis(1500);
 const HUD_REFRESH: Duration = Duration::from_millis(500);
 const ANIM_INTERVAL: Duration = Duration::from_millis(120);
 
-/// Absolute animation schedule (#17): the next tick is pinned when armed and
-/// advances only when a tick actually fires. Recomputing `now + interval`
-/// each event-loop pass let any wakeup arriving inside the interval (pane
-/// output, control messages) postpone the tick forever — spinners visibly
-/// stalled under sustained output.
-/// Transient cursor-anchored tooltip (#22): non-modal, uncapturable, and
-/// self-expiring — "Copied to clipboard" beside the mouse-release point.
-struct Tooltip {
-    text: String,
-    x: u16,
-    y: u16,
-    until: Instant,
-}
-
-/// A wedged worktree hook must not block updates forever (#53).
-const UPDATE_DEFER_CAP: Duration = Duration::from_secs(600);
-
-/// Whether a deferred self-update may re-exec now (#53): only at a safe
-/// boundary — no bootstrap mid-provisioning and no prompt injection queued —
-/// or once the deferral cap expires.
-fn update_may_apply(bootstraps_active: bool, injections_pending: usize, waited: Duration) -> bool {
-    (!bootstraps_active && injections_pending == 0) || waited >= UPDATE_DEFER_CAP
-}
-
-#[derive(Default)]
-struct AnimClock {
-    next: Option<Instant>,
-}
-
-impl AnimClock {
-    /// The pinned deadline, arming it from `now` if unarmed.
-    fn deadline(&mut self, now: Instant, interval: Duration) -> Instant {
-        *self.next.get_or_insert(now + interval)
-    }
-
-    /// True exactly when the pinned deadline has passed (or the clock was
-    /// never armed); re-arms `interval` from `now` — no catch-up bursts.
-    fn fire_if_due(&mut self, now: Instant, interval: Duration) -> bool {
-        let due = self.next.map(|at| now >= at).unwrap_or(true);
-        if due {
-            self.next = Some(now + interval);
-        }
-        due
-    }
-
-    fn disarm(&mut self) {
-        self.next = None;
-    }
-}
 /// The rain runs at a showier frame rate — cheap, and it's a perf demo.
 const RAIN_INTERVAL: Duration = Duration::from_millis(33);
 const STATUS_LINGER: Duration = Duration::from_secs(4);
@@ -2620,8 +2571,21 @@ impl App {
                         }
                         return true;
                     }
-                    // Armed but never crossed a row: the press already did
-                    // click selection; nothing else to do.
+                    // Armed but never crossed a row: a plain click. Beyond
+                    // the press-time selection, focus the pane (#55) — the
+                    // click-to-focus contract testers expect. Reorder drags
+                    // (handled above) and the double-click flyout (a modal
+                    // is open by its release) keep their behaviors; hidden
+                    // panes toggle visible first, matching Enter.
+                    if let SidebarDrag::Armed { src, .. } = drag {
+                        if self.views.is_empty() && src < self.panes.len() {
+                            self.sidebar_focused = false;
+                            if self.panes.get(src).map(|p| p.hidden).unwrap_or(false) {
+                                return self.execute_cmd(AppCmd::ToggleHidden(src));
+                            }
+                            return self.execute_cmd(AppCmd::FocusPane(src));
+                        }
+                    }
                     return true;
                 }
                 _ => {}
@@ -4963,57 +4927,6 @@ mod tests {
         assert!(
             Instant::now() >= t.until,
             "an elapsed deadline reads as expired"
-        );
-    }
-
-    #[test]
-    fn updates_defer_until_bootstraps_and_injections_settle() {
-        // #53: an update arriving between pane creation and Ev::Done must
-        // wait; it applies once the launch dispatched (or on cap expiry).
-        let short = Duration::from_secs(1);
-        assert!(!update_may_apply(true, 0, short), "mid-bootstrap defers");
-        assert!(
-            !update_may_apply(false, 1, short),
-            "queued injection defers"
-        );
-        assert!(!update_may_apply(true, 2, short));
-        assert!(update_may_apply(false, 0, short), "safe boundary applies");
-        assert!(
-            update_may_apply(true, 1, UPDATE_DEFER_CAP),
-            "cap breaks a wedge"
-        );
-    }
-
-    #[test]
-    fn anim_clock_survives_unrelated_wakeups() {
-        // #17: wakeups inside the interval must not postpone the tick.
-        let interval = Duration::from_millis(120);
-        let t0 = Instant::now();
-        let mut clock = AnimClock::default();
-        let armed = clock.deadline(t0, interval);
-        // Ten unrelated event-loop passes, each "30ms later": the pinned
-        // deadline never moves.
-        for i in 1..=10 {
-            let now = t0 + Duration::from_millis(30 * i);
-            assert_eq!(
-                clock.deadline(now, interval),
-                armed,
-                "wakeup {i} moved the deadline"
-            );
-        }
-        // Not due before the pin…
-        assert!(!clock.fire_if_due(t0 + Duration::from_millis(119), interval));
-        // …fires at the pin, and re-arms one interval from the fire time.
-        assert!(clock.fire_if_due(t0 + interval, interval));
-        assert_eq!(
-            clock.deadline(t0 + interval, interval),
-            t0 + interval + interval
-        );
-        // Disarm forgets the schedule.
-        clock.disarm();
-        assert!(
-            clock.fire_if_due(t0 + interval, interval),
-            "unarmed clock fires immediately"
         );
     }
 }
