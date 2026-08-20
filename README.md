@@ -41,6 +41,25 @@ That's it. From then on:
 | `DMUX_NO_REPORT=1` | don't auto-file issues |
 | `DMUX_VERIFY=0` | disable the shadow verifier entirely |
 
+## Testing
+
+`scripts/validate.sh` is the complete pre-push gate (quality checks plus
+the rendering-fidelity harness); `scripts/check.sh` is the fast inner
+gate for mid-task iteration.
+
+For focused unit tests, note the naming split: the Cargo **package** is
+`dmux`, but it has no library target — all unit tests live in the
+**binary target** `dmux-rs`. So `cargo test -p dmux --lib <filter>`
+fails with `no library targets found`; use the binary target instead:
+
+```bash
+cargo test -p dmux --bin dmux-rs <filter>   # e.g. … session::tests
+```
+
+Other crates in the workspace (`dmux-vt`, `dmux-cc`, `dmux-compositor`,
+…) are ordinary libraries where `cargo test -p <crate> <filter>` works
+as usual.
+
 ## Sidebar preview
 
 Contributors can render representative sidebar states through the production
