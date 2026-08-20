@@ -3,7 +3,8 @@
 //! layout/resize because the fill is recomputed every compose.
 
 use super::*;
-use crate::session::{adopt_panes, TmuxPaneInfo};
+use crate::registry::adopt_panes;
+use crate::session::TmuxPaneInfo;
 use dmux_cc::{PaneId, WindowId};
 use dmux_ui::ClickMap;
 

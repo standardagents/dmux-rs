@@ -1,7 +1,7 @@
 //! Read-only live-session diagnostic (#78): one command joins the installed
 //! build, recent attach/reload events, live tmux pane metadata, and the
 //! persisted pane records — using the SAME identity semantics as adoption
-//! (session::record_match) — so ownership investigations (#72, #76) don't
+//! (registry::record_match) — so ownership investigations (#72, #76) don't
 //! reconstruct the picture by hand. Performs no tmux, config, process, git,
 //! or filesystem mutations; emits decoded metadata only (no pane contents,
 //! prompts, or environment values).
@@ -11,7 +11,8 @@ use std::path::Path;
 
 use dmux_core::{parse_pane_title, DmuxConfig};
 
-use crate::session::{self, MatchReason, TmuxPaneInfo};
+use crate::registry::{self, MatchReason};
+use crate::session::{self, TmuxPaneInfo};
 
 /// One classified live pane, ready to print.
 pub struct PaneReport {
@@ -31,19 +32,19 @@ pub fn classify_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Ve
         .iter()
         .map(|info| {
             let parsed = parse_pane_title(&info.title);
-            let (record, reason) = match config.and_then(|c| session::record_match(c, &parsed.slug, info)) {
+            let (record, reason) = match config.and_then(|c| registry::record_match(c, &parsed.slug, info)) {
                 Some((r, why)) => (Some(r), Some(why)),
                 None => (None, None),
             };
             let slug = record.map(|r| r.slug.as_str()).unwrap_or(parsed.slug.as_str());
             let saved_root = record.and_then(|r| r.project_root.as_deref());
-            let live_root = saved_root.map(session::canon_root).or_else(|| {
+            let live_root = saved_root.map(registry::canon_root).or_else(|| {
                 config.and_then(|c| {
                     let roots: Vec<String> = std::iter::once(c.project_root.clone())
                         .chain(c.sidebar_projects.iter().map(|p| p.project_root.clone()))
                         .collect();
-                    session::recover_project_root(&info.current_path, &roots)
-                        .map(|r| session::canon_root(&r))
+                    registry::recover_project_root(&info.current_path, &roots)
+                        .map(|r| registry::canon_root(&r))
                 })
             });
             let mut flags = Vec::new();
@@ -68,9 +69,9 @@ pub fn classify_panes(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Ve
                 pane = info.pane,
                 slug = slug,
                 win = info.window,
-                cwd = session::canon_root(&info.current_path),
+                cwd = registry::canon_root(&info.current_path),
                 start = if info.start_command.is_empty() { "-" } else { &info.start_command },
-                saved = saved_root.map(session::canon_root).unwrap_or_else(|| "-".into()),
+                saved = saved_root.map(registry::canon_root).unwrap_or_else(|| "-".into()),
                 live = live_root.unwrap_or_else(|| "-".into()),
                 flags = flags.join(" "),
             );
@@ -97,7 +98,7 @@ pub fn stale_records(config: Option<&DmuxConfig>, infos: &[TmuxPaneInfo]) -> Vec
                 r.pane_id,
                 r.project_root
                     .as_deref()
-                    .map(session::canon_root)
+                    .map(registry::canon_root)
                     .unwrap_or_else(|| "-".into())
             )
         })
@@ -116,7 +117,7 @@ pub fn run(
     println!("session: {session_name}");
     println!(
         "project: {}",
-        session::canon_root(&project_root.to_string_lossy())
+        registry::canon_root(&project_root.to_string_lossy())
     );
 
     // Recent attach/reload events from the tracing log (metadata lines only).
@@ -290,7 +291,7 @@ mod tests {
         };
         let r = classify_panes(Some(&config), &[mk(99, "terminal-5", &alias)]);
         assert!(r[0].line.contains("match=slug+cwd"), "{}", r[0].line);
-        let canon = session::canon_root(&a);
+        let canon = registry::canon_root(&a);
         assert!(
             r[0].line.contains(&format!("cwd={canon}")),
             "{} vs {canon}",

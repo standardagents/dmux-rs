@@ -17,6 +17,7 @@ mod layout;
 mod metrics;
 mod notify;
 mod pane_actions;
+mod registry;
 mod render;
 mod report;
 mod session;
@@ -1688,10 +1689,10 @@ impl App {
 
     /// Commit and persist a sidebar reorder while retaining pane identity.
     fn reorder_pane(&mut self, src: usize, dst: usize) {
-        let order_before = session::pane_order_identities(&self.panes);
+        let order_before = registry::pane_order_identities(&self.panes);
         let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
         let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
-        if !session::move_pane(&mut self.panes, src, dst) {
+        if !registry::move_pane(&mut self.panes, src, dst) {
             if src < self.panes.len() && dst < self.panes.len() {
                 self.toast("Panes reorder within their project");
             }
@@ -1707,8 +1708,8 @@ impl App {
                 self.selected = i;
             }
         }
-        session::order_records(&mut self.config.panes, &self.panes);
-        session::log_pane_order_change("explicit reorder", &order_before, &self.panes);
+        registry::order_records(&mut self.config.panes, &self.panes);
+        registry::log_pane_order_change("explicit reorder", &order_before, &self.panes);
         self.save_config(audit::Reason::Reorder);
         self.relayout();
     }
@@ -1719,7 +1720,7 @@ impl App {
     /// entries that lack one, persisted back to the shared config).
     fn rebuild_sidebar_groups(&mut self) {
         // Canonical identity (#76): aliases of one directory form one group.
-        let norm = |r: &str| session::canon_root(r);
+        let norm = |r: &str| registry::canon_root(r);
         let main_root = norm(&self.project_root.to_string_lossy());
         let main_name = self
             .project_root
@@ -1921,7 +1922,7 @@ impl App {
     }
 
     fn apply_pane_list(&mut self, reply: &Reply) {
-        let order_before = session::pane_order_identities(&self.panes);
+        let order_before = registry::pane_order_identities(&self.panes);
         let infos = session::parse_pane_list(reply);
         // Track (and dedupe) keepalive windows.
         let keepalives: Vec<_> = infos
@@ -1956,7 +1957,7 @@ impl App {
             .into_iter()
             .filter(|i| !self.closing.contains(&i.pane))
             .collect();
-        let adopted = session::adopt_panes(Some(&self.config), &infos);
+        let adopted = registry::adopt_panes(Some(&self.config), &infos);
 
         for mut new_pane in adopted {
             new_pane.record_stream = self.verify_enabled;
@@ -2028,32 +2029,25 @@ impl App {
             let rec_before = self.config.panes.len();
             self.config.panes.retain(|record| {
                 record.kind() != PaneKind::Shell
-                    || session::record_has_live_pane(record, &self.panes)
+                    || registry::record_has_live_pane(record, &self.panes)
             });
             records_changed = self.config.panes.len() != rec_before;
         }
         records_changed |=
-            session::record_adopted_panes(&mut self.config, &self.panes, &infos, timestamp());
+            registry::record_adopted_panes(&mut self.config, &self.panes, &infos, timestamp());
         if records_changed {
             let live: Vec<String> = live.iter().map(|pane| pane.to_string()).collect();
             self.save_config(audit::Reason::Reconcile { live });
         }
-        {
-            let focused_id = self.panes.get(self.focused).map(|p| p.tmux_pane);
-            let selected_id = self.panes.get(self.selected).map(|p| p.tmux_pane);
-            session::order_panes(&mut self.panes, &self.config.panes);
-            if let Some(id) = focused_id {
-                if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
-                    self.focused = i;
-                }
-            }
-            if let Some(id) = selected_id {
-                if let Some(i) = self.panes.iter().position(|p| p.tmux_pane == id) {
-                    self.selected = i;
-                }
-            }
-        }
-        session::log_pane_order_change("reconcile", &order_before, &self.panes);
+        let (focused, selected) = registry::order_panes_preserving(
+            &mut self.panes,
+            &self.config.panes,
+            self.focused,
+            self.selected,
+        );
+        self.focused = focused;
+        self.selected = selected;
+        registry::log_pane_order_change("reconcile", &order_before, &self.panes);
         self.relayout();
         // Newly created panes take focus once adopted.
         if let Some(pending) = self.pending_focus {
@@ -3630,9 +3624,9 @@ impl App {
             self.toast(format!("Close failed: {err}"));
             return;
         }
-        let order_before = session::pane_order_identities(&self.panes);
+        let order_before = registry::pane_order_identities(&self.panes);
         let pane = self.panes.remove(idx);
-        session::log_pane_order_change("close", &order_before, &self.panes);
+        registry::log_pane_order_change("close", &order_before, &self.panes);
         self.bootstraps.remove(&pane.slug);
         let hook_root = pane
             .project_root
@@ -3644,7 +3638,7 @@ impl App {
             ("DMUX_PANE_ID", pane.tmux_pane.to_string()),
         ];
         hooks::run_detached(&hook_root, "pane_closed", &hook_root, &hook_env);
-        if session::remove_pane_record(&mut self.config.panes, &pane) {
+        if registry::remove_pane_record(&mut self.config.panes, &pane) {
             tracing::info!(pane = %pane.tmux_pane, slug = %pane.slug,
                 root = ?pane.project_root, "removing pane record");
         }
@@ -3674,7 +3668,7 @@ impl App {
             .or_else(|| self.active_project_root())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-        let project_context = session::project_context(
+        let project_context = registry::project_context(
             &self.project_root,
             Some(project_root.to_string_lossy().into_owned()),
         );

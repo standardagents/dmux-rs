@@ -301,7 +301,7 @@ mod tests {
             rtt: std::time::Duration::ZERO,
         };
         let infos = crate::session::parse_pane_list(&reply);
-        let mut pane = crate::session::adopt_panes(None, &infos).remove(0);
+        let mut pane = crate::registry::adopt_panes(None, &infos).remove(0);
         pane.term.advance(content);
         pane
     }
