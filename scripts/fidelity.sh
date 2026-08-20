@@ -16,7 +16,9 @@ BIN=$PWD/target/debug/dmux-rs
 GRID=$PWD/target/debug/griddump
 [ -x "$BIN" ] && [ -x "$GRID" ] || { echo "build first: cargo build --bin dmux-rs --bin griddump"; exit 1; }
 
-DRV=fdl-drv; TGT=fdl-tgt; OUT=fdl-out
+# Per-run socket names (#52): several agents run this harness concurrently
+# on one machine; shared names made runs kill each other's tmux servers.
+DRV=fdl-drv-$$; TGT=fdl-tgt-$$; OUT=fdl-out-$$
 DW=140; DH=40
 FAILS=0
 
@@ -143,12 +145,12 @@ run_case() { # $1 = case script, $2 = path label (live|seed), [$3 tolerance]
   local geom w h
   geom=$(tmux -L $TGT display-message -p -t "$PANE" '#{pane_width} #{pane_height}')
   w=${geom% *}; h=${geom#* }
-  truth_capture | "$GRID" "$w" "$h" > /tmp/fdl-truth.grid
-  ours_capture | "$GRID" "$DW" "$DH" > /tmp/fdl-ours.grid
-  if ! compare /tmp/fdl-truth.grid /tmp/fdl-ours.grid "$name/$path" "$mode"; then
+  truth_capture | "$GRID" "$w" "$h" > "$WORKDIR/truth.grid"
+  ours_capture | "$GRID" "$DW" "$DH" > "$WORKDIR/ours.grid"
+  if ! compare "$WORKDIR/truth.grid" "$WORKDIR/ours.grid" "$name/$path" "$mode"; then
     FAILS=$((FAILS+1))
-    cp /tmp/fdl-truth.grid "/tmp/fdl-$name-$path-truth.grid"
-    cp /tmp/fdl-ours.grid "/tmp/fdl-$name-$path-ours.grid"
+    cp "$WORKDIR/truth.grid" "/tmp/fdl-$$-$name-$path-truth.grid"
+    cp "$WORKDIR/ours.grid" "/tmp/fdl-$$-$name-$path-ours.grid"
   fi
 }
 
