@@ -4,6 +4,9 @@ use dmux_ui::{draw_hint_bar, draw_panel, ClickMap, PanelStyle, TextInput};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
+/// Click-target base for cursor positioning; the offset is the column.
+const TAG_FIELD: u64 = 500;
+
 /// What a submitted input means; keeps views free of closures.
 #[derive(Debug, Clone)]
 pub enum InputPurpose {
@@ -82,16 +85,19 @@ impl View for InputView {
         buf: &mut CellBuffer,
         area: Rect,
         ctx: &ViewCtx<'_>,
-        _clicks: &mut ClickMap<ClickTarget>,
+        clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let rect = ctx.global(area, area.w.min(56), 6);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
-        let cursor = self.input.draw(
-            buf,
-            Rect::new(inner.x, inner.y + 1, inner.w, 1),
-            ctx.theme,
-            true,
-        );
+        let field = Rect::new(inner.x, inner.y + 1, inner.w, 1);
+        let cursor = self.input.draw(buf, field, ctx.theme, true);
+        // Click-to-position (#96): one target per cell carries the column.
+        for col in 0..field.w {
+            clicks.add(
+                Rect::new(field.x + col, field.y, 1, 1),
+                ClickTarget::Overlay(TAG_FIELD + col as u64),
+            );
+        }
         draw_hint_bar(
             buf,
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.w, 1),
@@ -113,6 +119,13 @@ impl View for InputView {
         }
         ViewResult::Stay
     }
+
+    fn on_click(&mut self, tag: u64) -> ViewResult {
+        if tag >= TAG_FIELD {
+            self.input.click_col((tag - TAG_FIELD) as u16);
+        }
+        ViewResult::Stay
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +138,16 @@ mod tests {
             key: code,
             modifiers: mods,
         }
+    }
+
+    #[test]
+    fn clicks_position_the_cursor_in_the_field() {
+        // Tag offset = clicked column within the drawn field; typing then
+        // inserts at the clicked spot.
+        let mut v = InputView::new("Rename", "alpha beta", "", InputPurpose::RenamePane(0));
+        v.on_click(super::TAG_FIELD + 1); // first interior cell → col 0
+        v.on_key(&key(KeyCode::Char('X'), Modifiers::NONE));
+        assert_eq!(v.input.value, "Xalpha beta");
     }
 
     #[test]

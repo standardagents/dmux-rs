@@ -167,6 +167,67 @@ impl TextInput {
         }
     }
 
+    /// Place the cursor from a click at `col` (relative to the rect passed
+    /// to `draw`): the interior starts one cell in, and horizontal scroll
+    /// is honored. Clicking past the end lands at the end (#96).
+    pub fn click_col(&mut self, col: u16) {
+        let target = self.scroll_cols + col.saturating_sub(1);
+        let mut cols = 0u16;
+        for (i, c) in self.value.char_indices() {
+            let w = c.width().unwrap_or(0) as u16;
+            if target < cols + w.max(1) && w > 0 {
+                self.cursor = i;
+                return;
+            }
+            cols += w;
+        }
+        self.cursor = self.value.len();
+    }
+
+    /// Place the cursor from a click at (`row`, `col`) relative to the rect
+    /// passed to `draw_wrapped`, replaying the same wrap rules (#96).
+    /// Clicking inside a glyph lands before it; past a row's content lands
+    /// at that row's end; outside the text lands at the end of the value.
+    pub fn click_wrapped(&mut self, rect_w: u16, row: u16, col: u16) {
+        let width = rect_w.saturating_sub(2).max(1);
+        let target_row = self.scroll_rows + row;
+        let target_col = col.saturating_sub(1);
+        let mut cur_row = 0u16;
+        let mut cur_col = 0u16;
+        let mut within: Option<usize> = None;
+        let mut row_end: Option<usize> = None;
+        for (i, c) in self.value.char_indices() {
+            if c == '\n' {
+                if cur_row == target_row && row_end.is_none() {
+                    row_end = Some(i);
+                }
+                cur_row += 1;
+                cur_col = 0;
+                continue;
+            }
+            let w = c.width().unwrap_or(0) as u16;
+            if w == 0 {
+                continue;
+            }
+            if cur_col > 0 && cur_col.saturating_add(w) > width {
+                if cur_row == target_row && row_end.is_none() {
+                    row_end = Some(i);
+                }
+                cur_row += 1;
+                cur_col = 0;
+            }
+            if cur_row == target_row {
+                if target_col < cur_col + w {
+                    within.get_or_insert(i);
+                } else {
+                    row_end = Some(i + c.len_utf8());
+                }
+            }
+            cur_col += w;
+        }
+        self.cursor = within.or(row_end).unwrap_or(self.value.len());
+    }
+
     /// Number of visual rows used when wrapped within a field of `rect_width`.
     pub fn wrapped_line_count(&self, rect_width: u16) -> u16 {
         wrap_text(
@@ -431,6 +492,45 @@ mod tests {
         assert_eq!(t.cursor, t.value.len());
         t.handle(InputKey::WordRight);
         assert_eq!(t.cursor, t.value.len(), "end is a fixed point");
+    }
+
+    #[test]
+    fn clicks_place_the_cursor_with_scroll_and_wide_chars() {
+        // Single-line field drawn at a rect: interior starts one cell in.
+        let mut t = TextInput::with_value("ab日x");
+        t.scroll_cols = 0;
+        t.click_col(1); // first cell of the interior → before 'a'
+        assert_eq!(t.cursor, 0);
+        t.click_col(3); // on the wide 日 (cols 2..4) → before it
+        assert_eq!(t.cursor, 2);
+        t.click_col(4); // second column of 日 still lands before it
+        assert_eq!(t.cursor, 2);
+        t.click_col(5); // on 'x'
+        assert_eq!(t.cursor, 2 + '日'.len_utf8());
+        t.click_col(40); // past the end → end
+        assert_eq!(t.cursor, t.value.len());
+        // Horizontal scroll shifts the mapping.
+        t.scroll_cols = 2;
+        t.click_col(1); // shows 日x…; first cell = 日
+        assert_eq!(t.cursor, 2);
+    }
+
+    #[test]
+    fn wrapped_clicks_replay_wrap_rules() {
+        // Width 6 interior (rect 8): "alpha beta\ngamma" wraps as
+        // row0 "alpha ", row1 "beta", row2 "gamma".
+        let mut t = TextInput::with_value("alpha beta\ngamma");
+        t.scroll_rows = 0;
+        t.click_wrapped(8, 0, 1); // 'a' of alpha
+        assert_eq!(t.cursor, 0);
+        t.click_wrapped(8, 1, 2); // 'e' of beta
+        assert_eq!(t.cursor, "alpha b".len());
+        t.click_wrapped(8, 1, 6); // past "beta" → end of that row
+        assert_eq!(t.cursor, "alpha beta".len());
+        t.click_wrapped(8, 2, 3); // 'm' of gamma
+        assert_eq!(t.cursor, "alpha beta\nga".len());
+        t.click_wrapped(8, 9, 1); // row past the content → end of value
+        assert_eq!(t.cursor, t.value.len());
     }
 
     #[test]

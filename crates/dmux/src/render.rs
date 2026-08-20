@@ -135,6 +135,34 @@ pub fn compose(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<Cl
     }
 }
 
+/// Hardware cursor: an overlay input first (steady block, #96 — text
+/// inputs read better than a bar), else the focused pane's own cursor in
+/// the pane's shape. Hidden when neither applies.
+pub(crate) fn place_hardware_cursor(
+    emitter: &mut dmux_compositor::Emitter,
+    view_cursor: Option<(u16, u16)>,
+    no_overlays: bool,
+    focused: Option<&LogicalPane>,
+) {
+    if let Some((cx, cy)) = view_cursor {
+        emitter.move_to(cx, cy);
+        emitter.cursor_shape(2);
+        emitter.show_cursor();
+    } else if no_overlays {
+        if let Some(p) = focused {
+            if let (Some(rect), cur) = (p.rect, p.term.cursor()) {
+                if let Some((cx, cy)) = cur.position {
+                    if cx < rect.w && cy < rect.h {
+                        emitter.move_to(rect.x + cx, rect.y + cy);
+                        emitter.cursor_shape(cur.shape);
+                        emitter.show_cursor();
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Content area to the right of the sidebar (the welcome screen's canvas).
 pub fn content_area(buf: &CellBuffer, layout: &Layout) -> Rect {
     let x = layout.sidebar.right() + 1;

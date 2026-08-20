@@ -363,6 +363,10 @@ pub mod vkeys {
             (KeyCode::Char(c), false, false) if !cmd => InputKey::Char(*c),
             (KeyCode::LeftArrow, false, true) => InputKey::WordLeft,
             (KeyCode::RightArrow, false, true) => InputKey::WordRight,
+            // macOS terminals commonly send Option+arrows as ESC b / ESC f
+            // (readline word motions); accept both spellings.
+            (KeyCode::Char('b'), false, true) => InputKey::WordLeft,
+            (KeyCode::Char('f'), false, true) => InputKey::WordRight,
             (KeyCode::LeftArrow, false, false) if cmd => InputKey::Home,
             (KeyCode::RightArrow, false, false) if cmd => InputKey::End,
             (KeyCode::LeftArrow, false, false) => InputKey::Left,
@@ -408,6 +412,21 @@ mod hover_tests {
             vkeys::as_input_key(&key(KeyCode::RightArrow, Modifiers::SUPER)),
             Some(InputKey::End)
         ));
+        // macOS byte spelling of Option+arrows: ESC b / ESC f.
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::Char('b'), Modifiers::ALT)),
+            Some(InputKey::WordLeft)
+        ));
+        assert!(matches!(
+            vkeys::as_input_key(&key(KeyCode::Char('f'), Modifiers::ALT)),
+            Some(InputKey::WordRight)
+        ));
+        // Modified arrows never leak into view navigation predicates.
+        assert!(!vkeys::is_left(&key(KeyCode::LeftArrow, Modifiers::ALT)));
+        assert!(!vkeys::is_right(&key(
+            KeyCode::RightArrow,
+            Modifiers::SUPER
+        )));
         // Plain and Control behavior is unchanged.
         assert!(matches!(
             vkeys::as_input_key(&key(KeyCode::LeftArrow, Modifiers::NONE)),

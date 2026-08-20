@@ -13,6 +13,8 @@ const TAG_LAUNCH: u64 = 1;
 const TAG_PROMPT: u64 = 2;
 const TAG_PERMISSION: u64 = 3;
 const TAG_ROW: u64 = 100;
+/// Per-cell prompt click targets (#96): TAG_PROMPT_CELL + row*256 + col.
+const TAG_PROMPT_CELL: u64 = 100_000;
 const TAG_MINUS: u64 = 200;
 const TAG_PLUS: u64 = 300;
 const MAX_PROMPT_ROWS: u16 = 6;
@@ -41,6 +43,8 @@ pub struct AgentSelectView {
     permission_idx: usize,
     project_root: Option<String>,
     close_parent_on_launch: bool,
+    /// Prompt rect width from the last render, for wrapped click mapping.
+    prompt_w: u16,
 }
 
 impl AgentSelectView {
@@ -93,6 +97,7 @@ impl AgentSelectView {
             permission_idx,
             project_root,
             close_parent_on_launch: false,
+            prompt_w: 0,
         }
     }
 
@@ -188,7 +193,17 @@ impl View for AgentSelectView {
         let cursor = self
             .prompt
             .draw_wrapped(buf, prompt_rect, ctx.theme, prompt_active);
-        clicks.add(prompt_rect, ClickTarget::Overlay(TAG_PROMPT));
+        // Click-to-position (#96): per-cell targets encode (row, col) so a
+        // click focuses the prompt AND places the cursor there.
+        self.prompt_w = prompt_rect.w;
+        for row in 0..prompt_rect.h {
+            for col in 0..prompt_rect.w {
+                clicks.add(
+                    Rect::new(prompt_rect.x + col, prompt_rect.y + row, 1, 1),
+                    ClickTarget::Overlay(TAG_PROMPT_CELL + (row as u64) * 256 + col as u64),
+                );
+            }
+        }
 
         buf.draw_text(
             content.x + 1,
@@ -437,6 +452,12 @@ impl View for AgentSelectView {
 
     fn on_click(&mut self, tag: u64) -> ViewResult {
         match tag {
+            t if t >= TAG_PROMPT_CELL => {
+                self.focus = 0;
+                let cell = t - TAG_PROMPT_CELL;
+                self.prompt
+                    .click_wrapped(self.prompt_w, (cell / 256) as u16, (cell % 256) as u16);
+            }
             TAG_LAUNCH => return self.launch(),
             TAG_PROMPT => self.focus = 0,
             TAG_PERMISSION => {

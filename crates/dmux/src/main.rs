@@ -3631,24 +3631,12 @@ impl App {
         let force = self.force_full;
         diff_frame(&mut self.front, &mut self.back, &mut self.emitter, force);
 
-        // Hardware cursor: overlay input first, else focused pane.
-        if let Some((cx, cy)) = self.view_cursor {
-            self.emitter.move_to(cx, cy);
-            self.emitter.cursor_shape(6);
-            self.emitter.show_cursor();
-        } else if self.views.is_empty() {
-            if let Some(p) = self.panes.get(self.focused) {
-                if let (Some(rect), cur) = (p.rect, p.term.cursor()) {
-                    if let Some((cx, cy)) = cur.position {
-                        if cx < rect.w && cy < rect.h {
-                            self.emitter.move_to(rect.x + cx, rect.y + cy);
-                            self.emitter.cursor_shape(cur.shape);
-                            self.emitter.show_cursor();
-                        }
-                    }
-                }
-            }
-        }
+        render::place_hardware_cursor(
+            &mut self.emitter,
+            self.view_cursor,
+            self.views.is_empty(),
+            self.panes.get(self.focused),
+        );
         if sync {
             self.emitter.end_sync();
         }

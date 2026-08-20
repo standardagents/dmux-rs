@@ -12,6 +12,9 @@ use dmux_ui::{draw_hint_bar, draw_panel, panel_frame, ClickMap, ListState, Panel
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
+/// Click-target base for filter-field cursor placement; offset = column.
+const TAG_FIELD: u64 = 10_000;
+
 /// Bounded directory read: a single readdir capped at this many entries so a
 /// huge or slow (network) directory can't stall input or rendering.
 const MAX_ENTRIES: usize = 500;
@@ -231,13 +234,16 @@ impl View for PathPickerView {
             inner,
         );
 
-        // Filter input.
-        let cursor = self.input.draw(
-            buf,
-            Rect::new(content.x + 1, content.y + 1, content.w.saturating_sub(2), 1),
-            ctx.theme,
-            true,
-        );
+        // Filter input, with per-cell click targets for cursor placement
+        // (#96): the tag offset is the clicked column.
+        let field = Rect::new(content.x + 1, content.y + 1, content.w.saturating_sub(2), 1);
+        let cursor = self.input.draw(buf, field, ctx.theme, true);
+        for col in 0..field.w {
+            clicks.add(
+                Rect::new(field.x + col, field.y, 1, 1),
+                ClickTarget::Overlay(TAG_FIELD + col as u64),
+            );
+        }
 
         // Notice / error line.
         let msg_row = content.y + 2;
@@ -390,6 +396,10 @@ impl View for PathPickerView {
     }
 
     fn on_click(&mut self, tag: u64) -> ViewResult {
+        if tag >= TAG_FIELD {
+            self.input.click_col((tag - TAG_FIELD) as u16);
+            return ViewResult::Stay;
+        }
         self.list.selected = tag as usize;
         self.activate()
     }
