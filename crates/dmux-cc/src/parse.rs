@@ -189,8 +189,8 @@ impl Parser {
             "%client-detached" => Some(CcEvent::ClientDetached {
                 client: rest.trim().to_string(),
             }),
-            // Pane VIEW mode (copy/view/choose) toggled — not a keyboard
-            // key-table change; see CcEvent::PaneModeChanged.
+            // Maps copy, view, and choose state. Keyboard key-table changes
+            // use a control subscription; see CcEvent::PaneModeChanged.
             "%pane-mode-changed" => Some(CcEvent::PaneModeChanged(parse_pane(rest.trim())?)),
             "%paste-buffer-changed" => Some(CcEvent::PasteBufferChanged {
                 name: rest.to_string(),
@@ -414,10 +414,9 @@ mod tests {
 
     #[test]
     fn pane_mode_changed_maps_the_view_mode_notification() {
-        // #70: %pane-mode-changed is the pane VIEW mode (copy mode etc.)
-        // notification — anchored here so input-mode investigations don't
-        // mistake it for a #{pane_key_mode} keyboard event, which only
-        // arrives via a control subscription (%subscription-changed).
+        // #70 anchors the pane view-mode notification separately from
+        // #{pane_key_mode}. Keyboard mode arrives through a control
+        // subscription as %subscription-changed.
         let events = feed_all(b"%pane-mode-changed %7\n");
         assert_eq!(events, vec![CcEvent::PaneModeChanged(PaneId(7))]);
     }

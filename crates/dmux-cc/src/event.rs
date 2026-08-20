@@ -107,13 +107,13 @@ pub enum CcEvent {
         client: String,
     },
 
-    /// `%pane-mode-changed %<pane>` — the pane entered or left a tmux PANE
-    /// VIEW MODE (copy mode, view mode, choose trees). This is NOT a
-    /// keyboard/key-table change: `#{pane_key_mode}` (vi/emacs insert state
-    /// and friends) never arrives through this notification. Keyboard-mode
-    /// consumers must watch a control subscription instead
-    /// (`refresh-client -B` on a `pane_key_mode`-bearing format, delivered
-    /// as `%subscription-changed`).
+    /// `%pane-mode-changed %<pane>` reports entry to or exit from a tmux pane
+    /// view mode, including copy mode, view mode, and choose trees.
+    ///
+    /// `#{pane_key_mode}` represents keyboard and key-table state such as
+    /// vi/emacs insert mode. Keyboard-mode consumers must watch a control
+    /// subscription (`refresh-client -B` with a `pane_key_mode` format),
+    /// which tmux delivers as `%subscription-changed`.
     PaneModeChanged(PaneId),
     PasteBufferChanged {
         name: String,
