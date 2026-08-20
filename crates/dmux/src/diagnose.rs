@@ -178,6 +178,25 @@ pub fn run(
             println!("  {s}");
         }
     }
+
+    // Record mutation history (#79): the pane_audit trail distinguishes a
+    // record that was never created from one removed or reassigned later —
+    // an absent record with no audit line was never written in the retained
+    // log window.
+    if let Ok(text) = std::fs::read_to_string(&log) {
+        let audit: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("pane_audit"))
+            .rev()
+            .take(15)
+            .collect();
+        if !audit.is_empty() {
+            println!("record audit (last {}):", audit.len());
+            for l in audit.iter().rev() {
+                println!("  {l}");
+            }
+        }
+    }
     0
 }
 

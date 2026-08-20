@@ -109,7 +109,10 @@ Triage per issue:
   read-only snapshot joining the installed build, recent attach/update
   events, live tmux panes, and persisted records with adoption's exact
   identity semantics, flagging UNMATCHED / AMBIGUOUS / STALE panes and
-  records with no live pane; safe on a live session, and the output is
+  records with no live pane, plus the recent `pane_audit` record-mutation
+  trail — every config save logs a typed, redacted reason for each pane
+  record added/removed/reassigned, so "never created" and "removed later"
+  are distinguishable; safe on a live session, and the output is
   what testers should paste into ownership issues); fix; add a regression
   test; deliver per the completion lifecycle with a one-paragraph
   explanation the reporter can understand.

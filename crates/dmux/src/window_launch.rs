@@ -307,7 +307,7 @@ impl App {
             });
             self.config.panes.push(record);
         }
-        self.save_config();
+        self.save_config(crate::audit::Reason::PaneLaunched);
 
         self.pending_focus = Some(pane_id);
         self.request_reconcile();

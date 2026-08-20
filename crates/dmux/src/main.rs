@@ -4,6 +4,7 @@
 //! damage-diffed, synchronized-output frames.
 
 mod agents;
+mod audit;
 mod bootstrap;
 mod diagnose;
 mod git;
@@ -44,8 +45,7 @@ use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter, Rect};
 use dmux_core::i18n::{t, tf};
 use dmux_core::{
-    encode_pane_title, session_name_for_root, DmuxConfig, DmuxPane, PaneKind, SettingsScope,
-    SettingsStore,
+    encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsScope, SettingsStore,
 };
 use dmux_host::{HostTerminal, InputEvent};
 use dmux_ui::{ClickMap, Theme};
@@ -349,6 +349,8 @@ struct App {
     config_path: PathBuf,
     /// Whether a config file existed / has been created on disk.
     config_persisted: bool,
+    /// Last-persisted pane-record snapshot; the mutation-audit baseline (#79).
+    audit_base: Vec<audit::Snap>,
     project_root: PathBuf,
     session_name: String,
     settings: Arc<Mutex<SettingsStore>>,
@@ -556,6 +558,7 @@ async fn run(
         DmuxConfig::new(name, project_root.to_string_lossy().into_owned())
     });
     let config_path = DmuxConfig::default_path(&project_root);
+    let audit_base = audit::snapshot(&config.panes);
 
     let mut app = App {
         client,
@@ -565,6 +568,7 @@ async fn run(
         config,
         config_path,
         config_persisted,
+        audit_base,
         project_root,
         session_name,
         settings,
@@ -1574,7 +1578,7 @@ impl App {
                     }
                 }
                 if changed {
-                    self.save_config();
+                    self.save_config(audit::Reason::AgentTracking);
                     tracing::debug!("agent tracking updated config records");
                 }
             }
@@ -1706,7 +1710,7 @@ impl App {
         }
         let order: Vec<String> = self.panes.iter().map(|p| p.slug.clone()).collect();
         session::order_records(&mut self.config.panes, &order);
-        self.save_config();
+        self.save_config(audit::Reason::Reorder);
         self.relayout();
     }
 
@@ -1790,7 +1794,7 @@ impl App {
             *theme = Some(pick);
         }
         if persisted_change {
-            self.save_config();
+            self.save_config(audit::Reason::ProjectTheme);
         }
 
         let active_root = norm(
@@ -2028,7 +2032,8 @@ impl App {
                 .panes
                 .retain(|r| r.kind() != PaneKind::Shell || live_slugs.contains(&r.slug));
             if self.config.panes.len() != rec_before {
-                self.save_config();
+                let live: Vec<String> = live.iter().map(|p| p.to_string()).collect();
+                self.save_config(audit::Reason::Reconcile { live });
             }
         }
         // Display order follows the persisted record order (#26) — a
@@ -3289,7 +3294,7 @@ impl App {
                                 extra: serde_json::Map::new(),
                             });
                         self.rebuild_sidebar_groups();
-                        self.save_config();
+                        self.save_config(audit::Reason::ProjectAdded);
                         self.toast(format!("Added project '{name}'"));
                     }
                     return self.execute_cmd(AppCmd::NewTerminalAt { path: root, name });
@@ -3521,7 +3526,7 @@ impl App {
             dmux_cc::quote_arg(&encoded)
         ));
         let slug = p.slug.clone();
-        self.update_config_pane(&slug, |rec| {
+        self.update_config_pane(&slug, audit::Reason::Rename, |rec| {
             rec.display_name = Some(name.clone());
         });
         self.toast(format!("Renamed to '{name}'"));
@@ -3551,7 +3556,7 @@ impl App {
                 .client
                 .send_tagged(p.cursor_command(), Tag::Cursor(pane_id));
         }
-        self.update_config_pane(&slug, |rec| {
+        self.update_config_pane(&slug, audit::Reason::Visibility, |rec| {
             rec.hidden = hidden.then_some(true);
         });
         self.relayout();
@@ -3654,7 +3659,7 @@ impl App {
         self.config
             .panes
             .retain(|r| !(r.slug == pane.slug && r.project_root == pane.project_root));
-        self.save_config();
+        self.save_config(audit::Reason::PaneClosed);
         if self.focused >= self.panes.len() {
             self.focused = self.panes.len().saturating_sub(1);
         }
@@ -3783,31 +3788,6 @@ impl App {
             "Launching {total} pane{}…",
             if total == 1 { "" } else { "s" }
         ));
-    }
-
-    fn update_config_pane(&mut self, slug: &str, f: impl FnOnce(&mut DmuxPane)) {
-        if let Some(rec) = self.config.panes.iter_mut().find(|p| p.slug == slug) {
-            f(rec);
-        } else {
-            return;
-        }
-        self.save_config();
-    }
-
-    fn save_config(&mut self) {
-        if let Some(obj) = self.config.extra.get_mut("lastUpdated") {
-            *obj = serde_json::Value::String(iso_now());
-        } else {
-            self.config
-                .extra
-                .insert("lastUpdated".into(), serde_json::Value::String(iso_now()));
-        }
-        match self.config.save(&self.config_path) {
-            Ok(()) => {
-                self.config_persisted = true;
-            }
-            Err(err) => tracing::warn!(%err, "config save failed"),
-        }
     }
 
     fn send_pane_bytes(&mut self, bytes: &[u8]) {
