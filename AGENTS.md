@@ -104,7 +104,12 @@ Triage per issue:
   `scripts/` and the `DMUX_*` env knobs are your tools — for pane-UX
   interactions, `scripts/ui-smoke.sh` drives menus, clicks, and launch
   actions against a hermetic dmux and is the template for new interaction
-  checks; for pane-ownership/identity reports, `scripts/diagnose-session.sh
+  checks; for visual review of chrome layout changes,
+  `scripts/sidebar-preview.sh` and `scripts/issues-preview.sh` print
+  deterministic rendered artifacts (ANSI, `--plain` for text) of the
+  sidebar and the Issues pane at multiple widths without tmux or GitHub —
+  review these before shipping layout changes instead of relying on
+  screenshots; for pane-ownership/identity reports, `scripts/diagnose-session.sh
   [project-dir]` — a wrapper for `dmux-rs --diagnose-session` — prints a
   read-only snapshot joining the installed build, recent attach/update
   events, live tmux panes, and persisted records with adoption's exact

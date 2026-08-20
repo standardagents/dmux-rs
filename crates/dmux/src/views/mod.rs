@@ -11,6 +11,8 @@ mod hooks_view;
 mod infer_view;
 mod input_view;
 mod issues;
+#[cfg(test)]
+mod issues_preview;
 mod issues_table;
 mod logs;
 mod menu;

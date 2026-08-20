@@ -48,6 +48,14 @@ impl IssueBrowserView {
         self.selected.len()
     }
 
+    /// Preview harness (#82): pin the focused row and checked issues so
+    /// `views::issues_preview` renders deterministic selection states.
+    #[cfg(test)]
+    pub fn preview_select(&mut self, focus: usize, checked: Vec<(String, u64)>) {
+        self.list.selected = focus;
+        self.selected = checked.into_iter().collect();
+    }
+
     fn sync_rows(&mut self, state: &IssueLoadState) {
         let rows = rows_key(state);
         if rows != self.last_rows {
