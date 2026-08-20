@@ -212,10 +212,48 @@ pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseKind {
     LeftHeld,
+    RightHeld,
     WheelUp,
     WheelDown,
     Hover,
     Release,
+}
+
+#[derive(Debug, Default)]
+pub struct MouseButtonState {
+    left: bool,
+    right: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MouseTransitions {
+    pub left_press: bool,
+    pub right_press: bool,
+    pub right_release: bool,
+}
+
+impl MouseButtonState {
+    pub fn any_down(&self) -> bool {
+        self.left || self.right
+    }
+
+    pub fn update(&mut self, kind: MouseKind) -> MouseTransitions {
+        let left_press = kind == MouseKind::LeftHeld && !self.left;
+        let right_press = kind == MouseKind::RightHeld && !self.right && !self.left;
+        let right_release = kind == MouseKind::Release && self.right;
+        match kind {
+            MouseKind::LeftHeld => self.left = true,
+            MouseKind::RightHeld => self.right = true,
+            MouseKind::Release if self.right => self.right = false,
+            MouseKind::Release => self.left = false,
+            _ => {}
+        }
+        MouseTransitions {
+            left_press,
+            right_press,
+            right_release,
+        }
+    }
 }
 
 pub fn classify_mouse(ev: &MouseEvent, button_down: bool) -> (u16, u16, MouseKind, bool) {
@@ -228,6 +266,8 @@ pub fn classify_mouse(ev: &MouseEvent, button_down: bool) -> (u16, u16, MouseKin
         } else {
             MouseKind::WheelDown
         }
+    } else if ev.mouse_buttons.contains(MouseButtons::RIGHT) {
+        MouseKind::RightHeld
     } else if ev.mouse_buttons.contains(MouseButtons::LEFT) {
         MouseKind::LeftHeld
     } else if button_down {
@@ -482,6 +522,10 @@ mod tests {
             MouseKind::LeftHeld
         );
         assert_eq!(
+            classify_mouse(&mouse(MouseButtons::RIGHT), false).2,
+            MouseKind::RightHeld
+        );
+        assert_eq!(
             classify_mouse(
                 &mouse(MouseButtons::VERT_WHEEL | MouseButtons::WHEEL_POSITIVE),
                 true,
@@ -494,5 +538,28 @@ mod tests {
     #[test]
     fn pane_mouse_motion_uses_sgr_buttonless_motion_code() {
         assert_eq!(encode_sgr_mouse(35, true, 4, 2), b"\x1b[<35;5;3M");
+    }
+
+    #[test]
+    fn right_button_release_does_not_end_a_left_drag() {
+        let mut right_only = MouseButtonState::default();
+        assert!(right_only.update(MouseKind::RightHeld).right_press);
+        assert!(right_only.update(MouseKind::Release).right_release);
+        assert!(!right_only.any_down());
+
+        let mut state = MouseButtonState::default();
+        assert!(state.update(MouseKind::LeftHeld).left_press);
+        assert_eq!(
+            state.update(MouseKind::RightHeld),
+            MouseTransitions::default()
+        );
+        assert!(state.update(MouseKind::Release).right_release);
+        assert!(state.any_down());
+        assert_eq!(
+            state.update(MouseKind::LeftHeld),
+            MouseTransitions::default()
+        );
+        state.update(MouseKind::Release);
+        assert!(!state.any_down());
     }
 }

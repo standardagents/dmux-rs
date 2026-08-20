@@ -521,7 +521,7 @@ struct App {
     /// Pane index receiving forwarded mouse-drag events (app mouse mode).
     mouse_forward: Option<usize>,
     /// Physical button state disambiguates press, drag, release, and hover.
-    mouse_down: bool,
+    mouse_buttons: input::MouseButtonState,
     hovered: Option<ClickTarget>,
     /// The current drag actually moved (a plain click must not copy).
     drag_moved: bool,
@@ -710,7 +710,7 @@ async fn run(
         pending_focus: None,
         drag_select: None,
         mouse_forward: None,
-        mouse_down: false,
+        mouse_buttons: input::MouseButtonState::default(),
         hovered: None,
         drag_moved: false,
         last_press: None,
@@ -1836,70 +1836,6 @@ impl App {
         self.relayout();
     }
 
-    /// Pane-scoped menu items (rename, hide, worktree actions, hooks, copy
-    /// path, editor, close) — shared by the leader-key pane menu and the
-    /// sidebar flyout (#14).
-    fn pane_menu_items(&self, idx: usize) -> Vec<MenuItem> {
-        let mut items = Vec::new();
-        if let Some(p) = self.panes.get(idx) {
-            let hide_label = if p.hidden {
-                t("menu.show")
-            } else {
-                t("menu.hide")
-            };
-            items.push(MenuItem::new(
-                t("menu.rename"),
-                "^b r",
-                AppCmd::PromptRename(idx),
-            ));
-            items.push(MenuItem::new(hide_label, "^b h", AppCmd::ToggleHidden(idx)));
-            if p.worktree_path.is_some() {
-                items.push(MenuItem::new(t("menu.merge"), "", AppCmd::MergeStart(idx)));
-                items.push(MenuItem::new(t("menu.pr"), "", AppCmd::CreatePr(idx)));
-                items.push(MenuItem::new(t("menu.diff"), "", AppCmd::ShowDiff(idx)));
-                if p.agent.is_some() {
-                    items.push(MenuItem::new(
-                        t("menu.duplicate"),
-                        "",
-                        AppCmd::DuplicatePane(idx),
-                    ));
-                }
-            }
-            let hook_root = p
-                .project_root
-                .clone()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| self.project_root.clone());
-            for (hook, label) in [
-                ("run_test", t("menu.run_test")),
-                ("run_dev", t("menu.run_dev")),
-            ] {
-                if hooks::hook_path(&hook_root, hook).is_some() {
-                    items.push(MenuItem::new(
-                        label,
-                        "",
-                        AppCmd::RunHook {
-                            idx,
-                            name: hook.into(),
-                        },
-                    ));
-                }
-            }
-            items.push(MenuItem::new(
-                t("menu.copy_path"),
-                "",
-                AppCmd::CopyPath(idx),
-            ));
-            items.push(MenuItem::new(
-                t("menu.editor"),
-                "",
-                AppCmd::OpenInEditor(idx),
-            ));
-            items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
-        }
-        items
-    }
-
     /// Rebuild the sidebar project groups + per-pane colors (TS contract:
     /// main project first, then config `sidebarProjects` order, then
     /// pane-derived; colors from `colorTheme` with TS auto-assignment for
@@ -2419,7 +2355,8 @@ impl App {
                 self.execute_routed(routed)
             }
             InputEvent::Mouse(m) => {
-                let (col, row, kind, shift) = input::classify_mouse(&m, self.mouse_down);
+                let (col, row, kind, shift) =
+                    input::classify_mouse(&m, self.mouse_buttons.any_down());
                 self.handle_mouse(col, row, kind, shift)
             }
             InputEvent::Paste(text) => {
@@ -2600,12 +2537,14 @@ impl App {
             }
             return true;
         }
-        let is_press = kind == MouseKind::LeftHeld && !self.mouse_down;
-        match kind {
-            MouseKind::LeftHeld => self.mouse_down = true,
-            MouseKind::Release => self.mouse_down = false,
-            _ => {}
+        let transitions = self.mouse_buttons.update(kind);
+        if transitions.right_press {
+            return self.open_context_menu(target, col, row);
         }
+        if transitions.right_release {
+            return true;
+        }
+        let is_press = transitions.left_press;
         let is_double = is_press
             && self.last_press.is_some_and(|(t, c, r)| {
                 t.elapsed() < Duration::from_millis(400) && c == col && r == row
@@ -2740,7 +2679,10 @@ impl App {
                         self.dirty = true;
                     }
                 },
-                MouseKind::LeftHeld | MouseKind::Hover | MouseKind::Release => {}
+                MouseKind::LeftHeld
+                | MouseKind::RightHeld
+                | MouseKind::Hover
+                | MouseKind::Release => {}
             }
             return true;
         }
@@ -2819,12 +2761,7 @@ impl App {
                     self.sidebar_project = None;
                     self.rebuild_sidebar_groups();
                     if is_double {
-                        let anchor_x = self.layout.sidebar.right() + 1;
-                        return self.execute_cmd(AppCmd::OpenPaneFlyout {
-                            idx: i,
-                            x: anchor_x,
-                            y: row,
-                        });
+                        return self.execute_cmd(AppCmd::OpenPaneFlyout { idx: i, y: row });
                     }
                     // Arm the reorder gesture (#26): it only engages if the
                     // pointer crosses onto another row before release.
@@ -2948,7 +2885,7 @@ impl App {
                     }
                 }
             },
-            MouseKind::LeftHeld | MouseKind::Hover | MouseKind::Release => {}
+            MouseKind::LeftHeld | MouseKind::RightHeld | MouseKind::Hover | MouseKind::Release => {}
         }
         true
     }
@@ -3038,19 +2975,7 @@ impl App {
                     self.dirty = true;
                 }
             }
-            AppCmd::OpenPaneFlyout { idx, x, y } => {
-                // Row-anchored pane actions (#14): pane items only, beside
-                // the sidebar row, without touching focus/activation.
-                if let Some(p) = self.panes.get(idx) {
-                    let title = p.display_title().to_string();
-                    let items = self.pane_menu_items(idx);
-                    let row = Rect::new(self.layout.sidebar.x, y, self.layout.sidebar.w, 1);
-                    self.views.push(Box::new(
-                        MenuView::new(title, items).anchored(x, y).with_source(row),
-                    ));
-                    self.dirty = true;
-                }
-            }
+            AppCmd::OpenPaneFlyout { idx, y } => return self.open_sidebar_pane_flyout(idx, y),
             AppCmd::OpenPaneMenu => {
                 let idx = self.selected.min(self.panes.len().saturating_sub(1));
                 let mut items = self.pane_menu_items(idx);

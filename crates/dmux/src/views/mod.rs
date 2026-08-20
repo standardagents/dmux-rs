@@ -49,7 +49,6 @@ pub enum AppCmd {
     /// the clicked row, without activating the pane.
     OpenPaneFlyout {
         idx: usize,
-        x: u16,
         y: u16,
     },
     OpenSettings,
@@ -178,7 +177,25 @@ pub enum ClickTarget {
     Overlay(u64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextMenuTarget {
+    Pane(usize),
+    SidebarPane(usize),
+}
+
 impl ClickTarget {
+    pub fn context_menu(self) -> Option<ContextMenuTarget> {
+        match self {
+            Self::PaneBody(i)
+            | Self::PaneTitle(i)
+            | Self::TitleRename(i)
+            | Self::TitleHide(i)
+            | Self::TitleClose(i) => Some(ContextMenuTarget::Pane(i)),
+            Self::SidebarRow(i) => Some(ContextMenuTarget::SidebarPane(i)),
+            _ => None,
+        }
+    }
+
     pub fn is_hoverable(self) -> bool {
         !matches!(self, Self::PaneBody(_))
     }
@@ -373,5 +390,30 @@ mod hover_tests {
         assert!(!update_hover(&mut current, Some(ClickTarget::Overlay(9))));
         assert!(!update_hover(&mut current, None));
         assert_eq!(current, Some(ClickTarget::Overlay(9)));
+    }
+
+    #[test]
+    fn context_menus_exist_only_for_pane_surfaces() {
+        for target in [
+            ClickTarget::PaneBody(2),
+            ClickTarget::PaneTitle(2),
+            ClickTarget::TitleRename(2),
+            ClickTarget::TitleHide(2),
+            ClickTarget::TitleClose(2),
+        ] {
+            assert_eq!(target.context_menu(), Some(ContextMenuTarget::Pane(2)));
+        }
+        assert_eq!(
+            ClickTarget::SidebarRow(4).context_menu(),
+            Some(ContextMenuTarget::SidebarPane(4))
+        );
+        for target in [
+            ClickTarget::SidebarSettings,
+            ClickTarget::SidebarGroupNewAgent(0),
+            ClickTarget::WelcomeCard(0),
+            ClickTarget::Overlay(1),
+        ] {
+            assert_eq!(target.context_menu(), None);
+        }
     }
 }
