@@ -350,6 +350,31 @@ if stable_sidebar_row "terminal-1" sidebar-focus-row; then
   fi
 fi
 
+# ---- case 6: red dot closes menu-launched utility panes directly (#104) -----
+# The editor pane (opened from a menu in case 1) is a transient surface:
+# its red close dot must dismiss it in ONE action, with no confirmation.
+EDIT_DOTS=$(cap | /usr/bin/sed -n '1p' | python3 -c '
+import sys
+line = sys.stdin.buffer.read().decode("utf-8", "replace")
+cols = [i + 1 for i, ch in enumerate(line) if ch == "●"]
+# Dots come in groups of three per pane; the first pane on screen owns the
+# first group. Its third dot is the red close.
+print(cols[2] if len(cols) >= 3 else "")
+')
+if [ -n "$EDIT_DOTS" ]; then
+  left_click "$EDIT_DOTS" 1
+  sleep 1
+  if cap | /usr/bin/grep -q "will be killed"; then
+    echo "  confirmation dialog appeared for a transient surface"
+    fail transient-close-confirmed
+  elif wait_sidebar_gone "edit: other-term" transient-close-gone; then
+    echo "PASS transient-close (red dot closed the editor pane in one action)"
+  fi
+else
+  echo "  no title-bar dots found on row 1"
+  fail transient-close-dots
+fi
+
 # ---- result ----------------------------------------------------------------
 if [ "$FAILS" -eq 0 ]; then
   echo "ui-smoke: ALL PASS"

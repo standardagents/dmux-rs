@@ -2646,7 +2646,12 @@ impl App {
                     return self.execute_cmd(AppCmd::ToggleHidden(i))
                 }
                 Some(ClickTarget::TitleClose(i)) => {
-                    return self.execute_cmd(AppCmd::ConfirmClose(i))
+                    // Menu-launched utility panes close in one action (#104).
+                    let cmd = match self.panes.get(i) {
+                        Some(pane) => pane_actions::title_close_cmd(pane, i),
+                        None => return true,
+                    };
+                    return self.execute_cmd(cmd);
                 }
                 Some(ClickTarget::WelcomeCard(i)) => {
                     self.welcome_sel = i;
