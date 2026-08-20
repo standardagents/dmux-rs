@@ -276,27 +276,25 @@ impl App {
                     ));
                 }
             }
-            if crate::updater::BUILD_TAG.is_empty() {
-                if let Some(worktree) = pane
-                    .worktree_path
-                    .as_deref()
-                    .and_then(|path| prototype::dmux_worktree(std::path::Path::new(path)))
-                {
-                    let active =
-                        prototype::active_worktree().is_some_and(|current| current == worktree);
-                    let (label, command) = if active {
-                        (
-                            "Unload prototype, return to default",
-                            AppCmd::UnloadPrototype,
-                        )
-                    } else {
-                        (
-                            "Load this worktree as dmux-rs",
-                            AppCmd::LoadPrototypeWorktree(worktree.to_string_lossy().into_owned()),
-                        )
-                    };
-                    items.push(MenuItem::new(label, "", command).special());
-                }
+            if let Some(worktree) = pane
+                .worktree_path
+                .as_deref()
+                .and_then(|path| prototype::dmux_worktree(std::path::Path::new(path)))
+            {
+                let active =
+                    prototype::active_worktree().is_some_and(|current| current == worktree);
+                let (label, command) = if active {
+                    (
+                        "Unload prototype, return to default",
+                        AppCmd::UnloadPrototype,
+                    )
+                } else {
+                    (
+                        "Load this worktree as dmux-rs",
+                        AppCmd::LoadPrototypeWorktree(worktree.to_string_lossy().into_owned()),
+                    )
+                };
+                items.push(MenuItem::new(label, "", command).special());
             }
             let hook_root = pane
                 .project_root

@@ -12,7 +12,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-cargo build --quiet --bin dmux-rs --bin griddump || { echo "ui-smoke: build FAILED"; exit 1; }
+DMUX_BUILD_TAG=v-ui-smoke cargo build --quiet --bin dmux-rs --bin griddump || { echo "ui-smoke: build FAILED"; exit 1; }
 BIN=$PWD/target/debug/dmux-rs
 GRID=$PWD/target/debug/griddump
 
@@ -28,6 +28,7 @@ WORK=$(mktemp -d /tmp/ui-smoke.XXXX)
 WORK=$(cd "$WORK" && pwd -P)
 mkdir -p "$WORK/home" "$WORK/other-project"
 cd "$WORK" && git init -q -b main && git commit -q --allow-empty -m init
+git -C "$WORK" remote add origin git@github.com:standardagents/dmux-rs.git
 (cd "$WORK/other-project" && git init -q -b main && git commit -q --allow-empty -m init)
 
 # Editor probe: records its working directory, then holds like a real editor.
@@ -42,9 +43,9 @@ chmod +x "$WORK/editor-probe.sh"
 mkdir -p "$WORK/.dmux"
 cat > "$WORK/.dmux/dmux.config.json" <<EOF
 {"projectName":"ui-smoke","projectRoot":"$WORK","panes":[
- {"id":"1","slug":"terminal-1","prompt":"","paneId":"%9","type":"shell","shellCwd":"$WORK"},
- {"id":"2","slug":"other-term","prompt":"","paneId":"%10","type":"shell",
-  "shellCwd":"$WORK/other-project","projectRoot":"$WORK/other-project"}
+ {"id":"1","slug":"terminal-1","prompt":"","paneId":"%9","type":"worktree","agent":"tail -f /dev/null","shellCwd":"$WORK","worktreePath":"$WORK"},
+ {"id":"2","slug":"other-term","prompt":"","paneId":"%10","type":"worktree","agent":"tail -f /dev/null",
+  "shellCwd":"$WORK/other-project","worktreePath":"$WORK/other-project","projectRoot":"$WORK/other-project"}
 ]}
 EOF
 
@@ -83,10 +84,11 @@ wait_for() { # $1 = regex, $2 = label, [$3 = seconds]
 
 sidebar_rows() { # $1 = pane title; prints every matching 1-based row
   cap | python3 -c '
-import sys
+import re, sys
 pane = sys.argv[1]
 for row, line in enumerate(sys.stdin, 1):
     label = line[:40][4:].strip()
+    label = re.sub(r"\s+\[[^]]+\]$", "", label)
     for suffix in (" (hidden)", " (closing…)"):
         if label.endswith(suffix):
             label = label[:-len(suffix)]
@@ -173,7 +175,7 @@ open_sidebar_menu() { # $1 = pane title, $2 = pointer column, $3 = failure label
 # ---- boot ------------------------------------------------------------------
 tmux -L "$DRV" -f /dev/null new-session -d -s drv -x $DW -y $DH "exec bash"
 drv_keys "cd $WORK && EDITOR=$WORK/editor-probe.sh UI_SMOKE_RESULT=$WORK/editor-cwd.txt \
-env -u TMUX HOME=$WORK/home $BIN --socket $TGT" Enter
+env -u TMUX HOME=$WORK/home DMUX_NO_UPDATE=1 $BIN --socket $TGT" Enter
 sleep 4
 # Accept the session-recovery dialog (fixture panes are recreated from it).
 drv_keys Enter; sleep 4
@@ -188,6 +190,12 @@ if stable_sidebar_row "other-term" editor-sidebar-target; then
   ROW=$SIDEBAR_ROW
   left_click 5 "$ROW"
   open_sidebar_menu "other-term" 5 menu-open && {
+    if cap | /usr/bin/grep -q "Load this worktree as dmux-rs"; then
+      echo "  prototype action appeared for an unrelated repository"
+      fail prototype-menu-repository-filter
+    else
+      echo "PASS prototype-menu repository filter (unrelated worktree omitted)"
+    fi
     drv_keys o; sleep 3
     if [ -f "$WORK/editor-cwd.txt" ] && [ "$(cat "$WORK/editor-cwd.txt")" = "$WORK/other-project" ]; then
       echo "PASS editor-cwd (pane-owned directory)"
@@ -225,6 +233,12 @@ if stable_sidebar_row "terminal-1" marker-sidebar-target; then
       else
         echo "  expected one context menu after repeated right-click, got $MENU_COUNT"
         fail context-menu-singleton
+      fi
+      if cap | /usr/bin/grep -q "Load this worktree as dmux-rs"; then
+        echo "PASS prototype-menu release build (dmux-rs worktree offered)"
+      else
+        echo "  expected prototype action in a tagged release build"
+        fail prototype-menu-release-build
       fi
       ANSI=$(cap_ansi)
       # SGR runs may separate the color set from the text; assert both on the
