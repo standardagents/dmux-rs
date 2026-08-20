@@ -166,20 +166,20 @@ Loop rules:
   working in the repository, run `scripts/work-issue.sh <n>` after the claim
   and work from the path it prints. Each active issue must use its own
   worktree. Keep the shared root checkout free of issue edits.
-- **Completion lifecycle (#73) — the steps run in exactly this order,**
-  and "the issue closed" is not "the work is delivered":
+- **Completion lifecycle (#73).** An issue is delivered after these steps run
+  in order:
   1. Commit with `Fixes #<n>` in the message.
   2. Push to `main`. GitHub processes the `Fixes` reference **at this
-     moment** — the issue closing on push is the expected intermediate
-     state, not the end of the job. The release has not happened yet.
+     moment**. The resulting issue closure is an intermediate state before
+     the release and delivery record.
   3. Release (`scripts/release.sh patch|minor`). It refuses dirty or
      unsynchronized state and re-validates before publishing.
   4. Post the delivery record: `issue finish <n> --session <session-id>
-     --idempotency-key <completion-key> "<explanation>"`. Its role after
-     GitHub's merge-time closure is NOT to close — it posts
-     the explanation testers read, attaches the commit sha and released
-     version, and moves the Team card to Done. The tool answering
-     "already completed" while still posting is the normal outcome.
+     --idempotency-key <completion-key> "<explanation>"`. After GitHub's
+     merge-time closure, this command posts the explanation testers read,
+     attaches the commit sha and released version, releases the claim, and
+     moves the Team card to Done. An `already completed` result can accompany
+     a successful delivery record.
   5. **If the release fails after the auto-close**: the fix is on `main`
      but undelivered. Reopen the issue with a comment saying exactly
      that, repair the release, then run step 4. Never leave an issue
@@ -195,15 +195,12 @@ Loop rules:
 - **Every fixed incident goes into the corpus**
   (`crates/dmux/tests/corpus/<issue-number>.incident`) so it can never
   regress silently.
-- **Release every iteration.** After validation passes and `main` is
-  pushed, run `scripts/release.sh patch` (bug fixes / incidents) or
-  `scripts/release.sh minor` (features). Versions are semver (`vX.Y.Z`),
-  derived from the latest git tag; the script is self-guarding — it
-  refuses dirty or unpushed state and re-runs the full suite plus the
-  fidelity harness before publishing, so a bad build cannot ship even
-  from an unattended loop. Close the issue only after the release
-  succeeds, referencing both the commit sha and the version. Test-ring
-  heads self-update within ~1 minute; the sidebar shows the new version.
+- **Release type.** Use `scripts/release.sh patch` for bug fixes and incidents.
+  Use `scripts/release.sh minor` for features. The script derives the next
+  semver version (`vX.Y.Z`) from the latest git tag and enforces clean,
+  synchronized, fully validated source. The completion lifecycle above
+  governs release and delivery ordering. Test-ring heads self-update within
+  about one minute, and the sidebar shows the new version.
 - **Non-reproducing issues** (`replay-deterministic: no`, or the replay is
   clean): comment findings, label `cannot-reproduce`, close. If the replay
   is clean but the live grid diverged, the bug is likely in the emit/host
@@ -237,9 +234,8 @@ For each open issue with label `render-incident`:
 4. Lock: copy the bundle to `crates/dmux/tests/corpus/<issue>.incident` —
    `corpus_incidents_replay_clean` replays every corpus file forever.
 5. Validate: `scripts/validate.sh` fully green (tests + fidelity).
-6. Release: `scripts/release.sh patch`, then close the issue referencing
-   the commit and the new `vX.Y.Z`. Running heads pick the fix up
-   automatically within about a minute.
+6. Deliver: follow the completion lifecycle in the loop rules with a patch
+   release. The delivery record references the commit and new `vX.Y.Z`.
 
 Non-reproducing incidents (`replay-deterministic: no`, or replay clean):
 comment findings and close as `cannot-reproduce`; if replay is clean but
