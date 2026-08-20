@@ -391,7 +391,13 @@ impl App {
                 }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
                     if p.reseed_buffer.is_none() && !p.paused && !p.throttled {
-                        p.pending_verify = Some((reply, Instant::now()));
+                        p.pending_verify = Some(crate::verify::PendingCapture {
+                            reply,
+                            at: Instant::now(),
+                            cols: p.cols,
+                            rows: p.rows,
+                            reseed_count: p.reseed_count,
+                        });
                     }
                 }
             }

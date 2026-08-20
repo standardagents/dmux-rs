@@ -44,6 +44,17 @@ pub fn capture_ready(
     CaptureVerdict::Ready
 }
 
+/// A verify capture held for post-capture quiescence, with the pane
+/// context it was taken against (#118).
+#[derive(Debug, Clone)]
+pub struct PendingCapture {
+    pub reply: Reply,
+    pub at: std::time::Instant,
+    pub cols: u16,
+    pub rows: u16,
+    pub reseed_count: u64,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CaptureVerdict {
     /// Output arrived after the capture: the reply is stale — discard.
@@ -333,17 +344,27 @@ impl crate::App {
         };
         let mut reports = Vec::new();
         for p in &mut self.panes {
-            let Some((_, stashed_at)) = p.pending_verify.as_ref() else {
+            let Some(stash) = p.pending_verify.as_ref() else {
                 continue;
             };
-            match capture_ready(*stashed_at, p.last_output, now) {
+            // A resize or reseed since the capture replaces the grid the
+            // reply was taken against (#118): the reply is unconditionally
+            // stale — reflow debris is not a render divergence.
+            if stash.cols != p.cols || stash.rows != p.rows || stash.reseed_count != p.reseed_count
+            {
+                tracing::debug!(pane = %p.tmux_pane, "verify capture invalidated by resize/reseed");
+                p.pending_verify = None;
+                continue;
+            }
+            match capture_ready(stash.at, p.last_output, now) {
                 CaptureVerdict::Waiting => {}
                 CaptureVerdict::Raced => {
                     tracing::debug!(pane = %p.tmux_pane, "verify capture raced output; discarded");
                     p.pending_verify = None;
                 }
                 CaptureVerdict::Ready => {
-                    let (reply, _) = p.pending_verify.take().expect("stash present");
+                    let stash = p.pending_verify.take().expect("stash present");
+                    let reply = stash.reply;
                     if p.paused || p.throttled || p.reseed_buffer.is_some() {
                         continue;
                     }
@@ -379,6 +400,29 @@ impl crate::App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stashed_captures_die_with_their_grid_context() {
+        // #118: the stash records dimensions and the reseed generation; any
+        // change means the reply describes a grid that no longer exists.
+        let stash = PendingCapture {
+            reply: Reply {
+                lines: vec![],
+                ok: true,
+                rtt: std::time::Duration::ZERO,
+            },
+            at: Instant::now(),
+            cols: 98,
+            rows: 74,
+            reseed_count: 3,
+        };
+        let same = (stash.cols, stash.rows, stash.reseed_count) == (98, 74, 3);
+        assert!(same);
+        let resized = (stash.cols, stash.rows, stash.reseed_count) == (97, 74, 3);
+        assert!(!resized);
+        let reseeded = (stash.cols, stash.rows, stash.reseed_count) == (98, 74, 4);
+        assert!(!reseeded);
+    }
 
     #[test]
     fn post_capture_gate_orders_race_wait_and_ready() {

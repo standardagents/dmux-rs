@@ -796,7 +796,7 @@ async fn run(
         let verify_deadline = app
             .panes
             .iter()
-            .filter_map(|p| p.pending_verify.as_ref().map(|(_, at)| *at))
+            .filter_map(|p| p.pending_verify.as_ref().map(|stash| stash.at))
             .min()
             .map(|at| tokio::time::Instant::from_std(at + verify::POST_CAPTURE_QUIET));
         let tracking_deadline = (!app.tracking_inflight

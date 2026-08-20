@@ -128,8 +128,13 @@ pub struct LogicalPane {
     pub last_verify: Option<std::time::Instant>,
     /// A verify capture waiting out post-capture quiescence (#113): the
     /// reply is compared only after no further output arrives, closing the
-    /// %output-behind-capture delivery race.
-    pub pending_verify: Option<(Reply, std::time::Instant)>,
+    /// %output-behind-capture delivery race. The stash also records the
+    /// pane's dimensions and reseed generation (#118): a resize or reseed
+    /// between capture and comparison invalidates the reply.
+    pub pending_verify: Option<crate::verify::PendingCapture>,
+    /// Bumped by every begin_reseed; lets a stashed verify capture detect
+    /// that the grid it was taken against has been replaced (#118).
+    pub reseed_count: u64,
     /// An issue was auto-filed for this pane; no more reports until the
     /// process reloads (which is also when a fixed build arrives).
     pub issue_filed: bool,
@@ -160,6 +165,7 @@ impl LogicalPane {
     /// Begin a reseed: fresh emulator, buffer live output until the capture
     /// reply arrives.
     pub fn begin_reseed(&mut self) {
+        self.reseed_count += 1;
         self.term = PaneTerm::new(self.cols, self.rows, PANE_SCROLLBACK);
         // A pane that tmux reports on the alternate screen must seed onto
         // the alternate grid. Seeding it onto the primary grid left the
