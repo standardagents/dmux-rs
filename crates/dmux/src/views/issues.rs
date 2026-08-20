@@ -12,7 +12,7 @@ use dmux_ui::{
     ButtonStyle, ClickMap, ListState, PanelStyle,
 };
 
-use crate::github::{GitHubIssue, IssueLoadState, SharedIssueState};
+use crate::github::{issue_section, GitHubIssue, IssueLoadState, SharedIssueState};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -27,7 +27,7 @@ pub struct IssueBrowserView {
     state: SharedIssueState,
     list: ListState,
     selected: BTreeSet<(String, u64)>,
-    last_rows: Vec<(String, u64, String, String)>,
+    last_rows: Vec<(String, u64, String, String, String)>,
 }
 
 impl IssueBrowserView {
@@ -152,7 +152,14 @@ fn loaded_issues(state: &IssueLoadState) -> Option<&Vec<GitHubIssue>> {
     }
 }
 
-fn rows_key(state: &IssueLoadState) -> Vec<(String, u64, String, String)> {
+fn loaded_viewer_login(state: &IssueLoadState) -> Option<&str> {
+    match state {
+        IssueLoadState::Loaded { viewer_login, .. } => Some(viewer_login),
+        _ => None,
+    }
+}
+
+fn rows_key(state: &IssueLoadState) -> Vec<(String, u64, String, String, String)> {
     loaded_issues(state)
         .map(|issues| {
             issues
@@ -163,6 +170,7 @@ fn rows_key(state: &IssueLoadState) -> Vec<(String, u64, String, String)> {
                         issue.number,
                         issue.title.clone(),
                         issue.url.clone(),
+                        issue.assignees.join("\0"),
                     )
                 })
                 .collect()
@@ -170,21 +178,41 @@ fn rows_key(state: &IssueLoadState) -> Vec<(String, u64, String, String)> {
         .unwrap_or_default()
 }
 
-fn grouped_row_count(issues: &[GitHubIssue], start: usize, end: usize) -> usize {
+fn grouped_row_count(
+    issues: &[GitHubIssue],
+    viewer_login: &str,
+    start: usize,
+    end: usize,
+) -> usize {
     if start > end || start >= issues.len() {
         return 0;
     }
     let end = end.min(issues.len() - 1);
-    let mut rows = end - start + 2;
-    for index in start + 1..=end {
-        if issues[index - 1].repository != issues[index].repository {
-            rows += 1;
+    let mut rows = 0;
+    let mut previous_section = None;
+    let mut previous_repository = None;
+    for issue in &issues[start..=end] {
+        let section = issue_section(issue, viewer_login)
+            .expect("loaded issue must belong to the viewer or be unassigned");
+        if previous_section != Some(section) {
+            previous_section = Some(section);
+            previous_repository = None;
         }
+        if previous_repository.as_deref() != Some(issue.repository.as_str()) {
+            rows += 1;
+            previous_repository = Some(issue.repository.clone());
+        }
+        rows += 1;
     }
     rows
 }
 
-fn ensure_grouped_visible(list: &mut ListState, issues: &[GitHubIssue], visible_rows: usize) {
+fn ensure_grouped_visible(
+    list: &mut ListState,
+    issues: &[GitHubIssue],
+    viewer_login: &str,
+    visible_rows: usize,
+) {
     if visible_rows == 0 || issues.is_empty() {
         return;
     }
@@ -192,7 +220,7 @@ fn ensure_grouped_visible(list: &mut ListState, issues: &[GitHubIssue], visible_
         list.scroll = list.selected;
     }
     while list.scroll < list.selected
-        && grouped_row_count(issues, list.scroll, list.selected) > visible_rows
+        && grouped_row_count(issues, viewer_login, list.scroll, list.selected) > visible_rows
     {
         list.scroll += 1;
     }
@@ -222,18 +250,15 @@ impl View for IssueBrowserView {
     ) -> Option<(u16, u16)> {
         let state = state_snapshot(&self.state);
         self.sync_rows(&state);
-        let issue_count = loaded_issues(&state).map_or(0, Vec::len);
-        let repository_count = loaded_issues(&state).map_or(0, |issues| {
-            issues
-                .iter()
-                .map(|issue| issue.repository.as_str())
-                .collect::<BTreeSet<_>>()
-                .len()
-        });
+        let viewer_login = loaded_viewer_login(&state).unwrap_or_default();
         let max_h = area.h.saturating_sub(2);
-        // Body: the grouped list (issues plus one header per repository),
-        // one blank row, then the action-button row.
-        let list_rows = (issue_count + repository_count).max(2) as u16;
+        // Body: the ownership and optional repository headings plus issue
+        // rows, one blank row, then the action-button row.
+        let list_rows = loaded_issues(&state)
+            .filter(|issues| !issues.is_empty())
+            .map_or(2, |issues| {
+                grouped_row_count(issues, viewer_login, 0, issues.len() - 1)
+            }) as u16;
         let h = frame_height(list_rows + 2)
             .min(max_h)
             .max(max_h.min(frame_height(4)));
@@ -253,7 +278,7 @@ impl View for IssueBrowserView {
         let rows_bottom = content.bottom().saturating_sub(2);
         let visible = rows_bottom.saturating_sub(content.y) as usize;
         if let Some(issues) = loaded_issues(&state) {
-            ensure_grouped_visible(&mut self.list, issues, visible);
+            ensure_grouped_visible(&mut self.list, issues, viewer_login, visible);
         }
 
         match &state {
@@ -307,11 +332,15 @@ impl View for IssueBrowserView {
                     inner,
                 );
             }
-            IssueLoadState::Loaded { repository, issues } if issues.is_empty() => {
+            IssueLoadState::Loaded {
+                viewer_login,
+                issues,
+                ..
+            } if issues.is_empty() => {
                 buf.draw_text(
                     content.x,
                     content.y,
-                    &format!("No open issues in {repository}"),
+                    &format!("No issues are assigned to @{viewer_login} or awaiting assignment"),
                     ctx.theme.text_dim,
                     bg,
                     AttrFlags::empty(),
@@ -320,16 +349,29 @@ impl View for IssueBrowserView {
             }
             IssueLoadState::Loaded { issues, .. } => {
                 let mut y = content.y;
+                let mut previous_section = None;
                 let mut previous_repository = None;
                 for (idx, issue) in issues.iter().enumerate().skip(self.list.scroll) {
                     if y >= rows_bottom {
                         break;
                     }
+                    let section = issue_section(issue, viewer_login)
+                        .expect("loaded issue must belong to the viewer or be unassigned");
+                    let section_changed = previous_section != Some(section);
+                    if section_changed {
+                        previous_section = Some(section);
+                        previous_repository = None;
+                    }
                     if previous_repository.as_deref() != Some(issue.repository.as_str()) {
+                        let heading = if section_changed {
+                            format!("{} · {}", section.label(), issue.repository)
+                        } else {
+                            issue.repository.clone()
+                        };
                         buf.draw_text(
                             content.x,
                             y,
-                            &issue.repository,
+                            &heading,
                             ctx.theme.accent,
                             bg,
                             AttrFlags::BOLD,
@@ -562,6 +604,12 @@ mod tests {
         }
     }
 
+    fn unassigned_issue(number: u64, title: &str) -> GitHubIssue {
+        let mut issue = issue(number, title);
+        issue.assignees.clear();
+        issue
+    }
+
     fn key(key: KeyCode) -> KeyEvent {
         KeyEvent {
             key,
@@ -572,6 +620,7 @@ mod tests {
     fn loaded() -> (SharedIssueState, IssueBrowserView) {
         let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
             repository: "owner/repo".into(),
+            viewer_login: "andrew".into(),
             issues: vec![issue(1, "First"), issue(2, "Second")],
         }));
         let view = IssueBrowserView::new("/projects/repo".into(), state.clone());
@@ -620,6 +669,7 @@ mod tests {
     fn selection_distinguishes_matching_numbers_across_repositories() {
         let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
             repository: "2 repositories".into(),
+            viewer_login: "andrew".into(),
             issues: vec![
                 issue_in("owner/first", 1, "First repository"),
                 issue_in("owner/second", 1, "Second repository"),
@@ -636,7 +686,7 @@ mod tests {
         assert!(prompt.contains("owner/first#1: First repository"));
         assert!(prompt.contains("owner/second#1: Second repository"));
         assert_eq!(
-            grouped_row_count(loaded_issues(&snapshot).unwrap(), 0, 1),
+            grouped_row_count(loaded_issues(&snapshot).unwrap(), "andrew", 0, 1),
             4
         );
     }
@@ -669,6 +719,7 @@ mod tests {
         assert_eq!(view.selected_count(), 1);
         *state.lock().unwrap() = IssueLoadState::Loaded {
             repository: "owner/repo".into(),
+            viewer_login: "andrew".into(),
             issues: vec![issue(3, "Changed")],
         };
         view.on_key(&key(KeyCode::DownArrow));
@@ -721,6 +772,44 @@ mod tests {
     }
 
     #[test]
+    fn overlay_groups_yours_before_unassigned_issues() {
+        let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
+            repository: "owner/repo".into(),
+            viewer_login: "andrew".into(),
+            issues: vec![issue(1, "Claimed"), unassigned_issue(2, "Available")],
+        }));
+        let mut view = IssueBrowserView::new("/projects/repo".into(), state);
+        let mut buf = CellBuffer::new(100, 24);
+        let area = buf.area();
+        let theme = dmux_ui::Theme::default();
+        let ctx = ViewCtx {
+            theme: &theme,
+            anim: 0,
+            hovered: None,
+        };
+        let mut clicks = ClickMap::new();
+
+        view.render(&mut buf, area, &ctx, &mut clicks);
+
+        let rows: Vec<String> = (0..24)
+            .map(|y| (0..100).map(|x| buf.get(x, y).ch).collect())
+            .collect();
+        let yours = rows.iter().position(|row| row.contains("Yours")).unwrap();
+        let claimed = rows.iter().position(|row| row.contains("Claimed")).unwrap();
+        let unassigned = rows
+            .iter()
+            .position(|row| row.contains("Unassigned"))
+            .unwrap();
+        let available = rows
+            .iter()
+            .position(|row| row.contains("Available"))
+            .unwrap();
+        assert!(yours < claimed);
+        assert!(claimed < unassigned);
+        assert!(unassigned < available);
+    }
+
+    #[test]
     fn loading_empty_and_error_states_are_safe() {
         for state in [
             IssueLoadState::Unavailable,
@@ -729,6 +818,7 @@ mod tests {
             },
             IssueLoadState::Loaded {
                 repository: "owner/repo".into(),
+                viewer_login: "andrew".into(),
                 issues: Vec::new(),
             },
             IssueLoadState::Error {

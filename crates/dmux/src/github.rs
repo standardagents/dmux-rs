@@ -28,6 +28,21 @@ pub struct GitHubIssue {
     pub updated_at: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum IssueSection {
+    Yours,
+    Unassigned,
+}
+
+impl IssueSection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yours => "Yours",
+            Self::Unassigned => "Unassigned",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum IssueLoadState {
     Unavailable,
@@ -36,6 +51,7 @@ pub enum IssueLoadState {
     },
     Loaded {
         repository: String,
+        viewer_login: String,
         issues: Vec<GitHubIssue>,
     },
     Error {
@@ -56,7 +72,12 @@ pub fn issue_state_label(state: Option<&SharedIssueState>) -> String {
     match &*state {
         IssueLoadState::Unavailable => String::new(),
         IssueLoadState::Loading { .. } => "loading…".into(),
-        IssueLoadState::Loaded { issues, .. } => issue_count_label(issues.len()),
+        IssueLoadState::Loaded { issues, .. } => issue_count_label(
+            issues
+                .iter()
+                .filter(|issue| issue.assignees.is_empty())
+                .count(),
+        ),
         IssueLoadState::Error { .. } => "issues unavailable".into(),
     }
 }
@@ -81,34 +102,38 @@ pub fn refresh_issue_state(
             Ok(repositories) if repositories.is_empty() => IssueLoadState::Unavailable,
             Ok(repositories) => {
                 let label = repository_label(&repositories);
-                let mut issues = Vec::new();
-                let mut error = None;
-                for repository in &repositories {
-                    match fetch_open_issues(repository) {
-                        Ok(mut repository_issues) => issues.append(&mut repository_issues),
-                        Err(message) => {
-                            error = Some(format!("{}: {message}", repository.slug));
-                            break;
+                match authenticated_viewer_login() {
+                    Ok(viewer_login) => {
+                        let mut issues = Vec::new();
+                        let mut error = None;
+                        for repository in &repositories {
+                            match fetch_open_issues(repository) {
+                                Ok(mut repository_issues) => issues.append(&mut repository_issues),
+                                Err(message) => {
+                                    error = Some(format!("{}: {message}", repository.slug));
+                                    break;
+                                }
+                            }
+                        }
+                        match error {
+                            Some(message) => IssueLoadState::Error {
+                                repository: Some(label),
+                                message,
+                            },
+                            None => {
+                                prepare_issues_for_view(&mut issues, &viewer_login);
+                                IssueLoadState::Loaded {
+                                    repository: label,
+                                    viewer_login,
+                                    issues,
+                                }
+                            }
                         }
                     }
-                }
-                match error {
-                    Some(message) => IssueLoadState::Error {
+                    Err(message) => IssueLoadState::Error {
                         repository: Some(label),
                         message,
                     },
-                    None => {
-                        issues.sort_by(|left, right| {
-                            left.repository
-                                .cmp(&right.repository)
-                                .then_with(|| right.updated_at.cmp(&left.updated_at))
-                                .then_with(|| left.number.cmp(&right.number))
-                        });
-                        IssueLoadState::Loaded {
-                            repository: label,
-                            issues,
-                        }
-                    }
                 }
             }
             Err(message) => IssueLoadState::Error {
@@ -258,6 +283,52 @@ pub fn issue_count_label(count: usize) -> String {
     }
 }
 
+pub fn issue_section(issue: &GitHubIssue, viewer_login: &str) -> Option<IssueSection> {
+    if issue
+        .assignees
+        .iter()
+        .any(|login| login.eq_ignore_ascii_case(viewer_login))
+    {
+        Some(IssueSection::Yours)
+    } else if issue.assignees.is_empty() {
+        Some(IssueSection::Unassigned)
+    } else {
+        None
+    }
+}
+
+fn prepare_issues_for_view(issues: &mut Vec<GitHubIssue>, viewer_login: &str) {
+    issues.retain(|issue| issue_section(issue, viewer_login).is_some());
+    issues.sort_by(|left, right| {
+        issue_section(left, viewer_login)
+            .cmp(&issue_section(right, viewer_login))
+            .then_with(|| left.repository.cmp(&right.repository))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.number.cmp(&right.number))
+    });
+}
+
+fn authenticated_viewer_login() -> Result<String, String> {
+    let output = viewer_api_command()
+        .output()
+        .map_err(|error| format!("could not run gh: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "gh could not identify the authenticated user".to_owned()
+        } else {
+            format!("gh could not identify the authenticated user: {detail}")
+        });
+    }
+    let login = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if login.is_empty() {
+        return Err("gh returned an empty authenticated user login".to_owned());
+    }
+    Ok(login)
+}
+
 fn parse_issue(value: Value) -> Result<Option<GitHubIssue>, String> {
     let object = value
         .as_object()
@@ -340,6 +411,12 @@ fn issue_api_command(repo: &RepoRef) -> Command {
     let endpoint = format!("repos/{}/issues?state=open&per_page=100", repo.slug);
     let mut command = Command::new("gh");
     command.args(["api", "--paginate"]).arg(endpoint);
+    command
+}
+
+fn viewer_api_command() -> Command {
+    let mut command = Command::new("gh");
+    command.args(["api", "user", "--jq", ".login"]);
     command
 }
 
@@ -497,6 +574,21 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_count_includes_only_unassigned_issues() {
+        let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
+            repository: "owner/repo".into(),
+            viewer_login: "andrew".into(),
+            issues: vec![
+                test_issue(1, &[]),
+                test_issue(2, &["andrew"]),
+                test_issue(3, &["someone-else"]),
+            ],
+        }));
+
+        assert_eq!(issue_state_label(Some(&state)), "1 issue");
+    }
+
+    #[test]
     fn discovers_nested_repositories_and_deduplicates_remotes() {
         let tree = TestTree::new();
         tree.init_repo("", "git@github.com:standardagents/coordinator.git");
@@ -623,6 +715,41 @@ mod tests {
     }
 
     #[test]
+    fn identifies_the_viewer_through_gh_authentication() {
+        let command = viewer_api_command();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["api", "user", "--jq", ".login"]);
+    }
+
+    #[test]
+    fn keeps_yours_and_unassigned_in_section_order() {
+        let mut issues = vec![
+            test_issue(1, &[]),
+            test_issue(2, &["someone-else"]),
+            test_issue(3, &["coauthor", "AnDrEw"]),
+            test_issue(4, &["andrew"]),
+        ];
+
+        prepare_issues_for_view(&mut issues, "andrew");
+
+        assert_eq!(
+            issues.iter().map(|issue| issue.number).collect::<Vec<_>>(),
+            [4, 3, 1]
+        );
+        assert_eq!(
+            issue_section(&issues[0], "andrew"),
+            Some(IssueSection::Yours)
+        );
+        assert_eq!(
+            issue_section(&issues[2], "andrew"),
+            Some(IssueSection::Unassigned)
+        );
+    }
+
+    #[test]
     fn parses_an_unpaginated_array_too() {
         let json = r#"[{"number":1,"title":"Issue","html_url":"https://github.com/o/r/issues/1","labels":[],"assignees":[],"updated_at":"today"}]"#;
         assert_eq!(parse_issues_json(json).unwrap().len(), 1);
@@ -633,5 +760,17 @@ mod tests {
         assert!(parse_issues_json("{}").is_err());
         assert!(parse_issues_json("not json").is_err());
         assert!(parse_issues_json("[{\"number\":1}]").is_err());
+    }
+
+    fn test_issue(number: u64, assignees: &[&str]) -> GitHubIssue {
+        GitHubIssue {
+            repository: "owner/repo".into(),
+            number,
+            title: format!("Issue {number}"),
+            url: format!("https://github.com/owner/repo/issues/{number}"),
+            labels: Vec::new(),
+            assignees: assignees.iter().map(|login| (*login).to_owned()).collect(),
+            updated_at: format!("2026-08-19T20:00:0{number}Z"),
+        }
     }
 }
