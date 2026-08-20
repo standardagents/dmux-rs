@@ -358,8 +358,9 @@ import sys
 line = sys.stdin.buffer.read().decode("utf-8", "replace")
 cols = [i + 1 for i, ch in enumerate(line) if ch == "●"]
 # Dots come in groups of three per pane; the first pane on screen owns the
-# first group. Its third dot is the red close.
-print(cols[2] if len(cols) >= 3 else "")
+# first group. Since #110 the controls sit at the LEFT in macOS order, so
+# the FIRST dot is the red close.
+print(cols[0] if len(cols) >= 3 else "")
 ')
 if [ -n "$EDIT_DOTS" ]; then
   left_click "$EDIT_DOTS" 1
@@ -373,6 +374,32 @@ if [ -n "$EDIT_DOTS" ]; then
 else
   echo "  no title-bar dots found on row 1"
   fail transient-close-dots
+fi
+
+# ---- case 7: sidebar drag-and-drop reorder persists (#26) -------------------
+# Drag terminal-1's row below the editor row and assert both the immediate
+# sidebar order and the persisted config order change.
+leader t; sleep 3   # a second terminal: case 6 closed the editor pane
+if stable_sidebar_row "terminal-1" drag-src-row; then
+  SRC=$SIDEBAR_ROW
+  if stable_sidebar_row "terminal-2" drag-dst-row; then
+    DST=$SIDEBAR_ROW
+    sgr 0 5 "$SRC" M; sleep 0.3
+    sgr 32 5 "$DST" M; sleep 0.4
+    sgr 0 5 "$DST" m; sleep 1.2
+    ORDER=$(python3 -c "
+import json
+c = json.load(open('$WORK/.dmux/dmux.config.json'))
+print(','.join(p['slug'] for p in c['panes']))")
+    NEW_T1=$(sidebar_rows "terminal-1" | head -1)
+    if [ "$NEW_T1" != "$SRC" ] && printf '%s' "$ORDER" | /usr/bin/grep -q "terminal-1"; then
+      echo "PASS drag-reorder (row moved $SRC to $NEW_T1; persisted order: $ORDER)"
+    else
+      echo "  expected terminal-1 to move from row $SRC; now $NEW_T1; config: $ORDER"
+      sidebar_snapshot
+      fail drag-reorder
+    fi
+  fi
 fi
 
 # ---- result ----------------------------------------------------------------
