@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use hdrhistogram::Histogram;
 
+use crate::interaction::{Kind, Observation};
+
 pub(crate) const HUD_REFRESH: Duration = Duration::from_millis(500);
 const FPS_BUCKET: Duration = Duration::from_millis(250);
 const FPS_HISTORY_BUCKETS: usize = 32;
@@ -18,6 +20,22 @@ struct FrameRate {
     head: usize,
     completed: usize,
     bucket_start: Instant,
+}
+
+struct InteractionHistograms {
+    queue_us: Histogram<u64>,
+    pane_output_us: Histogram<u64>,
+    frame_us: Histogram<u64>,
+}
+
+impl InteractionHistograms {
+    fn new() -> Self {
+        Self {
+            queue_us: Histogram::new(3).unwrap(),
+            pane_output_us: Histogram::new(3).unwrap(),
+            frame_us: Histogram::new(3).unwrap(),
+        }
+    }
 }
 
 impl FrameRate {
@@ -88,6 +106,7 @@ pub struct Metrics {
     pub frames: u64,
     pub full_repaints: u64,
     pub coalesced: u64,
+    pub motion_coalesced: u64,
     pub bytes_in_total: u64,
     pub bytes_out_total: u64,
     pub pauses: u64,
@@ -97,6 +116,7 @@ pub struct Metrics {
     window_bytes_in: u64,
     pub bytes_in_per_sec: f64,
     frame_rate: FrameRate,
+    interactions: [InteractionHistograms; 3],
 }
 
 impl Metrics {
@@ -108,6 +128,7 @@ impl Metrics {
             frames: 0,
             full_repaints: 0,
             coalesced: 0,
+            motion_coalesced: 0,
             bytes_in_total: 0,
             bytes_out_total: 0,
             pauses: 0,
@@ -116,7 +137,26 @@ impl Metrics {
             window_bytes_in: 0,
             bytes_in_per_sec: 0.0,
             frame_rate: FrameRate::new(Instant::now()),
+            interactions: std::array::from_fn(|_| InteractionHistograms::new()),
         }
+    }
+
+    pub fn record_input_queue(&mut self, kind: Kind, elapsed: Duration) {
+        let _ = self.interactions[kind.index()]
+            .queue_us
+            .record(elapsed.as_micros().max(1) as u64);
+    }
+
+    pub fn record_pane_output(&mut self, observation: Observation) {
+        let _ = self.interactions[observation.kind.index()]
+            .pane_output_us
+            .record(observation.elapsed.as_micros().max(1) as u64);
+    }
+
+    pub fn record_interaction_frame(&mut self, observation: Observation) {
+        let _ = self.interactions[observation.kind.index()]
+            .frame_us
+            .record(observation.elapsed.as_micros().max(1) as u64);
     }
 
     pub fn record_input(&mut self, bytes: usize) {
@@ -156,10 +196,17 @@ impl Metrics {
     /// HUD lines, ready to draw.
     pub fn hud_lines(&self) -> Vec<String> {
         let p = |h: &Histogram<u64>, q: f64| h.value_at_quantile(q) as f64 / 1000.0;
-        vec![
+        let observed = |h: &Histogram<u64>, q: f64| {
+            if h.is_empty() {
+                "--".to_string()
+            } else {
+                format!("{:.2}", p(h, q))
+            }
+        };
+        let mut lines = vec![
             format!(
-                "frames {}  full {}  coalesced {}",
-                self.frames, self.full_repaints, self.coalesced
+                "frames {}  full {}  frame coalesced {}  motion skipped {}",
+                self.frames, self.full_repaints, self.coalesced, self.motion_coalesced
             ),
             format!(
                 "fps {:5.1}/60  {}",
@@ -178,15 +225,29 @@ impl Metrics {
                 p(&self.frame_diff_us, 0.95),
                 p(&self.frame_write_us, 0.95)
             ),
+        ];
+        for kind in Kind::ALL {
+            let histograms = &self.interactions[kind.index()];
+            lines.push(format!(
+                "{} queue95 {} first-out95 {} server-frame50/95 {}/{}",
+                kind.label(),
+                observed(&histograms.queue_us, 0.95),
+                observed(&histograms.pane_output_us, 0.95),
+                observed(&histograms.frame_us, 0.50),
+                observed(&histograms.frame_us, 0.95)
+            ));
+        }
+        lines.extend([
             format!(
-                "in {:.1} KB/s ({} MB total)  out {} MB  pauses {}",
+                "pane in {:.1} KB/s ({} MB total)  out {} MB  pauses {}",
                 self.bytes_in_per_sec / 1024.0,
                 self.bytes_in_total / (1024 * 1024),
                 self.bytes_out_total / (1024 * 1024),
                 self.pauses
             ),
             format!("uptime {}s", self.uptime().as_secs()),
-        ]
+        ]);
+        lines
     }
 }
 
@@ -247,5 +308,40 @@ mod tests {
         assert!(line.starts_with("fps   0.0/60  "), "{line}");
         assert_eq!(line.chars().rev().take(FPS_HISTORY_BUCKETS).count(), 32);
         assert!(line.ends_with(&"·".repeat(FPS_HISTORY_BUCKETS)), "{line}");
+    }
+
+    #[test]
+    fn interaction_histograms_report_each_server_side_stage() {
+        let mut metrics = Metrics::new();
+        metrics.record_input_queue(Kind::Key, Duration::from_millis(2));
+        metrics.record_pane_output(Observation {
+            kind: Kind::Key,
+            elapsed: Duration::from_millis(4),
+        });
+        metrics.record_interaction_frame(Observation {
+            kind: Kind::Key,
+            elapsed: Duration::from_millis(7),
+        });
+
+        let lines = metrics.hud_lines();
+        assert!(
+            lines[4].contains("key queue95 2.00 first-out95 4.00 server-frame50/95 7.00/7.00"),
+            "{}",
+            lines[4]
+        );
+        assert!(lines[7].starts_with("pane in "), "{}", lines[7]);
+    }
+
+    #[test]
+    fn untouched_interaction_categories_show_missing_samples() {
+        let lines = Metrics::new().hud_lines();
+        assert_eq!(
+            lines[4],
+            "key queue95 -- first-out95 -- server-frame50/95 --/--"
+        );
+        assert_eq!(
+            lines[5],
+            "pointer queue95 -- first-out95 -- server-frame50/95 --/--"
+        );
     }
 }

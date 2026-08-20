@@ -28,6 +28,7 @@ impl App {
         let target = self.adopt_hover_target(target);
         if views::update_hover(&mut self.hovered, Some(target)) {
             self.dirty = true;
+            self.interactions.local_changed();
         }
     }
 

@@ -14,6 +14,14 @@ pub use termwiz::input::{
 };
 use tokio::sync::mpsc;
 
+/// One decoded terminal input event, stamped when its bytes reached dmux.
+/// Consumers can distinguish host/queue delay from later application work.
+#[derive(Debug)]
+pub struct TimedInputEvent {
+    pub event: InputEvent,
+    pub received_at: Instant,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
     #[error("stdout is not a tty")]
@@ -374,8 +382,8 @@ impl Default for InputDecoder {
 
 /// Spawn the blocking stdin reader thread. Parsed events land on the returned
 /// channel; the thread exits when stdin closes or the receiver is dropped.
-pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
-    let (tx, rx) = mpsc::channel::<InputEvent>(64);
+pub fn spawn_input_reader() -> mpsc::Receiver<TimedInputEvent> {
+    let (tx, rx) = mpsc::channel::<TimedInputEvent>(64);
     std::thread::Builder::new()
         .name("dmux-input".into())
         .spawn(move || {
@@ -390,7 +398,13 @@ pub fn spawn_input_reader() -> mpsc::Receiver<InputEvent> {
                         decoder.parse(
                             &buf[..n],
                             |event| {
-                                if tx.blocking_send(event).is_err() {
+                                if tx
+                                    .blocking_send(TimedInputEvent {
+                                        event,
+                                        received_at: Instant::now(),
+                                    })
+                                    .is_err()
+                                {
                                     closed = true;
                                 }
                             },

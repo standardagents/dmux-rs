@@ -214,6 +214,26 @@ pub fn encode_sgr_mouse(button: u8, pressed: bool, col: u16, row: u16) -> Vec<u8
     .into_bytes()
 }
 
+/// One terminal wheel tick maps to one row. Trackpads express velocity by
+/// producing more ticks, so multiplying each tick creates coarse SSH bursts.
+pub const fn wheel_view_delta(up: bool) -> i32 {
+    if up {
+        1
+    } else {
+        -1
+    }
+}
+
+/// Alternate-screen applications receive one cursor key per wheel tick.
+pub const fn alternate_scroll_bytes(up: bool, app_cursor: bool) -> &'static [u8] {
+    match (up, app_cursor) {
+        (true, false) => b"\x1b[A",
+        (true, true) => b"\x1bOA",
+        (false, false) => b"\x1b[B",
+        (false, true) => b"\x1bOB",
+    }
+}
+
 /// Classify a mouse event: (col, row, kind, shift), 0-based. termwiz erases
 /// the SGR distinction between a release and buttonless motion, so the app's
 /// tracked physical-button state disambiguates those events.
@@ -227,7 +247,7 @@ pub enum MouseKind {
     Release,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct MouseButtonState {
     left: bool,
     right: bool,
@@ -314,6 +334,14 @@ mod tests {
             mouse_buttons: buttons,
             modifiers: Modifiers::SHIFT,
         }
+    }
+
+    #[test]
+    fn trackpad_ticks_map_to_single_row_steps() {
+        assert_eq!(wheel_view_delta(true), 1);
+        assert_eq!(wheel_view_delta(false), -1);
+        assert_eq!(alternate_scroll_bytes(true, false), b"\x1b[A");
+        assert_eq!(alternate_scroll_bytes(false, true), b"\x1bOB");
     }
 
     fn km() -> crate::keys::Keymap {

@@ -15,6 +15,7 @@ mod hooks;
 mod hover;
 mod hud;
 mod input;
+mod interaction;
 mod keys;
 mod layout;
 mod metrics;
@@ -51,7 +52,7 @@ use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
 use dmux_compositor::{diff_frame, CellBuffer, Emitter};
 use dmux_core::i18n::t;
 use dmux_core::{encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsStore};
-use dmux_host::{HostTerminal, InputEvent};
+use dmux_host::HostTerminal;
 use dmux_ui::{ClickMap, Theme, VerticalAlign};
 use github::{IssueLoadState, SharedIssueState};
 use hover::tooltip_rect;
@@ -367,6 +368,8 @@ struct App {
     dirty: bool,
     force_full: bool,
     frame_clock: scheduler::FrameClock,
+    interactions: interaction::Tracker,
+    scroll_pacer: interaction::ScrollPacer,
     reconcile_in_flight: bool,
     reconcile_again: bool,
     status_msg: String,
@@ -590,6 +593,8 @@ async fn run(
         dirty: true,
         force_full: true,
         frame_clock: scheduler::FrameClock::new(Instant::now()),
+        interactions: interaction::Tracker::default(),
+        scroll_pacer: interaction::ScrollPacer::default(),
         reconcile_in_flight: true,
         reconcile_again: false,
         status_msg: String::new(),
@@ -745,6 +750,10 @@ async fn run(
         let render_deadline = app
             .dirty
             .then(|| tokio::time::Instant::from_std(app.frame_clock.deadline()));
+        let scroll_deadline = app
+            .scroll_pacer
+            .deadline()
+            .map(tokio::time::Instant::from_std);
         let settle_deadline = app
             .panes
             .iter()
@@ -796,6 +805,7 @@ async fn run(
         .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking_interval()));
         let deadline = [
             render_deadline,
+            scroll_deadline,
             settle_deadline,
             hud_deadline,
             resume_deadline,
@@ -821,15 +831,30 @@ async fn run(
             // Input outranks pane output (#29): under an %output flood the
             // unbiased select could keep picking the events branch, delaying
             // a keypress — the reported unacknowledged close Enter. Biased
-            // order makes every loop pass drain pending input first; the
-            // event branch's own 256-message budget already bounds cc work
-            // per pass, so nothing starves.
+            // order makes every loop pass drain pending input first. Motion
+            // bursts collapse to their newest position, and the control-event
+            // drain yields as soon as fresh input arrives.
             biased;
             maybe_input = input_rx.recv() => {
                 match maybe_input {
                     Some(ev) => {
-                        if !app.handle_input(ev) { break; }
+                        if !app.handle_due_scroll(Instant::now()) { break; }
+                        let batch = interaction::drain_input_batch(
+                            ev,
+                            &mut input_rx,
+                            app.mouse_buttons,
+                        );
+                        app.metrics.motion_coalesced += batch.coalesced_motion;
+                        let mut keep_running = true;
+                        for event in batch.events {
+                            if !app.handle_or_queue_timed_input(event) {
+                                keep_running = false;
+                                break;
+                            }
+                        }
+                        if !keep_running { break; }
                         app.render_if_due();
+                        app.handle_deadlines_if_due(deadline);
                     }
                     None => break,
                 }
@@ -837,10 +862,16 @@ async fn run(
             maybe_ev = events.recv() => {
                 match maybe_ev {
                     Some(ev) => {
+                        if !app.handle_due_scroll(Instant::now()) { break; }
                         if !app.handle_cc(ev) { break; }
                         let mut budget = 256;
                         while budget > 0
-                            && app.frame_clock.should_drain(app.dirty, Instant::now())
+                            && input_rx.is_empty()
+                            && app.frame_clock.should_drain(
+                                app.dirty,
+                                app.scroll_pacer.deadline(),
+                                Instant::now(),
+                            )
                         {
                             match events.try_recv() {
                                 Ok(ev) => {
@@ -851,12 +882,13 @@ async fn run(
                             }
                         }
                         app.render_if_due();
+                        app.handle_deadlines_if_due(deadline);
                     }
                     None => break,
                 }
             }
             Some(new_size) = resize_rx.recv() => {
-                app.handle_resize(new_size);
+                app.handle_interaction_resize(new_size);
             }
             Some(msg) = app_rx.recv() => {
                 app.handle_app_msg(msg);
@@ -865,6 +897,7 @@ async fn run(
             _ = sigterm.recv() => break,
             _ = sighup.recv() => break,
             _ = timer => {
+                if !app.handle_due_scroll(Instant::now()) { break; }
                 app.handle_deadlines();
             }
         }
@@ -1156,6 +1189,8 @@ impl App {
         match ev {
             CcEvent::Output { pane, data } | CcEvent::ExtendedOutput { pane, data, .. } => {
                 self.metrics.record_input(data.len());
+                let output_at = Instant::now();
+                let mut visible_output = false;
                 let data = if self.fault_drop > 0 {
                     let n = data.len().min(self.fault_drop);
                     self.fault_drop -= n;
@@ -1165,7 +1200,7 @@ impl App {
                 };
                 let mut clipboard_out: Vec<String> = Vec::new();
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
-                    let now = Instant::now();
+                    let now = output_at;
                     if now.duration_since(p.window_start) >= FLOOD_WINDOW {
                         p.window_start = now;
                         p.window_bytes = 0;
@@ -1189,6 +1224,7 @@ impl App {
                             p.status = PaneStatus::Working;
                         }
                         self.dirty = true;
+                        visible_output = true;
                     }
 
                     if !p.throttled && p.window_bytes > FLOOD_BYTES_PER_WINDOW {
@@ -1197,6 +1233,15 @@ impl App {
                         p.resume_at = Some(now + FLOOD_RESEED_EVERY);
                         let _ = self.client.send(format!("refresh-client -A '{pane}:off'"));
                         self.dirty = true;
+                    }
+                }
+                if visible_output {
+                    let observations = self.interactions.pane_output(pane, output_at);
+                    if !observations.is_empty() {
+                        for observation in observations {
+                            self.metrics.record_pane_output(observation);
+                        }
+                        self.frame_clock.request_interactive(output_at);
                     }
                 }
                 for text in clipboard_out {
@@ -2183,64 +2228,6 @@ impl App {
         self.relayout();
     }
 
-    // ------------------------------------------------------------------
-    /// Returns false to quit.
-    fn handle_input(&mut self, ev: InputEvent) -> bool {
-        match ev {
-            InputEvent::Key(key) => {
-                if self.hovered.take().is_some() {
-                    self.dirty = true;
-                }
-                if let Some(top) = self.views.last_mut() {
-                    let result = top.on_key(&key);
-                    self.dirty = true;
-                    return self.apply_view_result(result);
-                }
-                let leader_was_armed = self.leader_armed;
-                if leader_was_armed {
-                    self.leader_armed = false;
-                    self.dirty = true;
-                }
-                if !leader_was_armed && self.welcome_active() {
-                    if let Some(handled) = self.handle_welcome_key(&key) {
-                        return handled;
-                    }
-                }
-                if !leader_was_armed && self.sidebar_focused {
-                    if let Some(handled) = self.handle_sidebar_key(&key) {
-                        return handled;
-                    }
-                }
-                let modes = session::pane_input_modes(&self.panes, self.focused);
-                let routed = input::route_key(&key, modes, leader_was_armed, &self.keymap);
-                self.execute_routed(routed)
-            }
-            InputEvent::Mouse(m) => {
-                let (col, row, kind, shift) =
-                    input::classify_mouse(&m, self.mouse_buttons.any_down());
-                self.handle_mouse(col, row, kind, shift)
-            }
-            InputEvent::Paste(text) => {
-                if self.hovered.take().is_some() {
-                    self.dirty = true;
-                }
-                if let Some(top) = self.views.last_mut() {
-                    let result = top.on_paste(&text);
-                    self.dirty = true;
-                    return self.apply_view_result(result);
-                }
-                let modes = session::pane_input_modes(&self.panes, self.focused);
-                self.send_pane_bytes(&input::encode_paste(&text, modes));
-                true
-            }
-            InputEvent::Resized { cols, rows } => {
-                self.handle_resize((cols as u16, rows as u16));
-                true
-            }
-            _ => true,
-        }
-    }
-
     /// Welcome-screen navigation. Returns Some(keep_running) when consumed.
     fn handle_welcome_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
         use dmux_host::KeyCode;
@@ -2291,6 +2278,7 @@ impl App {
                                 col.saturating_sub(rect.x),
                                 row.saturating_sub(rect.y),
                             );
+                            self.interactions.forwarded_to(p.tmux_pane);
                             let _ = self.client.send(input::send_keys_hex(p.tmux_pane, &motion));
                         }
                     }
@@ -2416,12 +2404,14 @@ impl App {
                         MouseKind::LeftHeld => {
                             // Motion-while-held: SGR button 32.
                             let m = input::encode_sgr_mouse(32, true, c, r);
+                            self.interactions.forwarded_to(pane_id);
                             let _ = self.client.send(input::send_keys_hex(pane_id, &m));
                             return true;
                         }
                         MouseKind::Release => {
                             self.mouse_forward = None;
                             let up = input::encode_sgr_mouse(0, false, c, r);
+                            self.interactions.forwarded_to(pane_id);
                             let _ = self.client.send(input::send_keys_hex(pane_id, &up));
                             return true;
                         }
@@ -2440,6 +2430,7 @@ impl App {
                     if let Some(top) = self.views.last_mut() {
                         let r = top.on_wheel(delta);
                         self.dirty = true;
+                        self.interactions.local_changed();
                         return self.apply_view_result(r);
                     }
                 }
@@ -2467,7 +2458,8 @@ impl App {
 
         match kind {
             MouseKind::WheelUp | MouseKind::WheelDown => {
-                let delta: i32 = if kind == MouseKind::WheelUp { 3 } else { -3 };
+                let up = kind == MouseKind::WheelUp;
+                let delta = input::wheel_view_delta(up);
                 match target {
                     Some(ClickTarget::SidebarRow(_)) => {
                         let len = self.panes.len();
@@ -2476,6 +2468,7 @@ impl App {
                             let cur = self.selected as i32;
                             self.selected = (cur + step).rem_euclid(len as i32) as usize;
                             self.dirty = true;
+                            self.interactions.local_changed();
                         }
                     }
                     _ => {
@@ -2492,7 +2485,6 @@ impl App {
                                 let app_mouse =
                                     (modes.mouse_click || modes.mouse_drag || modes.mouse_motion)
                                         && modes.sgr_mouse;
-                                let up = kind == MouseKind::WheelUp;
                                 if app_mouse {
                                     if let Some(rect) = p.rect {
                                         let c = col.saturating_sub(rect.x);
@@ -2503,27 +2495,23 @@ impl App {
                                             c,
                                             r,
                                         );
+                                        self.interactions.forwarded_to(p.tmux_pane);
                                         let _ = self
                                             .client
                                             .send(input::send_keys_hex(p.tmux_pane, &seq));
                                     }
                                 } else if modes.alt_screen {
                                     // xterm "alternate scroll" / tmux behavior:
-                                    // three arrow presses per wheel tick,
                                     // honoring DECCKM application encoding.
-                                    let arrow: &[u8] = match (up, modes.app_cursor) {
-                                        (true, false) => b"\x1b[A",
-                                        (true, true) => b"\x1bOA",
-                                        (false, false) => b"\x1b[B",
-                                        (false, true) => b"\x1bOB",
-                                    };
-                                    let seq = arrow.repeat(3);
+                                    let seq = input::alternate_scroll_bytes(up, modes.app_cursor);
+                                    self.interactions.forwarded_to(p.tmux_pane);
                                     let _ =
-                                        self.client.send(input::send_keys_hex(p.tmux_pane, &seq));
+                                        self.client.send(input::send_keys_hex(p.tmux_pane, seq));
                                 } else {
                                     p.term.scroll_view(delta);
                                     p.dirty = true;
                                     self.dirty = true;
+                                    self.interactions.local_changed();
                                 }
                             }
                         }
@@ -2627,6 +2615,7 @@ impl App {
                                 // the mouse_forward capture above.
                                 let down = input::encode_sgr_mouse(0, true, c, r);
                                 let pane = p.tmux_pane;
+                                self.interactions.forwarded_to(pane);
                                 let _ = self.client.send(input::send_keys_hex(pane, &down));
                                 self.mouse_forward = Some(i);
                             } else {
@@ -2869,27 +2858,6 @@ impl App {
         }
         self.relayout();
         self.toast(format!("Closed '{}'", pane.display_title()));
-    }
-
-    fn send_pane_bytes(&mut self, bytes: &[u8]) {
-        let Some(p) = self.panes.get_mut(self.focused) else {
-            return;
-        };
-        if p.status == PaneStatus::Dead || p.hidden {
-            return;
-        }
-        if p.term.selection_clear() {
-            p.dirty = true;
-            self.dirty = true;
-        }
-        if p.term.display_offset() > 0 {
-            p.term.scroll_to_bottom();
-            p.dirty = true;
-            self.dirty = true;
-        }
-        for chunk in bytes.chunks(256) {
-            let _ = self.client.send(input::send_keys_hex(p.tmux_pane, chunk));
-        }
     }
 
     // ------------------------------------------------------------------
@@ -3141,14 +3109,6 @@ impl App {
         }
     }
 
-    fn render_if_due(&mut self) {
-        if self.dirty && self.frame_clock.due(Instant::now()) {
-            self.render_frame();
-        } else if self.dirty {
-            self.metrics.coalesced += 1;
-        }
-    }
-
     fn render_frame(&mut self) {
         let start = Instant::now();
         self.click_map.clear();
@@ -3304,6 +3264,9 @@ impl App {
         for p in &mut self.panes {
             p.dirty = false;
             let _ = p.term.take_damage();
+        }
+        for observation in self.interactions.frame_written(done) {
+            self.metrics.record_interaction_frame(observation);
         }
         self.metrics.record_frame(
             done.duration_since(start),
