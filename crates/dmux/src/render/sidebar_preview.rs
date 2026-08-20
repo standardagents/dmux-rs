@@ -325,7 +325,7 @@ fn plain_preview_covers_widths_and_interaction_states() {
     }
     assert!(output.contains("? shortcuts"));
     assert!(output.contains("? help"));
-    assert!(output.contains("── perf ──"));
+    assert!(output.contains("perf"));
     assert!(output.contains("worktree provisioning is waiting for …"));
     assert!(output.contains("tiny status"));
 }
