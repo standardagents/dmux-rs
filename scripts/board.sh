@@ -1,7 +1,11 @@
 #!/bin/bash
-# Move a dmux-rs issue's card on the org Project board.
+# Move an issue's card on the configured GitHub Project board.
 #
-#   scripts/board.sh <issue-number> <Todo|In Progress|Done>
+#   scripts/board.sh <issue-number> <status>
+#
+# <status> matches (case-insensitively) one of the Status options the
+# configured Project defines — discovered dynamically, no fixed vocabulary.
+# An unknown status prints the Project's available options.
 #
 # Primary path: the @standardagents/issues GitHub App credentials
 # (~/.standardagents/issues/) via board.py — needs no gh scopes.

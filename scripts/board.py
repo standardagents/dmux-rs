@@ -1,16 +1,34 @@
 #!/usr/bin/env python3
-"""Move a dmux-rs issue's card on the org Project board via the
+"""Move an issue's card on the configured GitHub Project board via the
 @standardagents/issues GitHub App credentials (~/.standardagents/issues/).
 
-Usage: board.py <issue-number> <Todo|In Progress|Done>
+Usage: board.py <issue-number> <status>
 
-The App token carries organization-project write; this needs no extra gh
-scopes. Exits 0 with a note when credentials or permissions are missing so
-an unattended loop never blocks on it.
+<status> is matched case-insensitively against the Status options
+discovered from the configured Project — whatever vocabulary that Project
+defines. The repository is derived from the checkout's origin remote; the
+organization and Project come from the credentials file. The App token
+carries organization-project write; this needs no extra gh scopes. Exits 0
+with a note when credentials or permissions are missing so an unattended
+loop never blocks on it.
 """
-import base64, json, os, subprocess, sys, time, urllib.request
+import base64, json, os, re, subprocess, sys, time, urllib.request
 
-REPO = "dmux-rs"
+
+def repo_from_origin(url: str) -> str:
+    """Repository name from a git remote URL (SSH or HTTPS), sans .git."""
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url.strip())
+    return m.group(2) if m else ""
+
+
+def pick_option(options, want: str):
+    """Case-insensitive match against the Project's discovered options."""
+    return next((o for o in options if o["name"].lower() == want.lower()), None)
+
+
+def unknown_status_message(want: str, options) -> str:
+    names = ", ".join(o["name"] for o in options)
+    return f"board.py: no '{want}' status option; this Project has: {names}; skipping"
 
 
 def b64url(data: bytes) -> str:
@@ -77,6 +95,15 @@ def main() -> int:
     project_id = creds["project_id"]
 
     # Find the project item for this issue + the Status field options.
+    origin = subprocess.run(
+        ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    repo = repo_from_origin(origin)
+    if not repo:
+        print("board.py: no origin remote to derive the repository from; skipping", file=sys.stderr)
+        return 0
     data = gql(
         """
         query($org:String!,$repo:String!,$num:Int!) {
@@ -86,7 +113,7 @@ def main() -> int:
             }
           }
         }""",
-        {"org": creds["organization"], "repo": REPO, "num": issue_no},
+        {"org": creds["organization"], "repo": repo, "num": issue_no},
     )
     items = data["repository"]["issue"]["projectItems"]["nodes"]
     item = next((i for i in items if i["project"]["id"] == project_id), None)
@@ -104,9 +131,9 @@ def main() -> int:
         }""",
         {"proj": project_id},
     )["node"]["field"]
-    option = next((o for o in fields["options"] if o["name"].lower() == want_status.lower()), None)
+    option = pick_option(fields["options"], want_status)
     if option is None:
-        print(f"board.py: no '{want_status}' status option; skipping", file=sys.stderr)
+        print(unknown_status_message(want_status, fields["options"]), file=sys.stderr)
         return 0
 
     gql(

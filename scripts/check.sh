@@ -13,3 +13,4 @@ bash scripts/test-work-issue.sh
 bash scripts/test-start-task.sh
 bash scripts/test-resolve-build.sh
 bash scripts/release-guards-test.sh
+bash scripts/test-board.sh
