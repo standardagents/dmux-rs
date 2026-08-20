@@ -27,6 +27,17 @@ pub(crate) enum OverlayOrigin {
         project: ProjectSelection,
         align: VerticalAlign,
     },
+    /// A pointer gesture (#105): dialogs open where the user clicked.
+    Pointer {
+        x: u16,
+        y: u16,
+    },
+    /// A pane-surface control (#105): resolved from the control's CURRENT
+    /// rect each frame, so relayout re-anchors follow-up dialogs to the
+    /// pane rather than a stale position.
+    PaneControl {
+        target: ClickTarget,
+    },
 }
 
 impl OverlayOrigin {
@@ -39,15 +50,16 @@ impl OverlayOrigin {
 
     fn target(&self, groups: &[SidebarGroup]) -> Option<ClickTarget> {
         match self {
-            Self::Global => None,
+            Self::Global | Self::Pointer { .. } => None,
             Self::SidebarTarget { target, .. } => Some(*target),
             Self::SidebarProject { project, .. } => project_click_target(project, groups),
+            Self::PaneControl { target } => Some(*target),
         }
     }
 
     fn align(&self) -> Option<VerticalAlign> {
         match self {
-            Self::Global => None,
+            Self::Global | Self::Pointer { .. } | Self::PaneControl { .. } => None,
             Self::SidebarTarget { align, .. } | Self::SidebarProject { align, .. } => Some(*align),
         }
     }
@@ -57,11 +69,25 @@ impl OverlayOrigin {
         clicks: &ClickMap<ClickTarget>,
         groups: &[SidebarGroup],
     ) -> Anchor {
-        self.target(groups)
-            .and_then(|target| clicks.rect_for(&target))
-            .zip(self.align())
-            .map(|(rect, align)| Anchor::SidebarRow { row: rect.y, align })
-            .unwrap_or(Anchor::SidebarTop)
+        match self {
+            // #105: pointer origins are the click itself; pane controls
+            // re-resolve from the control's current rect every frame and
+            // degrade to the global surface when the control is gone.
+            Self::Pointer { x, y } => Anchor::Pointer { x: *x, y: *y },
+            Self::PaneControl { target } => clicks
+                .rect_for(target)
+                .map(|rect| Anchor::Pointer {
+                    x: rect.x,
+                    y: rect.y,
+                })
+                .unwrap_or(Anchor::SidebarTop),
+            _ => self
+                .target(groups)
+                .and_then(|target| clicks.rect_for(&target))
+                .zip(self.align())
+                .map(|(rect, align)| Anchor::SidebarRow { row: rect.y, align })
+                .unwrap_or(Anchor::SidebarTop),
+        }
     }
 
     pub(crate) fn source(
@@ -278,10 +304,50 @@ impl App {
             if let Some(source) = source {
                 menu = menu.with_source(source);
             }
-            self.views.push(Box::new(menu));
+            // Pointer menus hand their origin to follow-up dialogs (#105);
+            // sidebar flyouts keep the existing global dialog placement.
+            let origin = match anchor {
+                Anchor::Pointer { x, y } => OverlayOrigin::Pointer { x, y },
+                _ => OverlayOrigin::Global,
+            };
+            self.views.push_at(Box::new(menu), origin);
             self.dirty = true;
         }
         true
+    }
+
+    /// Press on a pane title-bar control (#105): actions that open a
+    /// dialog anchor it beside the pane title via a live PaneControl
+    /// origin, so relayout keeps the dialog with its pane. Double-click on
+    /// the title renames; a plain click focuses.
+    pub(super) fn title_control_press(
+        &mut self,
+        target: ClickTarget,
+        idx: usize,
+        is_double: bool,
+    ) -> bool {
+        let beside_title = OverlayOrigin::PaneControl {
+            target: ClickTarget::PaneTitle(idx),
+        };
+        match target {
+            ClickTarget::PaneTitle(_) if is_double => {
+                self.execute_cmd_at(AppCmd::PromptRename(idx), beside_title)
+            }
+            ClickTarget::PaneTitle(_) => self.execute_cmd(AppCmd::FocusPane(idx)),
+            ClickTarget::TitleRename(_) => {
+                self.execute_cmd_at(AppCmd::PromptRename(idx), beside_title)
+            }
+            ClickTarget::TitleHide(_) => self.execute_cmd(AppCmd::ToggleHidden(idx)),
+            ClickTarget::TitleClose(_) => {
+                // Menu-launched utility panes close in one action (#104).
+                let cmd = match self.panes.get(idx) {
+                    Some(pane) => crate::pane_actions::title_close_cmd(pane, idx),
+                    None => return true,
+                };
+                self.execute_cmd_at(cmd, beside_title)
+            }
+            _ => true,
+        }
     }
 
     fn select_sidebar_pane(&mut self, idx: usize) {
@@ -404,6 +470,37 @@ mod tests {
     fn pane_menu_close_policy_distinguishes_context_and_confirmed_paths() {
         assert_eq!(PaneMenuClose::Immediate.command(4), AppCmd::ClosePane(4));
         assert_eq!(PaneMenuClose::Confirm.command(4), AppCmd::ConfirmClose(4));
+    }
+
+    #[test]
+    fn pane_action_dialogs_anchor_to_pointer_and_live_title_geometry() {
+        // Pointer origin (#105): the dialog opens where the user clicked —
+        // a pane far from the sidebar keeps its dialog there.
+        let clicks = ClickMap::new();
+        assert_eq!(
+            OverlayOrigin::Pointer { x: 130, y: 20 }.resolve(&clicks, &[]),
+            Anchor::Pointer { x: 130, y: 20 }
+        );
+        // Title origin resolves from the control's CURRENT rect…
+        let target = ClickTarget::PaneTitle(1);
+        let origin = OverlayOrigin::PaneControl { target };
+        let mut clicks = ClickMap::new();
+        clicks.add(Rect::new(120, 0, 40, 1), target);
+        assert_eq!(
+            origin.resolve(&clicks, &[]),
+            Anchor::Pointer { x: 120, y: 0 }
+        );
+        // …and follows relayout: a moved title re-anchors the dialog.
+        clicks.clear();
+        clicks.add(Rect::new(60, 0, 40, 1), target);
+        assert_eq!(
+            origin.resolve(&clicks, &[]),
+            Anchor::Pointer { x: 60, y: 0 }
+        );
+        // A vanished control degrades to the global surface, never a stale
+        // position.
+        clicks.clear();
+        assert_eq!(origin.resolve(&clicks, &[]), Anchor::SidebarTop);
     }
 
     #[test]

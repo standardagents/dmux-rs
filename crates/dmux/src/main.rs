@@ -2604,26 +2604,14 @@ impl App {
                 Some(ClickTarget::SidebarGroupNewTerminal(gi)) => {
                     return self.open_sidebar_project_terminal(gi);
                 }
-                Some(ClickTarget::PaneTitle(i)) => {
-                    // Double-click the title = rename.
-                    if is_double {
-                        return self.execute_cmd(AppCmd::PromptRename(i));
-                    }
-                    return self.execute_cmd(AppCmd::FocusPane(i));
-                }
-                Some(ClickTarget::TitleRename(i)) => {
-                    return self.execute_cmd(AppCmd::PromptRename(i))
-                }
-                Some(ClickTarget::TitleHide(i)) => {
-                    return self.execute_cmd(AppCmd::ToggleHidden(i))
-                }
-                Some(ClickTarget::TitleClose(i)) => {
-                    // Menu-launched utility panes close in one action (#104).
-                    let cmd = match self.panes.get(i) {
-                        Some(pane) => pane_actions::title_close_cmd(pane, i),
-                        None => return true,
-                    };
-                    return self.execute_cmd(cmd);
+                Some(
+                    ClickTarget::PaneTitle(i)
+                    | ClickTarget::TitleRename(i)
+                    | ClickTarget::TitleHide(i)
+                    | ClickTarget::TitleClose(i),
+                ) => {
+                    let target = target.unwrap();
+                    return self.title_control_press(target, i, is_double);
                 }
                 Some(ClickTarget::WelcomeCard(i)) => {
                     self.welcome_sel = i;

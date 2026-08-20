@@ -196,12 +196,15 @@ impl App {
             }
             AppCmd::PromptRename(idx) => {
                 if let Some(p) = self.panes.get(idx) {
-                    self.views.push(Box::new(InputView::new(
-                        t("dialog.rename_title"),
-                        p.display_title(),
-                        "pane name",
-                        InputPurpose::RenamePane(idx),
-                    )));
+                    self.views.push_at(
+                        Box::new(InputView::new(
+                            t("dialog.rename_title"),
+                            p.display_title(),
+                            "pane name",
+                            InputPurpose::RenamePane(idx),
+                        )),
+                        origin,
+                    );
                     self.dirty = true;
                 }
             }
@@ -210,18 +213,21 @@ impl App {
                     return true;
                 }
                 if let Some(p) = self.panes.get(idx) {
-                    self.views.push(Box::new(
-                        ConfirmView::new(
-                            t("dialog.close_title"),
-                            tf("dialog.close_body", p.display_title()),
-                            t("dialog.close_confirm"),
-                            true,
-                            AppCmd::ClosePane(idx),
-                        )
-                        // The user just asked to close this pane; Enter
-                        // confirms (#11). Esc/n still cancel.
-                        .focus_confirm(),
-                    ));
+                    self.views.push_at(
+                        Box::new(
+                            ConfirmView::new(
+                                t("dialog.close_title"),
+                                tf("dialog.close_body", p.display_title()),
+                                t("dialog.close_confirm"),
+                                true,
+                                AppCmd::ClosePane(idx),
+                            )
+                            // The user just asked to close this pane; Enter
+                            // confirms (#11). Esc/n still cancel.
+                            .focus_confirm(),
+                        ),
+                        origin,
+                    );
                     self.dirty = true;
                 }
             }
@@ -264,23 +270,29 @@ impl App {
                 let root_branch =
                     git::current_branch(&self.project_root).unwrap_or_else(|| "HEAD".into());
                 if git::worktree_dirty(&wt_path) {
-                    self.views.push(Box::new(InputView::new(
-                        format!("Commit & merge '{branch}' into '{root_branch}'"),
-                        "",
-                        "commit message for uncommitted changes",
-                        InputPurpose::MergeCommitMessage { slug },
-                    )));
+                    self.views.push_at(
+                        Box::new(InputView::new(
+                            format!("Commit & merge '{branch}' into '{root_branch}'"),
+                            "",
+                            "commit message for uncommitted changes",
+                            InputPurpose::MergeCommitMessage { slug },
+                        )),
+                        origin,
+                    );
                 } else {
-                    self.views.push(Box::new(ConfirmView::new(
-                        "Merge worktree",
-                        format!("Merge '{branch}' into '{root_branch}'?"),
-                        "Merge",
-                        false,
-                        AppCmd::MergeExec {
-                            slug,
-                            message: None,
-                        },
-                    )));
+                    self.views.push_at(
+                        Box::new(ConfirmView::new(
+                            "Merge worktree",
+                            format!("Merge '{branch}' into '{root_branch}'?"),
+                            "Merge",
+                            false,
+                            AppCmd::MergeExec {
+                                slug,
+                                message: None,
+                            },
+                        )),
+                        origin,
+                    );
                 }
                 self.dirty = true;
             }

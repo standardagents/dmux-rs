@@ -141,6 +141,46 @@ mod tests {
     }
 
     #[test]
+    fn rename_dialog_renders_at_its_assigned_source_anchor() {
+        use dmux_compositor::CellBuffer;
+        use dmux_ui::{ClickMap, Theme};
+        // A pane far from the sidebar (#105): the stack assigns a pointer
+        // anchor and the dialog renders there, not beside the sidebar.
+        let mut v = InputView::new("Rename", "name", "", InputPurpose::RenamePane(0));
+        let theme = Theme::default();
+        let ctx = super::super::ViewCtx {
+            theme: &theme,
+            anim: 0,
+            hovered: None,
+            sidebar_right: 40,
+            anchor: dmux_ui::Anchor::Pointer { x: 100, y: 8 },
+        };
+        let mut buf = CellBuffer::new(160, 30);
+        let mut clicks = ClickMap::new();
+        v.render(
+            &mut buf,
+            dmux_compositor::Rect::new(0, 0, 160, 30),
+            &ctx,
+            &mut clicks,
+        );
+        assert_eq!(buf.get(100, 8).ch, '╭', "panel opens at the pointer");
+        // Global anchor keeps the sidebar-top placement.
+        let ctx_global = super::super::ViewCtx {
+            anchor: dmux_ui::Anchor::SidebarTop,
+            ..ctx
+        };
+        let mut buf2 = CellBuffer::new(160, 30);
+        let mut clicks2 = ClickMap::new();
+        v.render(
+            &mut buf2,
+            dmux_compositor::Rect::new(0, 0, 160, 30),
+            &ctx_global,
+            &mut clicks2,
+        );
+        assert_eq!(buf2.get(41, 0).ch, '╭', "global stays beside the sidebar");
+    }
+
+    #[test]
     fn clicks_position_the_cursor_in_the_field() {
         // Tag offset = clicked column within the drawn field; typing then
         // inserts at the clicked spot.
