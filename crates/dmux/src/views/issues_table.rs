@@ -13,7 +13,6 @@ pub(super) struct IssueTable {
     number: Column,
     title: Column,
     labels: Option<Column>,
-    assignee: Option<Column>,
     updated: Option<Column>,
 }
 
@@ -23,7 +22,6 @@ impl IssueTable {
         let title_x = 14;
         let mut title_end = width;
         let mut labels = None;
-        let mut assignee = None;
         let mut updated = None;
 
         if width >= 43 {
@@ -40,14 +38,6 @@ impl IssueTable {
                 width: 14,
             };
             title_end = column.x.saturating_sub(2);
-            assignee = Some(column);
-        }
-        if width >= 78 {
-            let column = Column {
-                x: assignee.expect("assignee column exists").x - 16,
-                width: 14,
-            };
-            title_end = column.x.saturating_sub(2);
             labels = Some(column);
         }
 
@@ -58,7 +48,6 @@ impl IssueTable {
                 width: title_end.saturating_sub(title_x),
             },
             labels,
-            assignee,
             updated,
         }
     }
@@ -68,7 +57,6 @@ impl IssueTable {
             (Some(self.number), "#"),
             (Some(self.title), "TITLE"),
             (self.labels, "LABELS"),
-            (self.assignee, "ASSIGNEE"),
             (self.updated, "UPDATED"),
         ] {
             if let Some(column) = column {
@@ -144,22 +132,6 @@ impl IssueTable {
                 row,
                 column,
                 &issue.labels.join(", "),
-                theme.text_dim,
-                bg,
-                AttrFlags::empty(),
-            );
-        }
-        if let Some(column) = self.assignee {
-            let value = if issue.assignees.is_empty() {
-                String::new()
-            } else {
-                format!("@{}", issue.assignees.join(", @"))
-            };
-            draw_cell(
-                buf,
-                row,
-                column,
-                &value,
                 theme.text_dim,
                 bg,
                 AttrFlags::empty(),
@@ -267,13 +239,14 @@ mod tests {
 
         for (header_label, first_value, second_value) in [
             ("LABELS", "bug", "performance"),
-            ("ASSIGNEE", "@andrew", "@andrew"),
             ("UPDATED", "2026-08-19", "2026-08-19"),
         ] {
             let x = column(&buf, 0, header_label).unwrap();
             assert_eq!(column(&buf, 1, first_value), Some(x));
             assert_eq!(column(&buf, 2, second_value), Some(x));
         }
+        assert!(!text(&buf, 0).contains("ASSIGNEE"));
+        assert!(!text(&buf, 1).contains("@andrew"));
     }
 
     #[test]
@@ -324,8 +297,9 @@ mod tests {
         );
 
         let row = text(&buf, 0);
+        assert!(row.contains("reserved metadata"));
         assert!(row.contains("…  bug"));
-        assert!(row.contains("@andrew"));
+        assert!(!row.contains("@andrew"));
         assert!(row.ends_with("2026-08-19"));
     }
 }
