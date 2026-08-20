@@ -255,7 +255,7 @@ impl View for SettingsView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let h = (self.defs.len() as u16 + 6).min(area.h.saturating_sub(2));
-        let rect = ctx.global(area, area.w.min(64), h);
+        let rect = ctx.overlay(area, area.w.min(64), h);
         let scope_label = match self.scope {
             SettingsScope::Project => "project scope",
             SettingsScope::Global => "global scope",

@@ -46,7 +46,7 @@ impl View for ShortcutsView {
         // Two columns: leader table left, direct chords right. Body: column
         // headers, the table, one blank row, then the remap note.
         let table = LEADER_ROWS.len().max(self.direct.len()) as u16;
-        let rect = ctx.global(area, area.w.min(96), frame_height(table + 3).min(area.h));
+        let rect = ctx.overlay(area, area.w.min(96), frame_height(table + 3).min(area.h));
         let inner = draw_panel(
             buf,
             rect,
@@ -160,6 +160,7 @@ mod tests {
             anim: 0,
             hovered: None,
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);

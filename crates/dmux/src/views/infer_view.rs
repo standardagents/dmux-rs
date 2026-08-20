@@ -58,7 +58,7 @@ impl View for InferProvidersView {
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let h = (self.providers.len() as u16 + 9).min(area.h.saturating_sub(2));
-        let rect = ctx.global(area, area.w.min(64), h);
+        let rect = ctx.overlay(area, area.w.min(64), h);
         let inner = draw_panel(
             buf,
             rect,

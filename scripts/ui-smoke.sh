@@ -243,11 +243,22 @@ if stable_sidebar_row "other-term" keyboard-sidebar-target; then
   fi
 fi
 
-# ---- case 4: overlay placement contract (#91) -------------------------------
-# A sidebar right-click menu opens AT the pointer; a global overlay
-# (Settings) opens immediately right of the sidebar at the top of screen.
+# ---- case 4: overlay placement contract (#91, #97) --------------------------
+# Pointer menus follow the pointer. Footer overlays align their bottom border
+# to the action row. Project action overlays align their top border to the row.
 char_col() { # $1 = 1-based row, $2 = glyph → 1-based char column (0 = absent)
   cap | /usr/bin/sed -n "$1p" | python3 -c "import sys; print(sys.stdin.read().find('$2') + 1)"
+}
+sidebar_action_position() { # $1 = text; prints 1-based row and column
+  cap | python3 -c '
+import sys
+needle = sys.argv[1]
+for row, line in enumerate(sys.stdin, 1):
+    col = line[:40].find(needle)
+    if col >= 0:
+        print(row, col + 1)
+        break
+' "$1"
 }
 open_sidebar_menu "other-term" 25 menu-pointer-open && {
   ROWP=$SIDEBAR_ROW
@@ -260,14 +271,31 @@ open_sidebar_menu "other-term" 25 menu-pointer-open && {
   fi
   drv_keys Escape; sleep 0.8
 }
-leader s
+read -r FOOTER_ROW FOOTER_COL <<EOF
+$(sidebar_action_position "settings")
+EOF
+left_click "$FOOTER_COL" "$FOOTER_ROW"
 wait_for "Settings" settings-open 4 && {
-  COL=$(char_col 1 "╭")
+  COL=$(char_col "$FOOTER_ROW" "╰")
   if [ "$COL" -gt 40 ]; then
-    echo "PASS global-anchor (Settings right of sidebar, top row)"
+    echo "PASS footer-anchor (Settings bottom aligned to its action row)"
   else
-    echo "  expected Settings ╭ right of sidebar on row 1, got col $COL"
-    fail global-anchor
+    echo "  expected Settings ╰ right of sidebar on row $FOOTER_ROW, got col $COL"
+    fail footer-anchor
+  fi
+  drv_keys Escape; sleep 0.8
+}
+read -r AGENT_ROW AGENT_COL <<EOF
+$(sidebar_action_position "new agent")
+EOF
+left_click "$AGENT_COL" "$AGENT_ROW"
+wait_for "New Agents" new-agent-open 4 && {
+  COL=$(char_col "$AGENT_ROW" "╭")
+  if [ "$COL" -gt 40 ]; then
+    echo "PASS row-anchor (New Agents top aligned to its action row)"
+  else
+    echo "  expected New Agents ╭ right of sidebar on row $AGENT_ROW, got col $COL"
+    fail row-anchor
   fi
   drv_keys Escape; sleep 0.8
 }

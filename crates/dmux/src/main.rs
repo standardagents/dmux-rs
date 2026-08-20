@@ -44,25 +44,22 @@ use std::time::{Duration, Instant};
 
 use clap::Parser as ClapParser;
 use dmux_cc::{CcEvent, Client, PaneId, Reply, ReplyRouter, Routed as CcRouted};
-use dmux_compositor::{diff_frame, CellBuffer, Emitter, Rect};
+use dmux_compositor::{diff_frame, CellBuffer, Emitter};
 use dmux_core::i18n::t;
 use dmux_core::{
     encode_pane_title, session_name_for_root, DmuxConfig, PaneKind, SettingsScope, SettingsStore,
 };
 use dmux_host::{HostTerminal, InputEvent};
-use dmux_ui::{ClickMap, Theme};
+use dmux_ui::{ClickMap, Theme, VerticalAlign};
 use github::{IssueLoadState, SharedIssueState};
 use hover::tooltip_rect;
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
-use sidebar::{
-    key_action as sidebar_key_action, ProjectActivation, ProjectSelection, SidebarDrag,
-    SidebarKeyAction, SidebarNavTarget,
-};
-use views::{
-    AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
-    MenuItem, MenuView, View, ViewCtx,
-};
+#[cfg(test)]
+use sidebar::{key_action as sidebar_key_action, SidebarKeyAction};
+use sidebar::{ProjectSelection, SidebarDrag};
+use view_stack::{OverlayOrigin, OverlayStack};
+use views::{AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView};
 use window_launch::{BootstrapSpec, NewWindowCtx};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -359,7 +356,7 @@ struct App {
     installed_agents: std::collections::HashSet<&'static str>,
     keymap: keys::Keymap,
     theme: Theme,
-    views: Vec<Box<dyn View>>,
+    views: OverlayStack,
     click_map: ClickMap<ClickTarget>,
     view_cursor: Option<(u16, u16)>,
     focused: usize,
@@ -577,7 +574,7 @@ async fn run(
         installed_agents,
         keymap,
         theme,
-        views: Vec::new(),
+        views: OverlayStack::default(),
         click_map: ClickMap::new(),
         view_cursor: None,
         focused: 0,
@@ -1871,17 +1868,6 @@ impl App {
         });
     }
 
-    fn open_project_issue_browser(&mut self, project_root: String) -> bool {
-        if let Some(state) = self.project_issues.get(&project_root).cloned() {
-            if !github::issue_state_label(Some(&state)).is_empty() {
-                self.views
-                    .push(Box::new(IssueBrowserView::new(project_root, state)));
-                self.dirty = true;
-            }
-        }
-        true
-    }
-
     /// Project root that new panes should target: the selected pane's
     /// project, else the main project.
     fn active_project_root(&self) -> Option<String> {
@@ -2266,107 +2252,6 @@ impl App {
         }
     }
 
-    fn step_sidebar_selection(&mut self, delta: i32) {
-        let Some(target) = sidebar::step_vertical(
-            &self.sidebar_groups,
-            self.selected,
-            self.sidebar_project.as_ref(),
-            delta,
-        ) else {
-            return;
-        };
-        match target {
-            SidebarNavTarget::Pane(index) => {
-                self.selected = index;
-                self.sidebar_project = None;
-            }
-            SidebarNavTarget::Project(project) => self.sidebar_project = Some(project),
-        }
-        self.rebuild_sidebar_groups();
-    }
-
-    /// Sidebar-focus navigation. Returns Some(keep_running) when consumed;
-    /// any unhandled key drops sidebar focus and routes normally.
-    fn handle_sidebar_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
-        match sidebar_key_action(key, &self.keymap) {
-            SidebarKeyAction::PassThrough => return None,
-            SidebarKeyAction::Ignore => {}
-            SidebarKeyAction::Up => self.step_sidebar_selection(-1),
-            SidebarKeyAction::Down => self.step_sidebar_selection(1),
-            action @ (SidebarKeyAction::Left | SidebarKeyAction::Right) => {
-                let delta = if action == SidebarKeyAction::Left {
-                    -1
-                } else {
-                    1
-                };
-                if let Some(project) = &mut self.sidebar_project {
-                    sidebar::step_horizontal(project, &self.sidebar_groups, delta);
-                }
-            }
-            SidebarKeyAction::Activate => {
-                if let Some(project) = self.sidebar_project.clone() {
-                    return Some(match sidebar::activation(project) {
-                        ProjectActivation::Issues(root) => self.open_project_issue_browser(root),
-                        ProjectActivation::NewAgent(root) => {
-                            self.execute_cmd(AppCmd::OpenNewAgentAt { project_root: root })
-                        }
-                        ProjectActivation::NewTerminal(root) => {
-                            self.execute_cmd(AppCmd::NewTerminalInProject { project_root: root })
-                        }
-                    });
-                }
-                self.sidebar_focused = false;
-                let i = self.selected;
-                if self.panes.get(i).map(|p| p.hidden).unwrap_or(false) {
-                    return Some(self.execute_cmd(AppCmd::ToggleHidden(i)));
-                }
-                return Some(self.execute_cmd(AppCmd::FocusPane(i)));
-            }
-            SidebarKeyAction::Menu if self.sidebar_project.is_some() => {}
-            SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
-            SidebarKeyAction::Hide if self.sidebar_project.is_some() => {}
-            SidebarKeyAction::Hide => {
-                return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected)))
-            }
-            SidebarKeyAction::Close if self.sidebar_project.is_some() => {}
-            SidebarKeyAction::Close => {
-                return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
-            }
-            SidebarKeyAction::Issues => {
-                if let Some(project_root) = self.active_project_root() {
-                    return Some(self.open_project_issue_browser(project_root));
-                }
-            }
-            SidebarKeyAction::NewAgent => {
-                let cmd = self
-                    .sidebar_project
-                    .as_ref()
-                    .map(|project| AppCmd::OpenNewAgentAt {
-                        project_root: project.root.clone(),
-                    })
-                    .unwrap_or(AppCmd::OpenNewAgent);
-                return Some(self.execute_cmd(cmd));
-            }
-            SidebarKeyAction::NewTerminal => {
-                let cmd = self
-                    .sidebar_project
-                    .as_ref()
-                    .map(|project| AppCmd::NewTerminalInProject {
-                        project_root: project.root.clone(),
-                    })
-                    .unwrap_or(AppCmd::NewTerminal);
-                return Some(self.execute_cmd(cmd));
-            }
-            SidebarKeyAction::LeaveFocus => {
-                self.sidebar_focused = false;
-                self.sidebar_project = None;
-                self.rebuild_sidebar_groups();
-            }
-        }
-        self.dirty = true;
-        Some(true)
-    }
-
     /// Welcome-screen navigation. Returns Some(keep_running) when consumed.
     fn handle_welcome_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
         use dmux_host::KeyCode;
@@ -2674,23 +2559,55 @@ impl App {
                     return true;
                 }
                 Some(ClickTarget::SidebarNewProject) => {
-                    return self.execute_cmd(AppCmd::PromptAddProject)
+                    return self.execute_cmd_at(
+                        AppCmd::PromptAddProject,
+                        OverlayOrigin::SidebarTarget {
+                            target: ClickTarget::SidebarNewProject,
+                            align: VerticalAlign::Bottom,
+                        },
+                    )
                 }
                 Some(ClickTarget::SidebarSettings) => {
-                    return self.execute_cmd(AppCmd::OpenSettings)
+                    return self.execute_cmd_at(
+                        AppCmd::OpenSettings,
+                        OverlayOrigin::SidebarTarget {
+                            target: ClickTarget::SidebarSettings,
+                            align: VerticalAlign::Bottom,
+                        },
+                    )
                 }
-                Some(ClickTarget::SidebarHelp) => return self.execute_cmd(AppCmd::OpenShortcuts),
+                Some(ClickTarget::SidebarHelp) => {
+                    return self.execute_cmd_at(
+                        AppCmd::OpenShortcuts,
+                        OverlayOrigin::SidebarTarget {
+                            target: ClickTarget::SidebarHelp,
+                            align: VerticalAlign::Bottom,
+                        },
+                    )
+                }
                 Some(ClickTarget::SidebarGroupIssues(gi)) => {
                     if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
-                        return self.open_project_issue_browser(project_root);
+                        return self.open_project_issue_browser_at(
+                            project_root,
+                            OverlayOrigin::SidebarTarget {
+                                target: ClickTarget::SidebarGroupIssues(gi),
+                                align: VerticalAlign::Top,
+                            },
+                        );
                     }
                     return true;
                 }
                 Some(ClickTarget::SidebarGroupNewAgent(gi)) => {
                     if let Some(project_root) = sidebar_group_project_root(&self.sidebar_groups, gi)
                     {
-                        return self.execute_cmd(AppCmd::OpenNewAgentAt { project_root });
+                        return self.execute_cmd_at(
+                            AppCmd::OpenNewAgentAt { project_root },
+                            OverlayOrigin::SidebarTarget {
+                                target: ClickTarget::SidebarGroupNewAgent(gi),
+                                align: VerticalAlign::Top,
+                            },
+                        );
                     }
                     return true;
                 }
@@ -2853,47 +2770,6 @@ impl App {
         let cur = visible.iter().position(|&i| i == self.focused).unwrap_or(0) as i32;
         let next = visible[(cur + dir).rem_euclid(visible.len() as i32) as usize];
         self.execute_cmd(AppCmd::FocusPane(next))
-    }
-
-    // ------------------------------------------------------------------
-    // Commands
-
-    fn open_agent_select(&mut self, project_root: Option<String>, prompt: Option<String>) {
-        let (default_agent, default_mode, enabled) = {
-            let s = self.settings.lock().unwrap();
-            let enabled = s
-                .get("enabledAgents")
-                .and_then(|v| v.as_array().cloned())
-                .map(|l| {
-                    l.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| {
-                    agents::AGENTS
-                        .iter()
-                        .filter(|a| a.default_enabled)
-                        .map(|a| a.id.to_string())
-                        .collect()
-                });
-            (
-                s.get_str("defaultAgent").map(|v| v.to_string()),
-                s.get_str("permissionMode").unwrap_or("").to_string(),
-                enabled,
-            )
-        };
-        let mut view = AgentSelectView::new(
-            &self.installed_agents,
-            &enabled,
-            default_agent.as_deref(),
-            &default_mode,
-            project_root,
-        );
-        if let Some(prompt) = prompt {
-            view = view.with_issue_prompt(prompt);
-        }
-        self.views.push(Box::new(view));
-        self.dirty = true;
     }
 
     fn set_setting(&mut self, key: &str, value: serde_json::Value, scope: SettingsScope) {
@@ -3574,29 +3450,8 @@ impl App {
             );
         }
 
-        // Overlays above the scene, with a scrim under the stack.
-        self.view_cursor = None;
-        if !self.views.is_empty() {
-            let area = self.back.area();
-            // The top view may carve out its source row (#16 — anchored
-            // flyouts keep their sidebar row undimmed).
-            let except = self.views.last().and_then(|v| v.scrim_exception());
-            dmux_ui::draw_scrim_except(&mut self.back, area, except);
-            let ctx = ViewCtx {
-                theme: &self.theme,
-                anim: self.anim,
-                hovered: self.hovered,
-                sidebar_right: self.layout.sidebar.right(),
-            };
-            let full = Rect::new(0, 0, self.size.0, self.size.1);
-            let last = self.views.len() - 1;
-            for (i, view) in self.views.iter_mut().enumerate() {
-                let cursor = view.render(&mut self.back, full, &ctx, &mut self.click_map);
-                if i == last {
-                    self.view_cursor = cursor;
-                }
-            }
-        }
+        // Overlays use the action geometry registered by base composition.
+        self.render_overlays();
         if let Some(tip) = &self.tooltip {
             let label = format!(" {} ", tip.text);
             let rect = tooltip_rect(

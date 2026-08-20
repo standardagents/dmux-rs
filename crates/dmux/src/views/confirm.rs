@@ -54,7 +54,7 @@ impl View for ConfirmView {
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
         let w = (self.message.chars().count() as u16 + 6).clamp(34, area.w.min(70));
-        let rect = ctx.global(area, w, 7);
+        let rect = ctx.overlay(area, w, 7);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
         buf.draw_text(
             inner.x + 1,
@@ -200,6 +200,7 @@ mod tests {
             anim: 0,
             hovered: None,
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
         };
         let mut buf = CellBuffer::new(60, 12);
         let area = buf.area();

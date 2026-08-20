@@ -1,6 +1,6 @@
 use dmux_compositor::{AttrFlags, CellBuffer, Rect};
 use dmux_host::{KeyCode, KeyEvent};
-use dmux_ui::{draw_hint_bar, draw_panel, Anchor, ClickMap, ListState, PanelStyle};
+use dmux_ui::{draw_hint_bar, draw_panel, Anchor, ClickMap, ListState, PanelStyle, VerticalAlign};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -60,7 +60,10 @@ impl MenuView {
 
     /// Sidebar-item flyout: right of the sidebar, aligned with the row.
     pub fn beside_row(mut self, row: u16) -> Self {
-        self.anchor = Some(Anchor::SidebarRow { row });
+        self.anchor = Some(Anchor::SidebarRow {
+            row,
+            align: VerticalAlign::Top,
+        });
         self
     }
 

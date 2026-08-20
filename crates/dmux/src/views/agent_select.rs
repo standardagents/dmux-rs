@@ -173,7 +173,7 @@ impl View for AgentSelectView {
         // Body: prompt label + prompt, blank, allocation label + rows,
         // blank, permission row, blank, launch button.
         let h = frame_height(self.rows.len() as u16 + prompt_rows + 7).min(max_h);
-        let rect = ctx.global(area, panel_width, h);
+        let rect = ctx.overlay(area, panel_width, h);
         let inner = draw_panel(buf, rect, t("agent.title"), ctx.theme, PanelStyle::Modal);
         let frame = panel_frame(inner);
         let content = frame.content;

@@ -77,7 +77,7 @@ impl View for DiffView {
         ctx: &ViewCtx<'_>,
         _clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = ctx.global(
+        let rect = ctx.overlay(
             area,
             area.w.saturating_sub(8).min(140),
             area.h.saturating_sub(4),

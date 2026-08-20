@@ -137,6 +137,7 @@ fn render_case(case: PreviewCase) -> CellBuffer {
         anim: 0,
         hovered: None,
         sidebar_right: 0,
+        anchor: dmux_ui::Anchor::SidebarTop,
     };
     let mut buf = CellBuffer::new(case.cols, case.rows);
     let mut clicks = ClickMap::new();

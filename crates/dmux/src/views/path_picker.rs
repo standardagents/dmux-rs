@@ -203,7 +203,7 @@ impl View for PathPickerView {
     ) -> Option<(u16, u16)> {
         let w = area.w.saturating_sub(10).clamp(44, 90);
         let h = area.h.saturating_sub(6).clamp(14, 26);
-        let rect = ctx.global(area, w, h);
+        let rect = ctx.overlay(area, w, h);
         let inner = draw_panel(buf, rect, "Add project", ctx.theme, PanelStyle::Modal);
         let frame = panel_frame(inner);
         let content = frame.content;

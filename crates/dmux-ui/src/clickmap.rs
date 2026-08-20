@@ -41,6 +41,20 @@ impl<T: Clone> ClickMap<T> {
             .map(|(_, t)| t)
     }
 
+    /// Most recently drawn region registered for an exact target. This lets
+    /// overlays resolve their source geometry from the current frame after a
+    /// resize or sidebar reflow.
+    pub fn rect_for(&self, target: &T) -> Option<Rect>
+    where
+        T: PartialEq,
+    {
+        self.regions
+            .iter()
+            .rev()
+            .find(|(_, candidate)| candidate == target)
+            .map(|(rect, _)| *rect)
+    }
+
     pub fn len(&self) -> usize {
         self.regions.len()
     }
@@ -62,5 +76,6 @@ mod tests {
         assert_eq!(m.hit(3, 3), Some(&"top"));
         assert_eq!(m.hit(8, 8), Some(&"bottom"));
         assert_eq!(m.hit(50, 50), None);
+        assert_eq!(m.rect_for(&"top"), Some(Rect::new(2, 2, 4, 4)));
     }
 }

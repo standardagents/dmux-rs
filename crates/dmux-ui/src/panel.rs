@@ -182,12 +182,18 @@ pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
 /// origin: right-click menus open at the pointer, sidebar-item surfaces
 /// beside their row, and global surfaces beside the top of the sidebar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
     /// Right-click origin: the pointer cell is the requested top-left.
     Pointer { x: u16, y: u16 },
     /// A sidebar item's own surface: immediately right of the sidebar,
     /// vertically aligned with the item's row.
-    SidebarRow { row: u16 },
+    SidebarRow { row: u16, align: VerticalAlign },
     /// A global surface: immediately right of the sidebar, top of screen.
     SidebarTop,
 }
@@ -200,7 +206,17 @@ pub fn place(area: Rect, sidebar_right: u16, anchor: Anchor, w: u16, h: u16) -> 
     let h = h.min(area.h);
     let (x, y) = match anchor {
         Anchor::Pointer { x, y } => (x, y),
-        Anchor::SidebarRow { row } => (sidebar_right.saturating_add(1), row),
+        Anchor::SidebarRow { row, align } => {
+            let fits_below = row.saturating_add(h) <= area.bottom();
+            let fits_above = row.saturating_add(1) >= area.y.saturating_add(h);
+            let y = match (align, fits_below, fits_above) {
+                (VerticalAlign::Top, true, _) | (VerticalAlign::Bottom, _, false) => row,
+                (VerticalAlign::Top, false, _) | (VerticalAlign::Bottom, _, true) => {
+                    row.saturating_add(1).saturating_sub(h)
+                }
+            };
+            (sidebar_right.saturating_add(1), y)
+        }
         Anchor::SidebarTop => (sidebar_right.saturating_add(1), area.y),
     };
     let x = x.min(area.right().saturating_sub(w)).max(area.x);
@@ -226,8 +242,60 @@ mod panel_tests {
         assert_eq!(clamped, Rect::new(92, 22, 28, 8));
         // Sidebar-row origin: right of the sidebar, aligned to the row.
         assert_eq!(
-            place(area, 40, Anchor::SidebarRow { row: 7 }, 30, 6),
+            place(
+                area,
+                40,
+                Anchor::SidebarRow {
+                    row: 7,
+                    align: VerticalAlign::Top,
+                },
+                30,
+                6,
+            ),
             Rect::new(41, 7, 30, 6)
+        );
+        // Bottom-aligned sources place the panel's bottom edge on the
+        // source row, matching footer popups.
+        assert_eq!(
+            place(
+                area,
+                40,
+                Anchor::SidebarRow {
+                    row: 26,
+                    align: VerticalAlign::Bottom,
+                },
+                30,
+                8,
+            ),
+            Rect::new(41, 19, 30, 8)
+        );
+        // A top-aligned source near the bottom flips above its row.
+        assert_eq!(
+            place(
+                area,
+                40,
+                Anchor::SidebarRow {
+                    row: 26,
+                    align: VerticalAlign::Top,
+                },
+                30,
+                8,
+            ),
+            Rect::new(41, 19, 30, 8)
+        );
+        // A bottom-aligned source near the top flips below its row.
+        assert_eq!(
+            place(
+                area,
+                40,
+                Anchor::SidebarRow {
+                    row: 2,
+                    align: VerticalAlign::Bottom,
+                },
+                30,
+                8,
+            ),
+            Rect::new(41, 2, 30, 8)
         );
         // Sidebar-top origin: right of the sidebar, top of the screen.
         assert_eq!(

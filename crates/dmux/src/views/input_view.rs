@@ -87,7 +87,7 @@ impl View for InputView {
         ctx: &ViewCtx<'_>,
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = ctx.global(area, area.w.min(56), 6);
+        let rect = ctx.overlay(area, area.w.min(56), 6);
         let inner = draw_panel(buf, rect, &self.title, ctx.theme, PanelStyle::Modal);
         let field = Rect::new(inner.x, inner.y + 1, inner.w, 1);
         let cursor = self.input.draw(buf, field, ctx.theme, true);

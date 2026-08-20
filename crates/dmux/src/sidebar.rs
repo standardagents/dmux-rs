@@ -1,6 +1,10 @@
 //! Sidebar keyboard routing and navigation targets.
 
-use crate::{keys, render, views::ClickTarget};
+use dmux_ui::VerticalAlign;
+
+use crate::view_stack::OverlayOrigin;
+use crate::views::{AppCmd, ClickTarget};
+use crate::{keys, render, App};
 
 /// Sidebar drag-reorder gesture (#26). A press arms a row; crossing onto a
 /// different row begins reordering, and release commits or cancels it.
@@ -194,6 +198,20 @@ pub(crate) fn activation(selection: ProjectSelection) -> ProjectActivation {
     }
 }
 
+pub(crate) fn project_click_target(
+    selection: &ProjectSelection,
+    groups: &[render::SidebarGroup],
+) -> Option<ClickTarget> {
+    let group = groups
+        .iter()
+        .position(|group| group.root == selection.root)?;
+    Some(match selection.action {
+        ProjectAction::Issues => ClickTarget::SidebarGroupIssues(group),
+        ProjectAction::NewAgent => ClickTarget::SidebarGroupNewAgent(group),
+        ProjectAction::NewTerminal => ClickTarget::SidebarGroupNewTerminal(group),
+    })
+}
+
 pub(crate) fn normalize_project_action(
     selection: &mut ProjectSelection,
     groups: &[render::SidebarGroup],
@@ -234,6 +252,131 @@ pub(crate) fn key_action(key: &dmux_host::KeyEvent, keymap: &keys::Keymap) -> Si
         KeyCode::Char('t') => SidebarKeyAction::NewTerminal,
         KeyCode::Escape => SidebarKeyAction::LeaveFocus,
         _ => SidebarKeyAction::Ignore,
+    }
+}
+
+impl App {
+    fn sidebar_project_origin(&self, project: &ProjectSelection) -> OverlayOrigin {
+        project_click_target(project, &self.sidebar_groups)
+            .map(|target| OverlayOrigin::SidebarTarget {
+                target,
+                align: VerticalAlign::Top,
+            })
+            .unwrap_or(OverlayOrigin::Global)
+    }
+
+    pub(super) fn step_sidebar_selection(&mut self, delta: i32) {
+        let Some(target) = step_vertical(
+            &self.sidebar_groups,
+            self.selected,
+            self.sidebar_project.as_ref(),
+            delta,
+        ) else {
+            return;
+        };
+        match target {
+            SidebarNavTarget::Pane(index) => {
+                self.selected = index;
+                self.sidebar_project = None;
+            }
+            SidebarNavTarget::Project(project) => self.sidebar_project = Some(project),
+        }
+        self.rebuild_sidebar_groups();
+    }
+
+    /// Sidebar-focus navigation. Returns Some(keep_running) when consumed;
+    /// any unhandled key drops sidebar focus and routes normally.
+    pub(super) fn handle_sidebar_key(&mut self, key: &dmux_host::KeyEvent) -> Option<bool> {
+        match key_action(key, &self.keymap) {
+            SidebarKeyAction::PassThrough => return None,
+            SidebarKeyAction::Ignore => {}
+            SidebarKeyAction::Up => self.step_sidebar_selection(-1),
+            SidebarKeyAction::Down => self.step_sidebar_selection(1),
+            action @ (SidebarKeyAction::Left | SidebarKeyAction::Right) => {
+                let delta = if action == SidebarKeyAction::Left {
+                    -1
+                } else {
+                    1
+                };
+                if let Some(project) = &mut self.sidebar_project {
+                    step_horizontal(project, &self.sidebar_groups, delta);
+                }
+            }
+            SidebarKeyAction::Activate => {
+                if let Some(project) = self.sidebar_project.clone() {
+                    let origin = self.sidebar_project_origin(&project);
+                    return Some(match activation(project) {
+                        ProjectActivation::Issues(root) => {
+                            self.open_project_issue_browser_at(root, origin)
+                        }
+                        ProjectActivation::NewAgent(root) => self
+                            .execute_cmd_at(AppCmd::OpenNewAgentAt { project_root: root }, origin),
+                        ProjectActivation::NewTerminal(root) => {
+                            self.execute_cmd(AppCmd::NewTerminalInProject { project_root: root })
+                        }
+                    });
+                }
+                self.sidebar_focused = false;
+                let index = self.selected;
+                if self
+                    .panes
+                    .get(index)
+                    .map(|pane| pane.hidden)
+                    .unwrap_or(false)
+                {
+                    return Some(self.execute_cmd(AppCmd::ToggleHidden(index)));
+                }
+                return Some(self.execute_cmd(AppCmd::FocusPane(index)));
+            }
+            SidebarKeyAction::Menu if self.sidebar_project.is_some() => {}
+            SidebarKeyAction::Menu => return Some(self.execute_cmd(AppCmd::OpenPaneMenu)),
+            SidebarKeyAction::Hide if self.sidebar_project.is_some() => {}
+            SidebarKeyAction::Hide => {
+                return Some(self.execute_cmd(AppCmd::ToggleHidden(self.selected)))
+            }
+            SidebarKeyAction::Close if self.sidebar_project.is_some() => {}
+            SidebarKeyAction::Close => {
+                return Some(self.execute_cmd(AppCmd::ConfirmClose(self.selected)))
+            }
+            SidebarKeyAction::Issues => {
+                if let Some(project) = self.sidebar_project.clone() {
+                    let origin = self.sidebar_project_origin(&project);
+                    return Some(self.open_project_issue_browser_at(project.root, origin));
+                }
+                if let Some(project_root) = self.active_project_root() {
+                    return Some(self.open_project_issue_browser(project_root));
+                }
+            }
+            SidebarKeyAction::NewAgent => {
+                if let Some(project) = self.sidebar_project.clone() {
+                    let origin = self.sidebar_project_origin(&project);
+                    return Some(self.execute_cmd_at(
+                        AppCmd::OpenNewAgentAt {
+                            project_root: project.root,
+                        },
+                        origin,
+                    ));
+                }
+                return Some(self.execute_cmd(AppCmd::OpenNewAgent));
+            }
+            SidebarKeyAction::NewTerminal => {
+                let cmd = self
+                    .sidebar_project
+                    .as_ref()
+                    .map(|project| AppCmd::NewTerminalInProject {
+                        project_root: project.root.clone(),
+                    })
+                    .unwrap_or(AppCmd::NewTerminal);
+                return Some(self.execute_cmd(cmd));
+            }
+            SidebarKeyAction::LeaveFocus => {
+                self.sidebar_focused = false;
+                self.sidebar_project = None;
+                self.rebuild_sidebar_groups();
+            }
+        }
+        self.dirty = true;
+        Some(true)
     }
 }
 
@@ -322,6 +465,16 @@ mod tests {
         assert_eq!(
             hover_navigation(ClickTarget::SidebarGroupNewAgent(9), &groups),
             None
+        );
+        assert_eq!(
+            project_click_target(
+                &ProjectSelection {
+                    root: "/two".into(),
+                    action: ProjectAction::NewAgent,
+                },
+                &groups,
+            ),
+            Some(ClickTarget::SidebarGroupNewAgent(1))
         );
     }
 

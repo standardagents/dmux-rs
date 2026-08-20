@@ -9,14 +9,15 @@ use dmux_core::i18n::{t, tf};
 use dmux_core::PaneKind;
 
 use crate::session::LogicalPane;
+use crate::view_stack::OverlayOrigin;
 use crate::views::{
-    AppCmd, ConfirmView, InputPurpose, InputView, MenuItem, MenuView, PathPickerView, SettingsView,
-    ShortcutsView,
+    AgentSelectView, AppCmd, ConfirmView, InputPurpose, InputView, IssueBrowserView, MenuItem,
+    MenuView, PathPickerView, SettingsView, ShortcutsView,
 };
 use crate::window_launch::NewWindowCtx;
 use crate::{
-    agents, ai_merge, audit, dirs_home, git, hooks, pane_actions, session, shq, view_stack, views,
-    App, AppMsg,
+    agents, ai_merge, audit, dirs_home, git, github, hooks, pane_actions, session, shq, view_stack,
+    views, App, AppMsg,
 };
 
 /// Expand a user-entered path: `~` and `~/…` resolve against the home
@@ -53,8 +54,77 @@ pub(crate) fn global_menu_tail() -> Vec<MenuItem> {
 }
 
 impl App {
+    pub(crate) fn open_project_issue_browser(&mut self, project_root: String) -> bool {
+        self.open_project_issue_browser_at(project_root, OverlayOrigin::Global)
+    }
+
+    pub(crate) fn open_project_issue_browser_at(
+        &mut self,
+        project_root: String,
+        origin: OverlayOrigin,
+    ) -> bool {
+        if let Some(state) = self.project_issues.get(&project_root).cloned() {
+            if !github::issue_state_label(Some(&state)).is_empty() {
+                self.views
+                    .push_at(Box::new(IssueBrowserView::new(project_root, state)), origin);
+                self.dirty = true;
+            }
+        }
+        true
+    }
+
+    fn open_agent_select(
+        &mut self,
+        project_root: Option<String>,
+        prompt: Option<String>,
+        origin: OverlayOrigin,
+    ) {
+        let (default_agent, default_mode, enabled) = {
+            let settings = self.settings.lock().unwrap();
+            let enabled = settings
+                .get("enabledAgents")
+                .and_then(|value| value.as_array().cloned())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| {
+                    agents::AGENTS
+                        .iter()
+                        .filter(|agent| agent.default_enabled)
+                        .map(|agent| agent.id.to_string())
+                        .collect()
+                });
+            (
+                settings.get_str("defaultAgent").map(str::to_string),
+                settings.get_str("permissionMode").unwrap_or("").to_string(),
+                enabled,
+            )
+        };
+        let mut view = AgentSelectView::new(
+            &self.installed_agents,
+            &enabled,
+            default_agent.as_deref(),
+            &default_mode,
+            project_root,
+        );
+        if let Some(prompt) = prompt {
+            view = view.with_issue_prompt(prompt);
+        }
+        self.views.push_at(Box::new(view), origin);
+        self.dirty = true;
+    }
+
     /// Returns false to quit.
     pub(crate) fn execute_cmd(&mut self, cmd: AppCmd) -> bool {
+        self.execute_cmd_at(cmd, OverlayOrigin::Global)
+    }
+
+    /// Execute a command while preserving the control that invoked it for
+    /// any overlay the command opens.
+    pub(crate) fn execute_cmd_at(&mut self, cmd: AppCmd, origin: OverlayOrigin) -> bool {
         match cmd {
             AppCmd::Quit => return false,
             AppCmd::FocusPane(i) => {
@@ -89,21 +159,20 @@ impl App {
                     .active_project_root()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| self.project_root.clone());
-                self.views.push(Box::new(SettingsView::new(
-                    self.settings.clone(),
-                    has_project,
-                    root,
-                )));
+                self.views.push_at(
+                    Box::new(SettingsView::new(self.settings.clone(), has_project, root)),
+                    origin,
+                );
                 self.dirty = true;
             }
-            AppCmd::OpenNewAgent => self.open_agent_select(None, None),
+            AppCmd::OpenNewAgent => self.open_agent_select(None, None, origin),
             AppCmd::OpenNewAgentAt { project_root } => {
-                self.open_agent_select(Some(project_root), None)
+                self.open_agent_select(Some(project_root), None, origin)
             }
             AppCmd::ChooseAgentForIssues {
                 project_root,
                 prompt,
-            } => self.open_agent_select(Some(project_root), Some(prompt)),
+            } => self.open_agent_select(Some(project_root), Some(prompt), origin),
             AppCmd::RefreshIssues { project_root } => self.refresh_project_issues(project_root),
             AppCmd::OpenUrl(url) => {
                 tokio::task::spawn_blocking(move || {
@@ -111,10 +180,13 @@ impl App {
                 });
             }
             AppCmd::OpenShortcuts => {
-                self.views.push(Box::new(ShortcutsView::new(
-                    self.host.caps().kitty_keyboard,
-                    self.keymap.describe(),
-                )));
+                self.views.push_at(
+                    Box::new(ShortcutsView::new(
+                        self.host.caps().kitty_keyboard,
+                        self.keymap.describe(),
+                    )),
+                    origin,
+                );
                 self.dirty = true;
             }
             AppCmd::OpenLogs => {
@@ -411,7 +483,8 @@ impl App {
                 // Filesystem picker rooted at dmux's launch directory (#32);
                 // rename/settings inputs stay simple text fields.
                 let start = std::env::current_dir().unwrap_or_else(|_| self.project_root.clone());
-                self.views.push(Box::new(PathPickerView::new(start)));
+                self.views
+                    .push_at(Box::new(PathPickerView::new(start)), origin);
                 self.dirty = true;
             }
             AppCmd::OpenProjectAt(raw) => {

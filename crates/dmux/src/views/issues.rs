@@ -262,7 +262,7 @@ impl View for IssueBrowserView {
         let h = frame_height(list_rows + 2)
             .min(max_h)
             .max(max_h.min(frame_height(4)));
-        let rect = ctx.global(area, area.w.min(100), h);
+        let rect = ctx.overlay(area, area.w.min(100), h);
         let title = match self.repository(&state) {
             Some(repository) => format!("Issues · {repository}"),
             None => "Issues".to_string(),
@@ -705,6 +705,7 @@ mod tests {
             anim: 0,
             hovered: None,
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
         };
         let mut clicks = ClickMap::new();
         view.render(&mut buf, area, &ctx, &mut clicks);
@@ -753,6 +754,7 @@ mod tests {
             anim: 0,
             hovered: None,
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
         };
         let mut clicks = ClickMap::new();
 
@@ -820,6 +822,7 @@ mod tests {
                 anim: 0,
                 hovered: None,
                 sidebar_right: 0,
+                anchor: dmux_ui::Anchor::SidebarTop,
             };
             let mut clicks = ClickMap::new();
             let area = buf.area();

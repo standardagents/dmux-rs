@@ -230,6 +230,8 @@ pub struct ViewCtx<'a> {
     /// Right edge of the sidebar — the shared reference for overlay
     /// placement (#91).
     pub sidebar_right: u16,
+    /// Source-relative origin assigned when this overlay entered the stack.
+    pub anchor: dmux_ui::Anchor,
 }
 
 impl ViewCtx<'_> {
@@ -239,9 +241,9 @@ impl ViewCtx<'_> {
         dmux_ui::place(area, self.sidebar_right, anchor, w, h)
     }
 
-    /// Global-surface placement: right of the sidebar, top-aligned.
-    pub fn global(&self, area: Rect, w: u16, h: u16) -> Rect {
-        self.place(area, dmux_ui::Anchor::SidebarTop, w, h)
+    /// Stack-assigned placement beside the sidebar.
+    pub fn overlay(&self, area: Rect, w: u16, h: u16) -> Rect {
+        self.place(area, self.anchor, w, h)
     }
 
     pub fn active_overlay(&self, tag: u64, selected: bool) -> bool {
@@ -452,6 +454,7 @@ mod hover_tests {
             anim: 0,
             hovered: Some(ClickTarget::Overlay(7)),
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
         };
         assert!(hovered.active_overlay(7, false));
         assert!(!hovered.active_overlay(3, true));
@@ -459,6 +462,7 @@ mod hover_tests {
         let keyboard = ViewCtx {
             hovered: None,
             sidebar_right: 0,
+            anchor: dmux_ui::Anchor::SidebarTop,
             ..hovered
         };
         assert!(keyboard.active_overlay(3, true));

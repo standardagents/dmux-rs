@@ -77,7 +77,7 @@ impl View for EnabledAgentsView {
         ctx: &ViewCtx<'_>,
         clicks: &mut ClickMap<ClickTarget>,
     ) -> Option<(u16, u16)> {
-        let rect = ctx.global(area, area.w.min(48), (AGENTS.len() as u16 + 4).min(area.h));
+        let rect = ctx.overlay(area, area.w.min(48), (AGENTS.len() as u16 + 4).min(area.h));
         let inner = draw_panel(buf, rect, "Enabled Agents", ctx.theme, PanelStyle::Modal);
         let enabled = self.enabled_set();
         self.list.clamp(AGENTS.len());
