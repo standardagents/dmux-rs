@@ -15,7 +15,6 @@ const MAX_PENDING_AGE: Duration = Duration::from_secs(2);
 const KEY_RESPONSE_WINDOW: Duration = Duration::from_millis(50);
 const SCROLL_PERIOD: Duration = Duration::from_nanos(8_333_333);
 const MAX_PENDING_SCROLL: usize = 8;
-const MAX_SCROLL_PER_FRAME: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -118,9 +117,9 @@ pub(crate) fn kind(event: &InputEvent) -> Option<Kind> {
     }
 }
 
-/// Bounds trackpad bursts to one small wheel batch per interaction frame.
-/// Old overflow and pending inertia before deliberate input are discarded so
-/// the queue cannot build visible latency or outlive its target geometry.
+/// Replays a short trackpad backlog at one wheel tick per interaction frame.
+/// This preserves momentum without turning an SSH input burst into a multi-row
+/// jump. New overflow replaces stale motion so the tail remains bounded.
 #[derive(Default)]
 pub(crate) struct ScrollPacer {
     pending: VecDeque<TimedInputEvent>,
@@ -158,17 +157,14 @@ impl ScrollPacer {
         }
     }
 
-    fn take_due(&mut self, now: Instant) -> Vec<TimedInputEvent> {
-        let Some(next) = self.deadline() else {
-            return Vec::new();
-        };
+    fn take_due(&mut self, now: Instant) -> Option<TimedInputEvent> {
+        let next = self.deadline()?;
         if now < next {
-            return Vec::new();
+            return None;
         }
-        let count = self.pending.len().min(MAX_SCROLL_PER_FRAME);
-        let events = self.pending.drain(..count).collect();
+        let event = self.pending.pop_front();
         self.next_at = Some(now + SCROLL_PERIOD);
-        events
+        event
     }
 
     fn cancel(&mut self) {
@@ -440,10 +436,11 @@ impl App {
     }
 
     pub(super) fn handle_due_scroll(&mut self, now: Instant) -> bool {
-        for timed in self.scroll_pacer.take_due(now) {
-            if !self.handle_timed_input_now(timed) {
-                return false;
-            }
+        let Some(timed) = self.scroll_pacer.take_due(now) else {
+            return true;
+        };
+        if !self.handle_timed_input_now(timed) {
+            return false;
         }
         true
     }
@@ -785,8 +782,8 @@ mod tests {
         assert_eq!(pacer.deadline(), Some(at + SCROLL_PERIOD));
         assert!(pacer
             .take_due(at + SCROLL_PERIOD - Duration::from_nanos(1))
-            .is_empty());
-        assert_eq!(pacer.take_due(at + SCROLL_PERIOD).len(), 1);
+            .is_none());
+        assert!(pacer.take_due(at + SCROLL_PERIOD).is_some());
         assert_eq!(pacer.deadline(), None);
     }
 
@@ -816,11 +813,31 @@ mod tests {
         let mut emitted = Vec::new();
         let mut due = at + SCROLL_PERIOD;
         while pacer.deadline().is_some() {
-            emitted.extend(pacer.take_due(due).iter().filter_map(mouse_x));
+            emitted.push(mouse_x(&pacer.take_due(due).unwrap()).unwrap());
             due += SCROLL_PERIOD;
         }
         assert_eq!(emitted, [3, 4, 5, 6, 7, 8, 9, 10]);
-        assert_eq!(due, at + SCROLL_PERIOD * 3);
+        assert_eq!(due, at + SCROLL_PERIOD * 9);
+    }
+
+    #[test]
+    fn late_scroll_wake_emits_one_tick_without_catching_up() {
+        let at = Instant::now();
+        let wheel = MouseButtons::VERT_WHEEL | MouseButtons::WHEEL_POSITIVE;
+        let mut pacer = ScrollPacer::default();
+        assert!(pacer.submit(mouse(0, wheel.clone(), at), at).is_some());
+        for x in 1..=3 {
+            assert!(pacer.submit(mouse(x, wheel.clone(), at), at).is_none());
+        }
+
+        let late = at + Duration::from_millis(100);
+        assert_eq!(mouse_x(&pacer.take_due(late).unwrap()), Some(1));
+        assert!(pacer.take_due(late).is_none());
+        assert_eq!(pacer.deadline(), Some(late + SCROLL_PERIOD));
+        assert_eq!(
+            mouse_x(&pacer.take_due(late + SCROLL_PERIOD).unwrap()),
+            Some(2)
+        );
     }
 
     #[test]
