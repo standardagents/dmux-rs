@@ -380,19 +380,31 @@ fn draw_hud(
     let lines = metrics.hud_lines();
     let area = buf.area();
     let rect = hud_layout(area, metrics, pos);
+    // Distinct title-bar surface (#109): the drag handle reads as a bar
+    // above the metrics, not one flat slab. Diagnostic blues, no project
+    // theming.
+    const HUD_BAR_BG: Color = Color::Indexed(24);
+    const HUD_BODY_BG: Color = Color::Indexed(17);
     buf.fill(
         rect,
         &Cell {
-            bg: Color::Indexed(17),
+            bg: HUD_BODY_BG,
+            ..Cell::default()
+        },
+    );
+    buf.fill(
+        Rect::new(rect.x, rect.y, rect.w, 1),
+        &Cell {
+            bg: HUD_BAR_BG,
             ..Cell::default()
         },
     );
     buf.draw_text(
         rect.x + 1,
         rect.y,
-        "── perf ──",
-        Color::Indexed(45),
-        Color::Indexed(17),
+        "perf",
+        Color::Indexed(159),
+        HUD_BAR_BG,
         AttrFlags::BOLD,
         rect,
     );
@@ -401,8 +413,8 @@ fn draw_hud(
         rect.right().saturating_sub(2),
         rect.y,
         "✕",
-        Color::Indexed(203),
-        Color::Indexed(17),
+        Color::Indexed(210),
+        HUD_BAR_BG,
         AttrFlags::BOLD,
         rect,
     );
