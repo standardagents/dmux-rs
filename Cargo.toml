@@ -16,7 +16,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/justin-schroeder/dmux"
+repository = "https://github.com/standardagents/dmux-rs"
 
 [workspace.dependencies]
 dmux-cc = { path = "crates/dmux-cc" }

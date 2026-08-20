@@ -29,7 +29,7 @@ Status legend: ✅ done · 🔨 this iteration · ⏳ later phase · ✂ intenti
 | Images (kitty graphics translation) | ⏳ |
 | break-pane migration for legacy multi-pane windows | ✅ (owner mode, idempotent) |
 | Multi-project sidebar, themes (8), i18n (en/ja) | multi-project grouping ✅ (headers, per-project pane records, project-scoped creation); themes accent ✅; i18n ✅ (en/ja catalog + locale switching; full string coverage growing) |
-| Distribution (npm platform packages), auto-update | npm wrapper + platform packages + release workflow ✅ (publish gated on tags/NPM_TOKEN); auto-update ✅ (npm registry check + status notice) |
+| Distribution, auto-update | authenticated GitHub release assets ✅; release polling and in-place update ✅ |
 
 ## TS-source features not yet in Rust (from the popup/action/settings inventory)
 

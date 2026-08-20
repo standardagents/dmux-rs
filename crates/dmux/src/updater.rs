@@ -42,6 +42,24 @@ pub fn enabled() -> bool {
             .unwrap_or(true)
 }
 
+/// Whether a GitHub release tag represents a newer stable release than the
+/// tag embedded in the running executable.
+pub fn is_newer_release(candidate: &str, current: &str) -> bool {
+    fn parse(tag: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = tag.strip_prefix('v').unwrap_or(tag).split('.');
+        let version = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        parts.next().is_none().then_some(version)
+    }
+
+    parse(candidate)
+        .zip(parse(current))
+        .is_some_and(|(candidate, current)| candidate > current)
+}
+
 fn asset_name() -> String {
     format!(
         "dmux-rs-{}-{}",
@@ -248,11 +266,22 @@ pub fn reexec(
 
 #[cfg(test)]
 mod tests {
-    use super::build_version;
+    use super::{build_version, is_newer_release};
 
     #[test]
     fn formats_release_and_development_builds() {
         assert_eq!(build_version("v1.2.3", "abc1234"), "v1.2.3 (abc1234)");
         assert_eq!(build_version("", "abc1234"), "dev (abc1234)");
+    }
+
+    #[test]
+    fn compares_github_release_tags_against_the_embedded_build_tag() {
+        assert!(is_newer_release("v0.35.0", "v0.34.4"));
+        assert!(is_newer_release("v1.0.0", "v0.99.99"));
+        assert!(!is_newer_release("v0.34.4", "v0.34.4"));
+        assert!(!is_newer_release("v0.34.3", "v0.34.4"));
+        assert!(!is_newer_release("latest", "v0.34.4"));
+        assert!(!is_newer_release("v0.35", "v0.34.4"));
+        assert!(!is_newer_release("v0.35.0", ""));
     }
 }

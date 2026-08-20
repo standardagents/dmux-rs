@@ -302,27 +302,6 @@ pub(crate) fn dirs_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
-/// Loose semver comparison: a > b?
-pub(crate) fn is_newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.trim_start_matches('v')
-            .split(['.', '-'])
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    };
-    let (a, b) = (parse(a), parse(b));
-    for i in 0..a.len().max(b.len()) {
-        let (x, y) = (
-            a.get(i).copied().unwrap_or(0),
-            b.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x > y;
-        }
-    }
-    false
-}
-
 pub(crate) fn slugify(prompt: &str) -> String {
     let mut slug = String::new();
     for word in prompt.split_whitespace().take(4) {

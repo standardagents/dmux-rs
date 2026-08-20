@@ -37,7 +37,7 @@ mod style;
 mod tracking;
 mod util;
 pub(crate) use util::{
-    base64, dirs_home, is_newer, iso_now, shq, slugify, strip_status_glyphs, timestamp,
+    base64, dirs_home, iso_now, shq, slugify, strip_status_glyphs, timestamp,
     trace_palette_enabled, trace_palette_line, update_may_apply, AnimClock, Tooltip,
 };
 mod updater;
@@ -160,8 +160,6 @@ enum AppMsg {
         branch: String,
         files: Result<Vec<String>, String>,
     },
-    /// A newer published version exists.
-    UpdateAvailable(String),
     /// A local prototype replacement was requested by another dmux-rs process.
     PrototypeRequested,
     /// A worktree build started from a pane menu completed.
@@ -429,7 +427,6 @@ struct App {
     app_tx: tokio::sync::mpsc::UnboundedSender<AppMsg>,
     inference_primary: Option<dmux_infer::Target>,
     inference_backup: Option<dmux_infer::Target>,
-    update_available: Option<String>,
     tracking_inflight: bool,
     last_tracking: Instant,
 }
@@ -620,7 +617,6 @@ async fn run(
         app_tx,
         inference_primary: None,
         inference_backup: None,
-        update_available: None,
         tracking_inflight: false,
         last_tracking: Instant::now(),
     };
@@ -635,17 +631,6 @@ async fn run(
         dmux_core::i18n::set_locale(s.get_str("language").unwrap_or("en"));
     }
     prototype::spawn_signal_listener(app.app_tx.clone())?;
-    // Update check (daily, off-loop, best-effort).
-    {
-        let tx = app.app_tx.clone();
-        tokio::spawn(async move {
-            if let Some(latest) = check_latest_version().await {
-                if is_newer(&latest, env!("CARGO_PKG_VERSION")) {
-                    let _ = tx.send(AppMsg::UpdateAvailable(latest));
-                }
-            }
-        });
-    }
     if std::env::var("DMUX_JUST_UPDATED")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -687,7 +672,7 @@ async fn run(
                         continue;
                     }
                 };
-                if tag == updater::BUILD_TAG || tag.is_empty() {
+                if !updater::is_newer_release(&tag, updater::BUILD_TAG) {
                     continue;
                 }
                 let r = repo.clone();
@@ -1276,10 +1261,6 @@ impl App {
                     self.toast(format!("✗ AI merge: {short}"));
                 }
             },
-            AppMsg::UpdateAvailable(version) => {
-                self.update_available = Some(version.clone());
-                self.toast(format!("Update available: dmux-rs {version}"));
-            }
             AppMsg::PrototypeRequested => self.request_prototype_path(),
             AppMsg::PrototypeBuildDone(result) => self.handle_prototype_build_done(result),
             AppMsg::ConflictsReady { branch, files } => match files {
@@ -2833,12 +2814,9 @@ impl App {
         if let Some(at) = self.status_clear_at {
             if now >= at {
                 self.status_clear_at = None;
-                // Empty = idle; render_frame fills it (update notice > tips >
-                // static leader hint).
-                self.status_msg = match &self.update_available {
-                    Some(v) => format!("⬆ dmux-rs {v} available · npm i -g dmux-rs"),
-                    None => String::new(),
-                };
+                // Empty restores the idle footer; render_frame fills it with
+                // tips or the static leader hint.
+                self.status_msg.clear();
                 self.dirty = true;
             }
         }
@@ -3172,22 +3150,6 @@ async fn ai_merge(
         git::abort_merge(root);
     })?;
     Ok(files.len())
-}
-
-/// Latest published dmux-rs version from the npm registry (best-effort).
-async fn check_latest_version() -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(6))
-        .build()
-        .ok()?;
-    let resp = client
-        .get("https://registry.npmjs.org/dmux-rs/latest")
-        .header("accept", "application/json")
-        .send()
-        .await
-        .ok()?;
-    let v: serde_json::Value = resp.json().await.ok()?;
-    v["version"].as_str().map(String::from)
 }
 
 /// Every pane after the first in each window: legacy splits that owner mode

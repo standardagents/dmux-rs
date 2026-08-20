@@ -249,7 +249,7 @@ the live grid diverged, suspect the emit/host layer — check
 | `DMUX_VERIFY=0` | disable the shadow verifier |
 | `DMUX_NO_REPORT=1` | verify but never file issues |
 | `DMUX_NO_UPDATE=1` | never self-update |
-| `DMUX_UPDATE_INTERVAL_SECS` | release poll cadence (default 600) |
+| `DMUX_UPDATE_INTERVAL_SECS` | release poll cadence (default 60) |
 | `DMUX_REPORT_DRY=<dir>` | write would-be issues to files (tests) |
 | `DMUX_TRACE_PALETTE=1` | trace pane-local OSC palette mutations (set/reset, fg/bg/indexed, pane + order) to `~/.dmux/logs/palette-trace.log` — decoded metadata only |
 | `DMUX_FAULT_DROP_BYTES=N` | inject a stream fault (self-test the loop) |
