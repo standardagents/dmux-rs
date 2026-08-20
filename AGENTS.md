@@ -101,9 +101,11 @@ Triage per issue:
 
 - **`render-incident`** → the fixer-agent runbook below.
 - **Human-filed bug** → reproduce first (the e2e harness patterns in
-  `scripts/` and the `DMUX_*` env knobs are your tools); fix; add a
-  regression test; close with the commit sha and a one-paragraph
-  explanation the reporter can understand.
+  `scripts/` and the `DMUX_*` env knobs are your tools — for pane-UX
+  interactions, `scripts/ui-smoke.sh` drives menus, clicks, and launch
+  actions against a hermetic dmux and is the template for new interaction
+  checks); fix; add a regression test; close with the commit sha and a
+  one-paragraph explanation the reporter can understand.
 - **Feature/UX request** → implement if the scope is clear and consistent
   with ROADMAP.md; verify e2e, then close with the sha. If the scope is
   ambiguous or the change is architecturally load-bearing, comment your
