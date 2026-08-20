@@ -230,7 +230,7 @@ fn draw_pane_title(
             Color::Indexed(131),
         ),
     ];
-    let dots_w = dots.len() as u16 * 2 + 1;
+    let dots_w = dots.len() as u16 * 3;
     let dots_x = bar.right().saturating_sub(dots_w).max(bar.x);
     let title_width = dots_x.saturating_sub(bar.x).saturating_sub(4);
     let glyph = status_glyph(pane, scene.anim);
@@ -260,13 +260,15 @@ fn draw_pane_title(
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
     // Right side: macOS-style traffic lights on the bar itself. Green
-    // renames, yellow hides, and red closes. Each uses a 2-cell click target.
+    // renames, yellow hides, and red closes. Each dot is CENTERED in a
+    // 3-cell slot (#98 round 2): ` ● ` per slot, so the glyph sits in the
+    // middle of its own click target instead of reading right-aligned.
     let mut x = dots_x;
     for (target, vivid, dim) in dots {
         let hovered = scene.hovered == Some(target);
         let fg = if focused || hovered { vivid } else { dim };
         let bx = x;
-        let hit = Rect::new(bx, bar.y, 2, 1);
+        let hit = Rect::new(bx, bar.y, 3, 1);
         let dot_bg = if hovered { t.bg_selected } else { bg };
         if hovered {
             buf.fill(
@@ -277,8 +279,6 @@ fn draw_pane_title(
                 },
             );
         }
-        // Glyph in the SECOND cell of the two-cell target (#98): with the
-        // group's trailing column this renders ` ● ● ● `, visually centered.
         buf.draw_text(
             bx + 1,
             bar.y,
@@ -293,7 +293,7 @@ fn draw_pane_title(
             bar,
         );
         clicks.add(hit, target);
-        x = bx + 2;
+        x = bx + 3;
     }
 }
 

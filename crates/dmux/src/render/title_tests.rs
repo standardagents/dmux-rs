@@ -69,9 +69,9 @@ fn build_identity_title_uses_pane_bar_surface_without_project_braille() {
 
 #[test]
 fn toolbar_uses_dimension_space_and_centers_dots() {
-    // #98: each ● sits in the SECOND cell of its two-cell click target, so
-    // the group renders ` ● ● ● ` — visually centered — while the full
-    // two-cell region stays clickable for its action. #99 removes dimensions
+    // #98 round 2: each ● is centered in a THREE-cell click target — one
+    // blank cell either side — so the glyph sits in the middle of its own
+    // slot; the whole slot stays clickable for its action. #99 removes dimensions
     // and makes their former columns available to long pane titles.
     use crate::registry::adopt_panes;
     use crate::session::TmuxPaneInfo;
@@ -133,20 +133,16 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     let bar_y = 0;
     let dot_cols: Vec<u16> = (0..90).filter(|x| buf.get(*x, bar_y).ch == '●').collect();
     assert_eq!(dot_cols.len(), 3, "three window dots: {dot_cols:?}");
-    // Evenly spaced, one blank column between and around: ` ● ● ● `.
-    assert_eq!(dot_cols[1] - dot_cols[0], 2);
-    assert_eq!(dot_cols[2] - dot_cols[1], 2);
+    // #98 round 2: 3-column pitch, each dot centered in its slot with a
+    // blank on both sides: ` ●  ●  ● `.
+    assert_eq!(dot_cols[1] - dot_cols[0], 3);
+    assert_eq!(dot_cols[2] - dot_cols[1], 3);
     assert_eq!(dot_cols[2], panes[0].rect.unwrap().right() - 2);
-    for x in [
-        dot_cols[0] - 1,
-        dot_cols[0] + 1,
-        dot_cols[1] + 1,
-        dot_cols[2] + 1,
-    ] {
-        assert_eq!(buf.get(x, bar_y).ch, ' ', "gap at {x}");
+    for dot_x in &dot_cols {
+        assert_eq!(buf.get(dot_x - 1, bar_y).ch, ' ', "left gap of {dot_x}");
+        assert_eq!(buf.get(dot_x + 1, bar_y).ch, ' ', "right gap of {dot_x}");
     }
-    // Each dot's click target covers BOTH cells of its slot — the cell the
-    // glyph sits in and the one to its left.
+    // Each dot's click target covers all THREE cells of its slot.
     use crate::views::ClickTarget;
     for (dot_x, want) in dot_cols.iter().zip([
         ClickTarget::TitleRename(0),
@@ -155,5 +151,6 @@ fn toolbar_uses_dimension_space_and_centers_dots() {
     ]) {
         assert_eq!(clicks.hit(*dot_x, bar_y), Some(&want), "glyph cell");
         assert_eq!(clicks.hit(dot_x - 1, bar_y), Some(&want), "left cell");
+        assert_eq!(clicks.hit(dot_x + 1, bar_y), Some(&want), "right cell");
     }
 }
