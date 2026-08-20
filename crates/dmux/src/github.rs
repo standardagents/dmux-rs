@@ -28,17 +28,19 @@ pub struct GitHubIssue {
     pub updated_at: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IssueSection {
     Yours,
+    AssignedTo(Vec<String>),
     Unassigned,
 }
 
 impl IssueSection {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Self::Yours => "Yours",
-            Self::Unassigned => "Unassigned",
+            Self::Yours => "Yours".to_owned(),
+            Self::AssignedTo(logins) => format!("@{}", logins.join(", @")),
+            Self::Unassigned => "Unassigned".to_owned(),
         }
     }
 }
@@ -283,29 +285,38 @@ pub fn issue_count_label(count: usize) -> String {
     }
 }
 
-pub fn issue_section(issue: &GitHubIssue, viewer_login: &str) -> Option<IssueSection> {
+pub fn issue_section(issue: &GitHubIssue, viewer_login: &str) -> IssueSection {
     if issue
         .assignees
         .iter()
         .any(|login| login.eq_ignore_ascii_case(viewer_login))
     {
-        Some(IssueSection::Yours)
+        IssueSection::Yours
     } else if issue.assignees.is_empty() {
-        Some(IssueSection::Unassigned)
+        IssueSection::Unassigned
     } else {
-        None
+        let mut logins = issue.assignees.clone();
+        logins.sort_by_key(|login| login.to_ascii_lowercase());
+        IssueSection::AssignedTo(logins)
     }
 }
 
-fn prepare_issues_for_view(issues: &mut Vec<GitHubIssue>, viewer_login: &str) {
-    issues.retain(|issue| issue_section(issue, viewer_login).is_some());
+fn prepare_issues_for_view(issues: &mut [GitHubIssue], viewer_login: &str) {
     issues.sort_by(|left, right| {
-        issue_section(left, viewer_login)
-            .cmp(&issue_section(right, viewer_login))
+        issue_section_sort_key(left, viewer_login)
+            .cmp(&issue_section_sort_key(right, viewer_login))
             .then_with(|| left.repository.cmp(&right.repository))
             .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.number.cmp(&right.number))
     });
+}
+
+fn issue_section_sort_key(issue: &GitHubIssue, viewer_login: &str) -> (u8, String) {
+    match issue_section(issue, viewer_login) {
+        IssueSection::Yours => (0, String::new()),
+        IssueSection::AssignedTo(logins) => (1, logins.join("\0").to_ascii_lowercase()),
+        IssueSection::Unassigned => (2, String::new()),
+    }
 }
 
 fn authenticated_viewer_login() -> Result<String, String> {
@@ -488,11 +499,14 @@ fn strip_prefix_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
     struct TestTree(PathBuf);
+
+    static NEXT_TEST_TREE: AtomicU64 = AtomicU64::new(0);
 
     impl TestTree {
         fn new() -> Self {
@@ -500,7 +514,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("dmux-github-test-{nonce}"));
+            let sequence = NEXT_TEST_TREE.fetch_add(1, Ordering::Relaxed);
+            let process = std::process::id();
+            let path =
+                std::env::temp_dir().join(format!("dmux-github-test-{process}-{nonce}-{sequence}"));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -725,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_yours_and_unassigned_in_section_order() {
+    fn orders_yours_other_assignees_and_unassigned() {
         let mut issues = vec![
             test_issue(1, &[]),
             test_issue(2, &["someone-else"]),
@@ -737,15 +754,16 @@ mod tests {
 
         assert_eq!(
             issues.iter().map(|issue| issue.number).collect::<Vec<_>>(),
-            [4, 3, 1]
+            [4, 3, 2, 1]
         );
-        assert_eq!(
-            issue_section(&issues[0], "andrew"),
-            Some(IssueSection::Yours)
-        );
+        assert_eq!(issue_section(&issues[0], "andrew"), IssueSection::Yours);
         assert_eq!(
             issue_section(&issues[2], "andrew"),
-            Some(IssueSection::Unassigned)
+            IssueSection::AssignedTo(vec!["someone-else".into()])
+        );
+        assert_eq!(
+            issue_section(&issues[3], "andrew"),
+            IssueSection::Unassigned
         );
     }
 

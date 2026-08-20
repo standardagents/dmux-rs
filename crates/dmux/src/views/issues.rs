@@ -12,7 +12,7 @@ use dmux_ui::{
     ButtonStyle, ClickMap, ListState, PanelStyle,
 };
 
-use crate::github::{issue_section, GitHubIssue, IssueLoadState, SharedIssueState};
+use crate::github::{issue_section, GitHubIssue, IssueLoadState, IssueSection, SharedIssueState};
 
 use super::{vkeys, AppCmd, ClickTarget, View, ViewCtx, ViewResult};
 
@@ -192,9 +192,9 @@ fn grouped_row_count(
     let mut previous_section = None;
     let mut previous_repository = None;
     for issue in &issues[start..=end] {
-        let section = issue_section(issue, viewer_login)
-            .expect("loaded issue must belong to the viewer or be unassigned");
-        if previous_section != Some(section) {
+        let section = issue_section(issue, viewer_login);
+        if previous_section.as_ref() != Some(&section) {
+            rows += 1;
             previous_section = Some(section);
             previous_repository = None;
         }
@@ -333,14 +333,12 @@ impl View for IssueBrowserView {
                 );
             }
             IssueLoadState::Loaded {
-                viewer_login,
-                issues,
-                ..
+                repository, issues, ..
             } if issues.is_empty() => {
                 buf.draw_text(
                     content.x,
                     content.y,
-                    &format!("No issues are assigned to @{viewer_login} or awaiting assignment"),
+                    &format!("No open issues in {repository}"),
                     ctx.theme.text_dim,
                     bg,
                     AttrFlags::empty(),
@@ -355,23 +353,28 @@ impl View for IssueBrowserView {
                     if y >= rows_bottom {
                         break;
                     }
-                    let section = issue_section(issue, viewer_login)
-                        .expect("loaded issue must belong to the viewer or be unassigned");
-                    let section_changed = previous_section != Some(section);
+                    let section = issue_section(issue, viewer_login);
+                    let section_changed = previous_section.as_ref() != Some(&section);
                     if section_changed {
-                        previous_section = Some(section);
+                        let color = match &section {
+                            IssueSection::Yours => ctx.theme.ok,
+                            IssueSection::AssignedTo(_) => ctx.theme.text,
+                            IssueSection::Unassigned => ctx.theme.warn,
+                        };
+                        let label = section.label();
+                        buf.draw_text(content.x, y, &label, color, bg, AttrFlags::BOLD, inner);
+                        previous_section = Some(section.clone());
                         previous_repository = None;
+                        y += 1;
+                        if y >= rows_bottom {
+                            break;
+                        }
                     }
                     if previous_repository.as_deref() != Some(issue.repository.as_str()) {
-                        let heading = if section_changed {
-                            format!("{} · {}", section.label(), issue.repository)
-                        } else {
-                            issue.repository.clone()
-                        };
                         buf.draw_text(
-                            content.x,
+                            content.x + 2,
                             y,
-                            &heading,
+                            &issue.repository,
                             ctx.theme.accent,
                             bg,
                             AttrFlags::BOLD,
@@ -399,7 +402,7 @@ impl View for IssueBrowserView {
                     );
                     let checkbox = if selected { "◼" } else { "◻" };
                     buf.draw_text(
-                        content.x + 2,
+                        content.x + 4,
                         y,
                         checkbox,
                         if selected {
@@ -413,7 +416,7 @@ impl View for IssueBrowserView {
                     );
                     let prefix = format!(" #{:<5} ", issue.number);
                     let x = buf.draw_text(
-                        content.x + 4,
+                        content.x + 6,
                         y,
                         &prefix,
                         ctx.theme.accent,
@@ -610,6 +613,12 @@ mod tests {
         issue
     }
 
+    fn assigned_issue(number: u64, title: &str, assignee: &str) -> GitHubIssue {
+        let mut issue = issue(number, title);
+        issue.assignees = vec![assignee.into()];
+        issue
+    }
+
     fn key(key: KeyCode) -> KeyEvent {
         KeyEvent {
             key,
@@ -687,7 +696,7 @@ mod tests {
         assert!(prompt.contains("owner/second#1: Second repository"));
         assert_eq!(
             grouped_row_count(loaded_issues(&snapshot).unwrap(), "andrew", 0, 1),
-            4
+            5
         );
     }
 
@@ -772,11 +781,15 @@ mod tests {
     }
 
     #[test]
-    fn overlay_groups_yours_before_unassigned_issues() {
+    fn overlay_renders_ownership_repository_issue_hierarchy() {
         let state = Arc::new(Mutex::new(IssueLoadState::Loaded {
             repository: "owner/repo".into(),
             viewer_login: "andrew".into(),
-            issues: vec![issue(1, "Claimed"), unassigned_issue(2, "Available")],
+            issues: vec![
+                issue(1, "Claimed"),
+                assigned_issue(2, "Someone else's", "casey"),
+                unassigned_issue(3, "Available"),
+            ],
         }));
         let mut view = IssueBrowserView::new("/projects/repo".into(), state);
         let mut buf = CellBuffer::new(100, 24);
@@ -795,18 +808,36 @@ mod tests {
             .map(|y| (0..100).map(|x| buf.get(x, y).ch).collect())
             .collect();
         let yours = rows.iter().position(|row| row.contains("Yours")).unwrap();
-        let claimed = rows.iter().position(|row| row.contains("Claimed")).unwrap();
+        let other = rows.iter().position(|row| row.contains("@casey")).unwrap();
         let unassigned = rows
             .iter()
             .position(|row| row.contains("Unassigned"))
             .unwrap();
-        let available = rows
-            .iter()
-            .position(|row| row.contains("Available"))
-            .unwrap();
-        assert!(yours < claimed);
-        assert!(claimed < unassigned);
-        assert!(unassigned < available);
+        let section_x = rows[yours].find("Yours").unwrap() as u16;
+        assert_eq!(
+            rows[yours + 1].find("owner/repo").unwrap() as u16,
+            section_x + 2
+        );
+        assert!(rows[yours + 2].contains("Claimed"));
+        assert_eq!(other, yours + 3);
+        assert_eq!(
+            rows[other + 1].find("owner/repo").unwrap() as u16,
+            section_x + 2
+        );
+        assert!(rows[other + 2].contains("Someone else's"));
+        assert_eq!(unassigned, other + 3);
+        assert_eq!(
+            rows[unassigned + 1].find("owner/repo").unwrap() as u16,
+            section_x + 2
+        );
+        assert!(rows[unassigned + 2].contains("Available"));
+
+        let issue_x = rows[yours + 2].find('◻').unwrap() as u16;
+        assert_eq!(issue_x, section_x + 4);
+        assert_eq!(buf.get(section_x, yours as u16).fg, theme.ok);
+        assert_eq!(buf.get(section_x, other as u16).fg, theme.text);
+        assert_eq!(buf.get(section_x, unassigned as u16).fg, theme.warn);
+        assert_eq!(buf.get(section_x + 2, (yours + 1) as u16).fg, theme.accent);
     }
 
     #[test]
