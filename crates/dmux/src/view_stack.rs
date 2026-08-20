@@ -11,9 +11,25 @@ use crate::pane_actions;
 use crate::views::{AppCmd, ClickTarget, ContextMenuTarget, MenuItem, MenuView, ViewResult};
 use crate::App;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneMenuClose {
+    Confirm,
+    Immediate,
+}
+
+impl PaneMenuClose {
+    fn command(self, idx: usize) -> AppCmd {
+        match self {
+            Self::Confirm => AppCmd::ConfirmClose(idx),
+            Self::Immediate => AppCmd::ClosePane(idx),
+        }
+    }
+}
+
 impl App {
-    /// Pane-scoped actions shared by leader-key and pointer menus.
-    pub(super) fn pane_menu_items(&self, idx: usize) -> Vec<MenuItem> {
+    /// Pane-scoped actions shared by leader-key and pointer menus. The caller
+    /// supplies the close behavior associated with the menu's opening gesture.
+    pub(super) fn pane_menu_items(&self, idx: usize, close: PaneMenuClose) -> Vec<MenuItem> {
         let mut items = Vec::new();
         if let Some(pane) = self.panes.get(idx) {
             let hide_label = if pane.hidden {
@@ -69,15 +85,22 @@ impl App {
                 "",
                 AppCmd::OpenInEditor(idx),
             ));
-            items.push(MenuItem::new(t("menu.close"), "^b x", AppCmd::ConfirmClose(idx)).danger());
+            items.push(MenuItem::new(t("menu.close"), "^b x", close.command(idx)).danger());
         }
         items
     }
 
-    fn open_pane_flyout(&mut self, idx: usize, x: u16, y: u16, source: Option<Rect>) -> bool {
+    fn open_pane_flyout(
+        &mut self,
+        idx: usize,
+        x: u16,
+        y: u16,
+        source: Option<Rect>,
+        close: PaneMenuClose,
+    ) -> bool {
         if let Some(pane) = self.panes.get(idx) {
             let title = pane.display_title().to_string();
-            let items = self.pane_menu_items(idx);
+            let items = self.pane_menu_items(idx, close);
             let mut menu = MenuView::new(title, items).anchored(x, y);
             if let Some(source) = source {
                 menu = menu.with_source(source);
@@ -89,13 +112,22 @@ impl App {
     }
 
     pub(super) fn open_sidebar_pane_flyout(&mut self, idx: usize, y: u16) -> bool {
+        self.open_sidebar_pane_flyout_with_close(idx, y, PaneMenuClose::Confirm)
+    }
+
+    fn open_sidebar_pane_flyout_with_close(
+        &mut self,
+        idx: usize,
+        y: u16,
+        close: PaneMenuClose,
+    ) -> bool {
         if self.selected != idx || self.sidebar_project.is_some() {
             self.selected = idx;
             self.sidebar_project = None;
             self.rebuild_sidebar_groups();
         }
         let source = Rect::new(self.layout.sidebar.x, y, self.layout.sidebar.w, 1);
-        self.open_pane_flyout(idx, self.layout.sidebar.right() + 1, y, Some(source))
+        self.open_pane_flyout(idx, self.layout.sidebar.right() + 1, y, Some(source), close)
     }
 
     pub(super) fn open_context_menu(
@@ -111,9 +143,11 @@ impl App {
                     .get(idx)
                     .and_then(|pane| pane.rect)
                     .map(pane_actions::surface_rect);
-                self.open_pane_flyout(idx, col, row, source)
+                self.open_pane_flyout(idx, col, row, source, PaneMenuClose::Immediate)
             }
-            Some(ContextMenuTarget::SidebarPane(idx)) => self.open_sidebar_pane_flyout(idx, row),
+            Some(ContextMenuTarget::SidebarPane(idx)) => {
+                self.open_sidebar_pane_flyout_with_close(idx, row, PaneMenuClose::Immediate)
+            }
             None => true,
         }
     }
@@ -149,5 +183,16 @@ impl App {
                 self.execute_cmd(cmd)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_menu_close_policy_distinguishes_context_and_confirmed_paths() {
+        assert_eq!(PaneMenuClose::Immediate.command(4), AppCmd::ClosePane(4));
+        assert_eq!(PaneMenuClose::Confirm.command(4), AppCmd::ConfirmClose(4));
     }
 }

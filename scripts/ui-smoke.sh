@@ -75,6 +75,16 @@ wait_for() { # $1 = regex, $2 = label, [$3 = seconds]
   return 1
 }
 
+wait_gone() { # $1 = regex, $2 = label, [$3 = seconds]
+  local t=${3:-8}
+  for _ in $(seq 1 $((t*2))); do
+    cap | /usr/bin/grep -q "$1" || return 0
+    sleep 0.5
+  done
+  fail "$2"
+  return 1
+}
+
 # ---- boot ------------------------------------------------------------------
 tmux -L "$DRV" -f /dev/null new-session -d -s drv -x $DW -y $DH "exec bash"
 drv_keys "cd $WORK && EDITOR=$WORK/editor-probe.sh UI_SMOKE_RESULT=$WORK/editor-cwd.txt \
@@ -119,9 +129,22 @@ if [ -n "${MX:-}" ]; then
   echo "$ANSI" | /usr/bin/grep "MARKER" | /usr/bin/grep -q "38;5;196" || fail menu-source-colors
   echo "$ANSI" | /usr/bin/grep -q "38;5;238" || fail menu-scrim-present
   [ "$FAILS" = 0 ] && echo "PASS context-menu colors (source intact, scene dimmed)"
-  drv_keys Escape; sleep 0.5
+  # The menu starts on its first item. Up wraps to the final Close pane item.
+  drv_keys Up Enter; sleep 0.5
+  if wait_gone "terminal-1" context-close 8; then
+    echo "PASS context-close (pane closed from right-click menu)"
+  fi
 else
   fail marker-paint
+fi
+
+# ---- case 3: keyboard close retains confirmation --------------------------
+ROW2=$(sidebar_row "other-term")
+left_click 5 "$ROW2"
+leader x
+if wait_for "process will be killed" keyboard-close-confirm 4; then
+  echo "PASS keyboard-close (confirmation retained)"
+  drv_keys Escape; sleep 0.5
 fi
 
 # ---- result ----------------------------------------------------------------

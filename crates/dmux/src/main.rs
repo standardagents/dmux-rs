@@ -2877,7 +2877,7 @@ impl App {
             AppCmd::OpenPaneFlyout { idx, y } => return self.open_sidebar_pane_flyout(idx, y),
             AppCmd::OpenPaneMenu => {
                 let idx = self.selected.min(self.panes.len().saturating_sub(1));
-                let mut items = self.pane_menu_items(idx);
+                let mut items = self.pane_menu_items(idx, view_stack::PaneMenuClose::Confirm);
                 items.push(MenuItem::new(
                     t("menu.new_agents"),
                     "^b n",
