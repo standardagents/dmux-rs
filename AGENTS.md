@@ -69,9 +69,9 @@ Empty queue = wait (~5 min between checks), don't invent work.
 **Team issue tracking**: this org uses the `issue` CLI / skill
 (`@standardagents/issues`). When present, prefer it over raw `gh` for
 issue work in this repo: search it for related issues before substantial
-work, post progress comments through it as you go, and close through it
-when an issue is done (the runbook's close step counts as the explicit
-direction it requires). It adds issues to the shared org Project and
+work, post progress comments through it as you go, and complete through
+it when an issue is done — the delivery record in the completion
+lifecycle counts as the explicit close direction the skill requires. It adds issues to the shared org Project and
 survives GitHub outages via its local write queue. Leave labels and
 milestones unchanged unless an issue asks; assignment is the exception —
 the loop self-assigns each issue it claims (see loop rules).
@@ -79,9 +79,9 @@ the loop self-assigns each issue it claims (see loop rules).
 **Standing approval (this repo only)**: the `issue` skill normally asks a
 human before creating an issue and wants explicit direction before
 closing one. For dmux-rs, this document IS that approval — the automated
-reporter files issues without confirmation, and the loop closes an issue
-without further sign-off once its runbook is satisfied (fix validated,
-released, referenced by sha and version — or correctly triaged as
+reporter files issues without confirmation, and the loop completes an
+issue without further sign-off once its runbook is satisfied (fix
+validated, released, referenced by sha and version — or correctly triaged as
 `cannot-reproduce`/`needs-info`). Do not ask for per-issue confirmation;
 do not extend this standing approval to any other repository.
 
@@ -104,10 +104,11 @@ Triage per issue:
   `scripts/` and the `DMUX_*` env knobs are your tools — for pane-UX
   interactions, `scripts/ui-smoke.sh` drives menus, clicks, and launch
   actions against a hermetic dmux and is the template for new interaction
-  checks); fix; add a regression test; close with the commit sha and a
-  one-paragraph explanation the reporter can understand.
+  checks); fix; add a regression test; deliver per the completion
+  lifecycle with a one-paragraph explanation the reporter can understand.
 - **Feature/UX request** → implement if the scope is clear and consistent
-  with ROADMAP.md; verify e2e, then close with the sha. If the scope is
+  with ROADMAP.md; verify e2e, then deliver per the completion
+  lifecycle. If the scope is
   ambiguous or the change is architecturally load-bearing, comment your
   questions or proposed design on the issue, label it `needs-info`, and
   move on — never guess at big scope.
@@ -116,8 +117,8 @@ Triage per issue:
 Loop rules:
 
 - **One issue per iteration.** Reproduce → fix → corpus-lock → validate →
-  push to `main` → close the issue with the commit sha. Never batch
-  half-finished fixes.
+  push to `main` → release → deliver (completion lifecycle below). Never
+  batch half-finished fixes.
 - **Stay current with the issue tooling.** When the loop boots, run
   `issue upgrade` (and `issue skill install` if the skill changed) so the
   claim/close flow matches the current `@standardagents/issues` contract,
@@ -130,18 +131,28 @@ Loop rules:
   working in the repository, run `scripts/work-issue.sh <n>` after the claim
   and work from the path it prints. Each active issue must use its own
   worktree. Keep the shared root checkout free of issue edits.
-- **Auto-closing commits.** Include `Fixes #<n>` in the fix commit message
-  so GitHub closes the issue automatically when the commit lands on
-  `main`.
-- **Close with `issue finish <n> "<message>"`.** It posts the explanation,
-  closes if still open, and moves the card to Done.
-- **Explain every fix on its issue.** When you fix and push, comment on
-  the issue (through the `issue` CLI) with what the problem actually was
-  (root cause, not just symptom) and how you fixed it, plus the commit
-  sha and released version — auto-close doesn't tell the reporter
-  anything, and testers should feel heard, not processed. Keep it very
-  short and simple: a few plain sentences a non-expert can skim, not a
-  tome — deep technical detail belongs in the commit message.
+- **Completion lifecycle (#73) — the steps run in exactly this order,**
+  and "the issue closed" is not "the work is delivered":
+  1. Commit with `Fixes #<n>` in the message.
+  2. Push to `main`. GitHub processes the `Fixes` reference **at this
+     moment** — the issue closing on push is the expected intermediate
+     state, not the end of the job. The release has not happened yet.
+  3. Release (`scripts/release.sh patch|minor`). It refuses dirty or
+     unsynchronized state and re-validates before publishing.
+  4. Post the delivery record: `issue finish <n> "<explanation>"`. Its
+     role after GitHub's merge-time closure is NOT to close — it posts
+     the explanation testers read, attaches the commit sha and released
+     version, and moves the Team card to Done. The tool answering
+     "already completed" while still posting is the normal outcome.
+  5. **If the release fails after the auto-close**: the fix is on `main`
+     but undelivered. Reopen the issue with a comment saying exactly
+     that, repair the release, then run step 4. Never leave an issue
+     closed with its fix unreleased.
+- **The delivery record is for the reporter.** Say what the problem
+  actually was (root cause, not just symptom) and how you fixed it, plus
+  the sha and version — testers should feel heard, not processed. Keep it
+  very short and simple: a few plain sentences a non-expert can skim, not
+  a tome — deep technical detail belongs in the commit message.
 - **Validation is non-negotiable**: `cargo test` fully green AND
   `scripts/fidelity.sh` ALL PASS before any push. A fix that breaks either
   is not a fix.
