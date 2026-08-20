@@ -9,9 +9,28 @@
 # (griddump). Ours: the driver terminal hosting dmux-rs, captured the same
 # way, aligned by a marker cell. Any differing cell is a fidelity bug.
 #
-# Usage: scripts/fidelity.sh   (from rust/; needs tmux >= 3.3, ~90s)
+# Usage: scripts/fidelity.sh   (needs tmux >= 3.3, ~90s)
+#        DMUX_FIDELITY_CASE=rich-static scripts/fidelity.sh
 set -u
 cd "$(dirname "$0")/.." || exit 1
+
+FIDELITY_CASE=${DMUX_FIDELITY_CASE:-}
+SUPPORTED_CASES="rich-static scrolled-bands wide-and-styles shift-tab-composer osc-colors"
+if [ -n "$FIDELITY_CASE" ]; then
+  case " $SUPPORTED_CASES " in
+    *" $FIDELITY_CASE "*) ;;
+    *)
+      echo "fidelity: unknown case '$FIDELITY_CASE'" >&2
+      echo "fidelity: supported cases: $SUPPORTED_CASES" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+case_selected() {
+  [ -z "$FIDELITY_CASE" ] || [ "$FIDELITY_CASE" = "$1" ]
+}
+
 BIN=$PWD/target/debug/dmux-rs
 GRID=$PWD/target/debug/griddump
 # The harness owns binary freshness (#59): stale binaries silently validate
@@ -208,6 +227,7 @@ tmux -L $TGT set -g window-style default 2>/dev/null
 tmux -L $TGT set -g window-active-style default 2>/dev/null
 
 for case_sh in cases/rich-static.sh cases/scrolled-bands.sh cases/wide-and-styles.sh; do
+  case_selected "$(basename "$case_sh" .sh)" || continue
   tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
   tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/$case_sh" Enter; sleep 1.5
   mode=strict
@@ -222,16 +242,18 @@ done
 # A fixture composer requests Kitty keyboard encoding and changes its visible
 # mode only after receiving Shift+Tab as CSI-u. Feed raw host bytes through
 # dmux so this covers host parsing, pane mode detection, routing, and tmux.
-tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
-tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/cases/shift-tab-composer.py" Enter; sleep 1
-tmux -L $DRV send-keys -t drv -H 1b 5b 39 3b 32 75; sleep 2
-if tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep -q "composer mode: BYPASS"; then
-  echo "PASS shift-tab/composer (extended CSI-u reached pane)"
-else
-  echo "FAIL shift-tab/composer: mode did not change"
-  tmux -L $TGT display-message -p -t "$PANE" 'tmux pane mode: #{pane_key_mode}'
-  tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep "composer" || true
-  FAILS=$((FAILS+1))
+if case_selected shift-tab-composer; then
+  tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
+  tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/cases/shift-tab-composer.py" Enter; sleep 1
+  tmux -L $DRV send-keys -t drv -H 1b 5b 39 3b 32 75; sleep 2
+  if tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep -q "composer mode: BYPASS"; then
+    echo "PASS shift-tab/composer (extended CSI-u reached pane)"
+  else
+    echo "FAIL shift-tab/composer: mode did not change"
+    tmux -L $TGT display-message -p -t "$PANE" 'tmux pane mode: #{pane_key_mode}'
+    tmux -L $TGT capture-pane -p -t "$PANE" | /usr/bin/grep "composer" || true
+    FAILS=$((FAILS+1))
+  fi
 fi
 
 # osc-colors: pane-local dynamic palettes (OSC 10/11/4). Contract: written
@@ -239,13 +261,15 @@ fi
 # meaningful — tmux themes only written cells while real terminals theme
 # erased cells too; we follow the terminals. Across a restart the palette
 # is unrecoverable from tmux and returns with the app's next repaint.)
-tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
-tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/cases/osc-colors.sh" Enter; sleep 1.5
-if ours_capture | /usr/bin/grep -q "38;2;224;215;204"; then
-  echo "PASS osc-colors/live (themed default fg reaches the host)"
-else
-  echo "FAIL osc-colors/live: themed default fg missing from host output"
-  FAILS=$((FAILS+1))
+if case_selected osc-colors; then
+  tmux -L $TGT send-keys -t "$PANE" C-c 2>/dev/null; sleep 0.3
+  tmux -L $TGT send-keys -t "$PANE" "$WORKDIR/cases/osc-colors.sh" Enter; sleep 1.5
+  if ours_capture | /usr/bin/grep -q "38;2;224;215;204"; then
+    echo "PASS osc-colors/live (themed default fg reaches the host)"
+  else
+    echo "FAIL osc-colors/live: themed default fg missing from host output"
+    FAILS=$((FAILS+1))
+  fi
 fi
 
 echo
