@@ -30,6 +30,7 @@ fi
 [ -z "$(git status --porcelain)" ] || { echo "working tree dirty"; exit 1; }
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD not in sync with origin/main"; exit 1; }
+# End guards.
 
 SHA=$(git rev-parse --short HEAD)
 
@@ -37,6 +38,10 @@ SHA=$(git rev-parse --short HEAD)
 # hasn't blessed (unattended releases have no human eyeball).
 echo "[release] validating…"
 bash scripts/check.sh
+# A concurrent push makes further validation of this commit pointless (#84):
+# check the remote tip between the expensive phases and stop early. The
+# final pre-publication guard below remains the authoritative gate.
+assert_main_unmoved "workspace checks"
 # fidelity.sh builds its own binaries (#59); no separate build needed here.
 bash scripts/fidelity.sh >/dev/null 2>&1 || { echo "fidelity harness FAILED — no release"; exit 1; }
 

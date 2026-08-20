@@ -24,3 +24,13 @@ next_release_version() {
   esac
   printf 'v%s.%s.%s\n' "$major" "$minor" "$patch"
 }
+
+# Fail fast when origin/main has advanced past HEAD (#84). $1 names the
+# validation phase that just finished, for the error message.
+assert_main_unmoved() {
+  git fetch -q origin main
+  if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+    echo "origin/main advanced during $1 — stopping before further validation; re-sync and rerun"
+    exit 1
+  fi
+}
