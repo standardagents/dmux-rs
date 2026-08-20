@@ -67,10 +67,11 @@ fn session_title_uses_pane_bar_surface_without_project_braille() {
 }
 
 #[test]
-fn toolbar_dots_center_in_their_click_targets() {
+fn toolbar_uses_dimension_space_and_centers_dots() {
     // #98: each ● sits in the SECOND cell of its two-cell click target, so
     // the group renders ` ● ● ● ` — visually centered — while the full
-    // two-cell region stays clickable for its action.
+    // two-cell region stays clickable for its action. #99 removes dimensions
+    // and makes their former columns available to long pane titles.
     use crate::registry::adopt_panes;
     use crate::session::TmuxPaneInfo;
     use dmux_cc::{PaneId, WindowId};
@@ -78,7 +79,7 @@ fn toolbar_dots_center_in_their_click_targets() {
     let info = TmuxPaneInfo {
         pane: PaneId(1),
         window: WindowId(1),
-        title: "term-1".into(),
+        title: "pane-title-abcdefghijklmnop".into(),
         width: 40,
         height: 10,
         alternate_on: false,
@@ -123,6 +124,11 @@ fn toolbar_dots_center_in_their_click_targets() {
     let mut clicks = ClickMap::new();
     compose(&mut buf, &scene, &mut clicks);
 
+    let bar_text: String = (41..81).map(|x| buf.get(x, 0).ch).collect();
+    assert!(bar_text.contains("pane-title-abcdefghijklmnop"));
+    assert!(!bar_text.contains('×'));
+    assert!(!bar_text.contains("40×10"));
+
     // Three dots on the title row (y = 0, the bar above the body at y 1).
     let bar_y = 0;
     let dot_cols: Vec<u16> = (0..90).filter(|x| buf.get(*x, bar_y).ch == '●').collect();
@@ -130,6 +136,7 @@ fn toolbar_dots_center_in_their_click_targets() {
     // Evenly spaced, one blank column between and around: ` ● ● ● `.
     assert_eq!(dot_cols[1] - dot_cols[0], 2);
     assert_eq!(dot_cols[2] - dot_cols[1], 2);
+    assert_eq!(dot_cols[2], panes[0].rect.unwrap().right() - 2);
     for x in [
         dot_cols[0] - 1,
         dot_cols[0] + 1,

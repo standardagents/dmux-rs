@@ -214,10 +214,30 @@ fn draw_pane_title(
         },
     );
 
+    let dots = [
+        (
+            ClickTarget::TitleRename(idx),
+            Color::Rgb(0x2e, 0xc2, 0x4e),
+            Color::Indexed(65),
+        ),
+        (
+            ClickTarget::TitleHide(idx),
+            Color::Rgb(0xfe, 0xbc, 0x2e),
+            Color::Indexed(136),
+        ),
+        (
+            ClickTarget::TitleClose(idx),
+            Color::Rgb(0xff, 0x5f, 0x57),
+            Color::Indexed(131),
+        ),
+    ];
+    let dots_w = dots.len() as u16 * 2 + 1;
+    let dots_x = bar.right().saturating_sub(dots_w).max(bar.x);
+    let title_width = dots_x.saturating_sub(bar.x).saturating_sub(4);
     let glyph = status_glyph(pane, scene.anim);
     let label = format!(
         " {glyph} {} ",
-        truncate(pane.display_title(), bar.w.saturating_sub(16) as usize)
+        truncate(pane.display_title(), title_width as usize)
     );
     let attrs = if full || selected {
         AttrFlags::BOLD
@@ -240,44 +260,9 @@ fn draw_pane_title(
     }
     clicks.add(bar, ClickTarget::PaneTitle(idx));
 
-    // Right side: size + macOS-style traffic lights on the bar itself —
-    // green rename, yellow hide, red close. Vivid on the focused pane, dim
-    // dots elsewhere; each gets a 2-cell click target.
-    let size = format!("{}×{}", pane.cols, pane.rows);
-    let dots = [
-        (
-            ClickTarget::TitleRename(idx),
-            Color::Rgb(0x2e, 0xc2, 0x4e),
-            Color::Indexed(65),
-        ),
-        (
-            ClickTarget::TitleHide(idx),
-            Color::Rgb(0xfe, 0xbc, 0x2e),
-            Color::Indexed(136),
-        ),
-        (
-            ClickTarget::TitleClose(idx),
-            Color::Rgb(0xff, 0x5f, 0x57),
-            Color::Indexed(131),
-        ),
-    ];
-    let dots_w = dots.len() as u16 * 2 + 1;
-    let total_w = size.chars().count() as u16 + 2 + dots_w;
-    let mut x = bar.right().saturating_sub(total_w);
-    x = buf.draw_text(
-        x,
-        bar.y,
-        &size,
-        if focused {
-            Color::Indexed(255)
-        } else {
-            t.text_faint
-        },
-        bg,
-        AttrFlags::empty(),
-        bar,
-    );
-    x += 2;
+    // Right side: macOS-style traffic lights on the bar itself. Green
+    // renames, yellow hides, and red closes. Each uses a 2-cell click target.
+    let mut x = dots_x;
     for (target, vivid, dim) in dots {
         let hovered = scene.hovered == Some(target);
         let fg = if focused || hovered { vivid } else { dim };
