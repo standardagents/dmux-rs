@@ -667,5 +667,25 @@ mod tests {
         };
         assert_ne!(card_cell(ClickTarget::WelcomeCard(0)), theme.bg_selected);
         assert_eq!(card_cell(ClickTarget::WelcomeCard(1)), theme.bg_selected);
+
+        let keyboard_scene = WelcomeScene {
+            selected: 1,
+            hovered: None,
+            ..scene
+        };
+        let mut keyboard_buf = CellBuffer::new(w, h);
+        clicks.clear();
+        draw(
+            &mut keyboard_buf,
+            Rect::new(0, 0, w, h),
+            &theme,
+            &keyboard_scene,
+            &mut clicks,
+        );
+        for row in 0..h {
+            for col in 0..w {
+                assert_eq!(buf.get(col, row), keyboard_buf.get(col, row));
+            }
+        }
     }
 }

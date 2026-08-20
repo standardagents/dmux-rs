@@ -127,4 +127,34 @@ impl View for EnabledAgentsView {
         self.list.selected = tag as usize;
         self.toggle(tag as usize)
     }
+
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        if (tag as usize) < AGENTS.len() {
+            self.list.selected = tag as usize;
+        }
+        tag
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmux_host::{KeyCode, Modifiers};
+
+    #[test]
+    fn hover_moves_selection_before_keyboard_navigation() {
+        let settings = Arc::new(Mutex::new(SettingsStore::load(
+            std::path::Path::new("/definitely/missing"),
+            None,
+        )));
+        let mut view = EnabledAgentsView::new(settings, false);
+        assert_eq!(view.on_hover(1), 1);
+        assert_eq!(view.list.selected, 1);
+        let key = KeyEvent {
+            key: KeyCode::DownArrow,
+            modifiers: Modifiers::NONE,
+        };
+        view.on_key(&key);
+        assert_eq!(view.list.selected, 2);
+    }
 }

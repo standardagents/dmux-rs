@@ -1,6 +1,6 @@
 //! Sidebar keyboard routing and navigation targets.
 
-use crate::{keys, render};
+use crate::{keys, render, views::ClickTarget};
 
 /// Sidebar drag-reorder gesture (#26). A press arms a row; crossing onto a
 /// different row begins reordering, and release commits or cancels it.
@@ -108,6 +108,33 @@ impl ProjectSelection {
 pub(crate) enum SidebarNavTarget {
     Pane(usize),
     Project(ProjectSelection),
+}
+
+pub(crate) fn hover_navigation(
+    target: ClickTarget,
+    groups: &[render::SidebarGroup],
+) -> Option<SidebarNavTarget> {
+    let project = |group: usize, action| {
+        groups.get(group).map(|group| {
+            SidebarNavTarget::Project(ProjectSelection {
+                root: group.root.clone(),
+                action,
+            })
+        })
+    };
+    match target {
+        ClickTarget::SidebarRow(index) => Some(SidebarNavTarget::Pane(index)),
+        ClickTarget::SidebarGroupIssues(group)
+            if groups
+                .get(group)
+                .is_some_and(|group| !group.issue_label.is_empty()) =>
+        {
+            project(group, ProjectAction::Issues)
+        }
+        ClickTarget::SidebarGroupNewAgent(group) => project(group, ProjectAction::NewAgent),
+        ClickTarget::SidebarGroupNewTerminal(group) => project(group, ProjectAction::NewTerminal),
+        _ => None,
+    }
 }
 
 pub(crate) fn nav_targets(groups: &[render::SidebarGroup]) -> Vec<SidebarNavTarget> {
@@ -256,6 +283,45 @@ mod tests {
                 root: "/empty".into(),
                 action: ProjectAction::NewAgent,
             }))
+        );
+    }
+
+    #[test]
+    fn pointer_targets_map_to_the_same_sidebar_navigation_state() {
+        let groups = vec![
+            group("/one", vec![0], "2 issues"),
+            group("/two", vec![1], ""),
+        ];
+        assert_eq!(
+            hover_navigation(ClickTarget::SidebarRow(1), &groups),
+            Some(SidebarNavTarget::Pane(1))
+        );
+        for (target, action) in [
+            (ClickTarget::SidebarGroupIssues(0), ProjectAction::Issues),
+            (
+                ClickTarget::SidebarGroupNewAgent(0),
+                ProjectAction::NewAgent,
+            ),
+            (
+                ClickTarget::SidebarGroupNewTerminal(0),
+                ProjectAction::NewTerminal,
+            ),
+        ] {
+            assert_eq!(
+                hover_navigation(target, &groups),
+                Some(SidebarNavTarget::Project(ProjectSelection {
+                    root: "/one".into(),
+                    action,
+                }))
+            );
+        }
+        assert_eq!(
+            hover_navigation(ClickTarget::SidebarGroupIssues(1), &groups),
+            None
+        );
+        assert_eq!(
+            hover_navigation(ClickTarget::SidebarGroupNewAgent(9), &groups),
+            None
         );
     }
 

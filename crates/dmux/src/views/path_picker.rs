@@ -396,6 +396,13 @@ impl View for PathPickerView {
         self.activate()
     }
 
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        if (tag as usize) < self.row_count() {
+            self.list.selected = tag as usize;
+        }
+        tag
+    }
+
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.row_count());
         ViewResult::Stay
@@ -493,5 +500,19 @@ mod tests {
         assert!(v2.listing.is_err());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hover_moves_selection_before_keyboard_navigation() {
+        let mut view = PathPickerView::new(std::env::current_dir().unwrap());
+        assert!(view.row_count() > 2);
+        assert_eq!(view.on_hover(1), 1);
+        assert_eq!(view.list.selected, 1);
+        let key = KeyEvent {
+            key: KeyCode::DownArrow,
+            modifiers: dmux_host::Modifiers::NONE,
+        };
+        view.on_key(&key);
+        assert_eq!(view.list.selected, 2);
     }
 }

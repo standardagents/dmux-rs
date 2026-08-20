@@ -124,6 +124,15 @@ impl View for ConfirmView {
             _ => ViewResult::Close,
         }
     }
+
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        match tag {
+            TAG_YES => self.yes_focused = true,
+            TAG_NO => self.yes_focused = false,
+            _ => {}
+        }
+        tag
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +178,13 @@ mod tests {
     }
 
     #[test]
+    fn hover_moves_focus_before_the_next_keyboard_action() {
+        let mut v = close_dialog();
+        assert_eq!(v.on_hover(TAG_NO), TAG_NO);
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Close));
+    }
+
+    #[test]
     fn plain_danger_dialogs_still_default_to_cancel() {
         let mut v = ConfirmView::new("t", "m", "Do it", true, AppCmd::Quit);
         assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Close));
@@ -177,11 +193,12 @@ mod tests {
     #[test]
     fn hovered_button_owns_the_visible_active_treatment() {
         let mut view = close_dialog();
+        view.on_hover(TAG_NO);
         let theme = dmux_ui::Theme::named("violet");
         let ctx = ViewCtx {
             theme: &theme,
             anim: 0,
-            hovered: Some(ClickTarget::Overlay(TAG_NO)),
+            hovered: None,
         };
         let mut buf = CellBuffer::new(60, 12);
         let area = buf.area();

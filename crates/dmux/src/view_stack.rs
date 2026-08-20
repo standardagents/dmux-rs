@@ -1,10 +1,15 @@
 //! Overlay stack transitions shared by every native view.
 
-use crate::views::ViewResult;
+use crate::views::{ClickTarget, ViewResult};
 use crate::App;
 
 impl App {
     pub(super) fn apply_view_result(&mut self, result: ViewResult) -> bool {
+        if !matches!(&result, ViewResult::Stay)
+            && matches!(self.hovered, Some(ClickTarget::Overlay(_)))
+        {
+            self.hovered = None;
+        }
         match result {
             ViewResult::Stay => true,
             ViewResult::Close => {

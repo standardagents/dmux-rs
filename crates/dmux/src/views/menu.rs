@@ -222,6 +222,13 @@ impl View for MenuView {
         self.activate(tag as usize)
     }
 
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        if (tag as usize) < self.items.len() {
+            self.list.selected = tag as usize;
+        }
+        tag
+    }
+
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.items.len());
         ViewResult::Stay
@@ -274,5 +281,25 @@ mod tests {
             modifiers: Modifiers::NONE,
         };
         assert!(matches!(v.on_key(&enter), ViewResult::CloseAnd(_)));
+    }
+
+    #[test]
+    fn hover_moves_selection_before_keyboard_navigation() {
+        let mut v = MenuView::new(
+            "pane",
+            vec![
+                MenuItem::new("First", "", AppCmd::Quit),
+                MenuItem::new("Second", "", AppCmd::Noop),
+                MenuItem::new("Third", "", AppCmd::Noop),
+            ],
+        );
+        assert_eq!(v.on_hover(1), 1);
+        assert_eq!(v.list.selected, 1);
+        let down = KeyEvent {
+            key: KeyCode::DownArrow,
+            modifiers: Modifiers::NONE,
+        };
+        v.on_key(&down);
+        assert_eq!(v.list.selected, 2);
     }
 }

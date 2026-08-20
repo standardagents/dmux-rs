@@ -191,10 +191,13 @@ pub fn hover_target(target: Option<ClickTarget>, overlay_open: bool) -> Option<C
 }
 
 pub fn update_hover(current: &mut Option<ClickTarget>, next: Option<ClickTarget>) -> bool {
-    if *current == next {
+    let Some(next) = next else {
+        return false;
+    };
+    if *current == Some(next) {
         return false;
     }
-    *current = next;
+    *current = Some(next);
     true
 }
 
@@ -239,6 +242,13 @@ pub trait View {
 
     fn on_click(&mut self, _tag: u64) -> ViewResult {
         ViewResult::Stay
+    }
+
+    /// Update canonical keyboard selection from a pointer target. The tag is
+    /// returned unchanged so controls with sub-targets, such as the agent
+    /// allocator counters, retain their precise hover treatment.
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        tag
     }
 
     fn on_wheel(&mut self, _delta: i32) -> ViewResult {
@@ -329,7 +339,7 @@ mod hover_tests {
     use super::*;
 
     #[test]
-    fn overlay_hover_replaces_keyboard_selection_until_pointer_exits() {
+    fn overlay_hover_visually_overrides_keyboard_selection() {
         let theme = Theme::named("violet");
         let hovered = ViewCtx {
             theme: &theme,
@@ -339,11 +349,11 @@ mod hover_tests {
         assert!(hovered.active_overlay(7, false));
         assert!(!hovered.active_overlay(3, true));
 
-        let exited = ViewCtx {
+        let keyboard = ViewCtx {
             hovered: None,
             ..hovered
         };
-        assert!(exited.active_overlay(3, true));
+        assert!(keyboard.active_overlay(3, true));
     }
 
     #[test]
@@ -361,7 +371,7 @@ mod hover_tests {
 
         let mut current = Some(ClickTarget::Overlay(9));
         assert!(!update_hover(&mut current, Some(ClickTarget::Overlay(9))));
-        assert!(update_hover(&mut current, None));
-        assert_eq!(current, None);
+        assert!(!update_hover(&mut current, None));
+        assert_eq!(current, Some(ClickTarget::Overlay(9)));
     }
 }

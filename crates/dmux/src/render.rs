@@ -172,6 +172,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         if row >= bottom_limit {
             break;
         }
+        let project_active = selected_project_is_active(scene, group);
         if multi {
             let text = format!(
                 "⣿ {} ",
@@ -240,7 +241,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 (group.accent, AttrFlags::BOLD)
             } else if pane.status == PaneStatus::Waiting || pane.needs_attention {
                 (t.warn, AttrFlags::empty())
-            } else if group.active {
+            } else if project_active {
                 (t.text, AttrFlags::empty())
             } else {
                 (t.text_dim, AttrFlags::empty())
@@ -313,10 +314,10 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
         // Per-project creation actions, right-aligned like the TS sidebar;
         // the active project shows its hotkeys.
         if row < bottom_limit {
-            let (na, term) = action_labels(group.active, scene.sidebar_focused);
+            let (na, term) = action_labels(project_active, scene.sidebar_focused);
             let total = na.chars().count() as u16 + term.chars().count() as u16 + 2;
             let x0 = area.right().saturating_sub(total + 1);
-            let color = if group.active {
+            let color = if project_active {
                 group.accent
             } else {
                 t.text_faint
@@ -327,7 +328,7 @@ fn draw_sidebar(buf: &mut CellBuffer, scene: &Scene<'_>, clicks: &mut ClickMap<C
                 .map(|project| project.action);
             let issue_max = x0.saturating_sub(area.x + 2) as usize;
             let issue_action =
-                issue_action_label(&group.issue_label, group.active, scene.sidebar_focused);
+                issue_action_label(&group.issue_label, project_active, scene.sidebar_focused);
             let issue_label = truncate(&issue_action, issue_max);
             let ix = area.x + 1;
             let issue_target = ClickTarget::SidebarGroupIssues(gi);
@@ -576,6 +577,16 @@ fn draw_sidebar_action(
 
 fn pane_is_selected(index: usize, selected: usize, project_selected: bool) -> bool {
     !project_selected && index == selected
+}
+
+fn selected_project_is_active(scene: &Scene<'_>, group: &SidebarGroup) -> bool {
+    if !scene.sidebar_focused {
+        return group.active;
+    }
+    scene.sidebar_project.map_or_else(
+        || group.pane_indices.contains(&scene.selected),
+        |project| project.root == group.root,
+    )
 }
 
 fn active_target(hovered: Option<ClickTarget>, target: ClickTarget, selected: bool) -> bool {
@@ -902,9 +913,15 @@ mod tests {
             accent_soft: theme.accent_soft,
             pane_indices: vec![],
             issue_label: "2 issues".into(),
-            active: true,
+            active: false,
         }];
+        let selection = ProjectSelection {
+            root: "/repo".into(),
+            action: ProjectAction::NewAgent,
+        };
         let mut scene = footer_scene(&layout, &groups, &theme);
+        scene.sidebar_focused = true;
+        scene.sidebar_project = Some(&selection);
         scene.hovered = Some(ClickTarget::SidebarGroupNewAgent(0));
         let mut buf = CellBuffer::new(40, 20);
         let mut clicks = ClickMap::new();
@@ -917,7 +934,17 @@ mod tests {
             .find(|x| clicks.hit(*x, 2) == Some(&ClickTarget::SidebarGroupIssues(0)))
             .unwrap();
         assert_eq!(buf.get(agent_x, 2).bg, theme.bg_selected);
+        assert_eq!(buf.get(agent_x, 2).fg, groups[0].accent);
+        assert!(buf.get(agent_x, 2).attrs.contains(AttrFlags::BOLD));
         assert_ne!(buf.get(issue_x, 2).bg, theme.bg_selected);
+
+        scene.hovered = None;
+        let mut keyboard = CellBuffer::new(40, 20);
+        clicks.clear();
+        draw_sidebar(&mut keyboard, &scene, &mut clicks);
+        for col in 0..40 {
+            assert_eq!(buf.get(col, 2), keyboard.get(col, 2));
+        }
 
         scene.hovered = Some(ClickTarget::SidebarSettings);
         let mut footer = CellBuffer::new(40, 20);

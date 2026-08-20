@@ -398,8 +398,38 @@ impl View for SettingsView {
         ViewResult::Stay
     }
 
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        if (tag as usize) < self.defs.len() {
+            self.list.selected = tag as usize;
+        }
+        tag
+    }
+
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.defs.len());
         ViewResult::Stay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmux_host::{KeyCode, Modifiers};
+
+    #[test]
+    fn hover_moves_selection_before_keyboard_navigation() {
+        let settings = Arc::new(Mutex::new(SettingsStore::load(
+            std::path::Path::new("/definitely/missing"),
+            None,
+        )));
+        let mut view = SettingsView::new(settings, false, std::path::PathBuf::from("."));
+        assert_eq!(view.on_hover(1), 1);
+        assert_eq!(view.list.selected, 1);
+        let key = KeyEvent {
+            key: KeyCode::DownArrow,
+            modifiers: Modifiers::NONE,
+        };
+        view.on_key(&key);
+        assert_eq!(view.list.selected, 2);
     }
 }

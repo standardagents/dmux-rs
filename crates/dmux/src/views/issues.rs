@@ -509,6 +509,20 @@ impl View for IssueBrowserView {
         }
     }
 
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        let state = state_snapshot(&self.state);
+        self.sync_rows(&state);
+        if let Some(issues) = loaded_issues(&state) {
+            if tag >= TAG_ROW {
+                let idx = (tag - TAG_ROW) as usize;
+                if idx < issues.len() {
+                    self.list.selected = idx;
+                }
+            }
+        }
+        tag
+    }
+
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         let state = state_snapshot(&self.state);
         self.sync_rows(&state);
@@ -577,6 +591,16 @@ mod tests {
         assert_eq!(view.selected_count(), 2);
         view.on_key(&key(KeyCode::Char(' ')));
         assert_eq!(view.selected_count(), 1);
+    }
+
+    #[test]
+    fn hover_moves_row_selection_before_keyboard_navigation() {
+        let (_, mut view) = loaded();
+        assert_eq!(view.on_hover(TAG_ROW + 1), TAG_ROW + 1);
+        assert_eq!(view.list.selected, 1);
+        let result = view.on_key(&key(KeyCode::DownArrow));
+        assert!(matches!(result, ViewResult::Stay));
+        assert_eq!(view.list.selected, 0);
     }
 
     #[test]

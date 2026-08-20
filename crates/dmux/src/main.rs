@@ -8,7 +8,7 @@ mod bootstrap;
 mod git;
 mod github;
 mod hooks;
-
+mod hover;
 mod input;
 mod keys;
 mod layout;
@@ -42,6 +42,7 @@ use dmux_core::{
 use dmux_host::{HostTerminal, InputEvent};
 use dmux_ui::{ClickMap, Theme};
 use github::{IssueLoadState, SharedIssueState};
+use hover::tooltip_rect;
 use input::{MouseKind, Routed};
 use session::{LogicalPane, PaneStatus};
 use sidebar::{
@@ -70,20 +71,6 @@ struct Tooltip {
     x: u16,
     y: u16,
     until: Instant,
-}
-
-/// Clamp a one-row tooltip of width `w` near anchor (x, y): preferred spot
-/// is one row above the release point, nudged left/up so the whole box
-/// stays inside `area` even for releases at the edges.
-fn tooltip_rect(area: dmux_compositor::Rect, (x, y): (u16, u16), w: u16) -> dmux_compositor::Rect {
-    let w = w.min(area.w);
-    let ty = if y > area.y {
-        y - 1
-    } else {
-        y.min(area.bottom().saturating_sub(1))
-    };
-    let tx = x.min(area.right().saturating_sub(w)).max(area.x);
-    dmux_compositor::Rect::new(tx, ty.min(area.bottom().saturating_sub(1)), w, 1)
 }
 
 #[derive(Default)]
@@ -2548,9 +2535,8 @@ impl App {
     fn handle_mouse(&mut self, col: u16, row: u16, kind: MouseKind, shift: bool) -> bool {
         let target = self.click_map.hit(col, row).copied();
         if kind == MouseKind::Hover {
-            let next = views::hover_target(target, !self.views.is_empty());
-            if views::update_hover(&mut self.hovered, next) {
-                self.dirty = true;
+            if let Some(next) = views::hover_target(target, !self.views.is_empty()) {
+                self.update_hover_target(next);
             }
             if let Some(ClickTarget::PaneBody(i)) = target {
                 if let Some(p) = self.panes.get(i) {
@@ -2706,6 +2692,7 @@ impl App {
                     }
                     _ => {
                         self.views.pop();
+                        self.hovered = None;
                         self.dirty = true;
                     }
                 },

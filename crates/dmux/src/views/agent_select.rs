@@ -462,6 +462,34 @@ impl View for AgentSelectView {
         }
         ViewResult::Stay
     }
+
+    fn on_hover(&mut self, tag: u64) -> u64 {
+        match tag {
+            TAG_PROMPT => self.focus = 0,
+            TAG_PERMISSION => self.focus = self.rows.len() + 1,
+            TAG_LAUNCH => self.focus = self.rows.len() + 2,
+            t if t >= TAG_PLUS => {
+                let idx = (t - TAG_PLUS) as usize;
+                if idx < self.rows.len() {
+                    self.focus = idx + 1;
+                }
+            }
+            t if t >= TAG_MINUS => {
+                let idx = (t - TAG_MINUS) as usize;
+                if idx < self.rows.len() {
+                    self.focus = idx + 1;
+                }
+            }
+            t if t >= TAG_ROW => {
+                let idx = (t - TAG_ROW) as usize;
+                if idx < self.rows.len() {
+                    self.focus = idx + 1;
+                }
+            }
+            _ => {}
+        }
+        tag
+    }
 }
 
 #[cfg(test)]
@@ -567,5 +595,21 @@ mod tests {
         view.focus = 1;
         view.on_paste("ignored");
         assert_eq!(view.prompt.value, "start dictated\nrequest end");
+    }
+
+    #[test]
+    fn hover_focuses_a_row_and_preserves_counter_tag_for_followup_motion() {
+        let installed: std::collections::HashSet<_> = AGENTS.iter().map(|agent| agent.id).collect();
+        let enabled: Vec<_> = AGENTS.iter().map(|agent| agent.id.to_string()).collect();
+        let mut view = AgentSelectView::new(&installed, &enabled, None, "", None);
+        let tag = TAG_PLUS + 1;
+        assert_eq!(view.on_hover(tag), tag);
+        assert_eq!(view.focus, 2);
+        let key = KeyEvent {
+            key: KeyCode::DownArrow,
+            modifiers: Modifiers::NONE,
+        };
+        view.on_key(&key);
+        assert_eq!(view.focus, 3);
     }
 }
