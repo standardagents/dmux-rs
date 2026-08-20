@@ -29,6 +29,7 @@ mod verify;
 mod view_stack;
 mod views;
 mod welcome;
+mod window_launch;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -56,6 +57,7 @@ use views::{
     AgentSelectView, AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, IssueBrowserView,
     MenuItem, MenuView, PathPickerView, SettingsView, ShortcutsView, View, ViewCtx,
 };
+use window_launch::{BootstrapSpec, NewWindowCtx};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
@@ -105,35 +107,6 @@ struct Cli {
     /// recorded stream still diverges from the stored tmux capture.
     #[arg(long, value_name = "FILE")]
     replay_incident: Option<PathBuf>,
-}
-
-/// Context for a window dmux-rs created and is waiting on.
-#[derive(Debug)]
-struct NewWindowCtx {
-    slug: String,
-    display: String,
-    /// Prompt recorded on the pane (drives resume/duplicate).
-    prompt: String,
-    kind: PaneKind,
-    agent: Option<String>,
-    launch_cmd: Option<String>,
-    /// (prompt, delay) for send-keys transport agents.
-    injection: Option<(String, u64)>,
-    worktree_path: Option<String>,
-    /// Working directory for the new window (default: project root).
-    cwd: Option<String>,
-    /// Owning project root when not the main project.
-    project_root: Option<String>,
-    /// Native bootstrap (worktree + hook run by dmux, loader UI in the pane)
-    /// with the agent launch deferred until it finishes.
-    bootstrap: Option<BootstrapSpec>,
-}
-
-#[derive(Debug)]
-struct BootstrapSpec {
-    plan: bootstrap::Plan,
-    launch: bootstrap::Launch,
-    agent_label: String,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -802,10 +775,7 @@ async fn run(
             None
         };
         let injection_deadline = app
-            .pending_injections
-            .iter()
-            .map(|(_, _, at)| *at)
-            .min()
+            .next_injection_deadline()
             .map(tokio::time::Instant::from_std);
         let status_deadline = app.status_clear_at.map(tokio::time::Instant::from_std);
         let tooltip_deadline = app
@@ -1043,7 +1013,7 @@ impl App {
             return;
         };
         let active = self.bootstraps.values().any(|ui| ui.done_at.is_none());
-        if !update_may_apply(active, self.pending_injections.len(), since.elapsed()) {
+        if !update_may_apply(active, self.pending_injection_count(), since.elapsed()) {
             return;
         }
         let (tag, staged, _) = self.pending_update.take().unwrap();
@@ -1660,54 +1630,7 @@ impl App {
                 }
             }
             AppMsg::Bootstrap { slug, ev } => {
-                let mut fail_toast: Option<String> = None;
-                let mut launch_now: Option<(PaneId, bootstrap::Launch)> = None;
-                if let Some(ui) = self.bootstraps.get_mut(&slug) {
-                    match ev {
-                        bootstrap::Ev::Step(i) => {
-                            ui.current = i.min(ui.steps.len().saturating_sub(1))
-                        }
-                        bootstrap::Ev::Detail(line) => ui.detail = line,
-                        bootstrap::Ev::Failed(err) => {
-                            fail_toast =
-                                Some(format!("Bootstrap failed for '{}': {err}", ui.title));
-                            ui.failed = Some(err);
-                            ui.done_at = Some(Instant::now());
-                        }
-                        bootstrap::Ev::Done => {
-                            ui.done_at = Some(Instant::now());
-                            ui.detail.clear();
-                            if let Some(launch) = ui.launch.take() {
-                                launch_now = Some((ui.pane, launch));
-                            }
-                        }
-                    }
-                    self.dirty = true;
-                }
-                if let Some((pane, launch)) = launch_now {
-                    let cmd = format!(
-                        "clear; cd {} 2>/dev/null || cd {}; {}",
-                        shq(&launch.wt),
-                        shq(&launch.root),
-                        launch.agent_cmd
-                    );
-                    let mut bytes = cmd.into_bytes();
-                    bytes.push(b'\r');
-                    for chunk in bytes.chunks(256) {
-                        let _ = self.client.send(input::send_keys_hex(pane, chunk));
-                    }
-                    if let Some((prompt, delay_ms)) = launch.injection {
-                        self.pending_injections.push((
-                            pane,
-                            prompt,
-                            Instant::now() + Duration::from_millis(delay_ms),
-                        ));
-                    }
-                }
-                if let Some(msg) = fail_toast {
-                    self.toast(msg);
-                }
-                self.try_apply_pending_update();
+                self.handle_bootstrap_event(slug, ev);
             }
             AppMsg::IssueFiled(result) => {
                 match result {
@@ -3865,151 +3788,6 @@ impl App {
         ));
     }
 
-    fn create_window(&mut self, ctx: NewWindowCtx) {
-        let cwd = ctx
-            .cwd
-            .clone()
-            .or_else(|| ctx.project_root.clone())
-            .unwrap_or_else(|| self.project_root.to_string_lossy().into_owned());
-        let hook_root = ctx
-            .project_root
-            .clone()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        hooks::run_detached(
-            &hook_root,
-            "before_pane_create",
-            &hook_root,
-            &[("DMUX_SLUG", ctx.slug.clone())],
-        );
-        let _ = self.client.send_tagged(
-            format!(
-                "new-window -d -P -F '#{{window_id}}\u{1}#{{pane_id}}' -c {}",
-                dmux_cc::quote_arg(&cwd)
-            ),
-            Tag::NewWindow(Box::new(ctx)),
-        );
-    }
-
-    fn finish_new_window(&mut self, mut ctx: NewWindowCtx, reply: &Reply) {
-        let line = reply.text_lines().into_iter().next().unwrap_or_default();
-        let mut parts = line.split('\u{1}');
-        let (Some(_window), Some(pane_str)) = (parts.next(), parts.next()) else {
-            self.toast("Pane creation failed");
-            return;
-        };
-        let Some(pane_id) = pane_str
-            .strip_prefix('%')
-            .and_then(|s| s.parse().ok())
-            .map(PaneId)
-        else {
-            self.toast("Pane creation failed");
-            return;
-        };
-
-        let encoded = encode_pane_title(&ctx.display, &ctx.slug);
-        let _ = self.client.send(format!(
-            "select-pane -t {pane_id} -T {}",
-            dmux_cc::quote_arg(&encoded)
-        ));
-
-        if let Some(spec) = ctx.bootstrap.take() {
-            let steps = bootstrap::Ui::step_labels(&spec.agent_label, spec.plan.has_hook);
-            self.bootstraps.insert(
-                ctx.slug.clone(),
-                bootstrap::Ui {
-                    pane: pane_id,
-                    title: ctx.display.clone(),
-                    agent_label: spec.agent_label,
-                    branch: spec.plan.branch.clone(),
-                    steps,
-                    current: 0,
-                    detail: String::new(),
-                    started: Instant::now(),
-                    done_at: None,
-                    failed: None,
-                    launch: Some(spec.launch),
-                },
-            );
-            let slug = ctx.slug.clone();
-            let tx = self.app_tx.clone();
-            tokio::task::spawn_blocking(move || {
-                bootstrap::run_blocking(&spec.plan, &mut |ev| {
-                    let _ = tx.send(AppMsg::Bootstrap {
-                        slug: slug.clone(),
-                        ev,
-                    });
-                });
-            });
-        }
-
-        if let Some(cmd) = &ctx.launch_cmd {
-            let mut bytes = cmd.clone().into_bytes();
-            bytes.push(b'\r');
-            for chunk in bytes.chunks(256) {
-                let _ = self.client.send(input::send_keys_hex(pane_id, chunk));
-            }
-        }
-        if let Some((prompt, delay_ms)) = &ctx.injection {
-            self.pending_injections.push((
-                pane_id,
-                prompt.clone(),
-                Instant::now() + Duration::from_millis(*delay_ms),
-            ));
-        }
-
-        let hook_root = ctx
-            .project_root
-            .clone()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.project_root.clone());
-        let hook_cwd = ctx
-            .worktree_path
-            .clone()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| hook_root.clone());
-        let mut hook_env = vec![
-            ("DMUX_SLUG", ctx.slug.clone()),
-            ("DMUX_PANE_ID", pane_id.to_string()),
-        ];
-        if let Some(wt) = &ctx.worktree_path {
-            hook_env.push(("DMUX_WORKTREE_PATH", wt.clone()));
-        }
-        hooks::run_detached(&hook_root, "pane_created", &hook_cwd, &hook_env);
-
-        // Config record first so reconcile adoption pairs slug → agent.
-        // Resumed worktrees reuse their existing record (fresh pane id).
-        if let Some(existing) = self.config.panes.iter_mut().find(|r| r.slug == ctx.slug) {
-            existing.pane_id = pane_id.to_string();
-            existing.agent = ctx.agent.clone().or_else(|| existing.agent.clone());
-        } else {
-            let mut record = DmuxPane::new_record(
-                format!("pane-{}", timestamp()),
-                ctx.slug.clone(),
-                pane_id.to_string(),
-                ctx.kind,
-            );
-            // A display equal to the slug is a default, not a chosen name —
-            // leave it unset so shell panes auto-name from their own titles.
-            record.display_name = (ctx.display != ctx.slug).then(|| ctx.display.clone());
-            record.prompt = ctx.prompt.clone();
-            record.agent = ctx.agent.clone();
-            record.worktree_path = ctx.worktree_path.clone();
-            record.project_root = ctx.project_root.clone();
-            record.project_name = ctx.project_root.as_deref().map(|r| {
-                std::path::Path::new(r)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| r.to_string())
-            });
-            self.config.panes.push(record);
-        }
-        self.save_config();
-
-        self.pending_focus = Some(pane_id);
-        self.request_reconcile();
-    }
-
     fn update_config_pane(&mut self, slug: &str, f: impl FnOnce(&mut DmuxPane)) {
         if let Some(rec) = self.config.panes.iter_mut().find(|p| p.slug == slug) {
             f(rec);
@@ -4222,26 +4000,7 @@ impl App {
             let _ = self.client.send_tagged(cursor, Tag::Cursor(pane_id));
             self.dirty = true;
         }
-        // Prompt injections for send-keys transport agents.
-        let due: Vec<(PaneId, String)> = {
-            let mut d = Vec::new();
-            self.pending_injections.retain(|(pane, prompt, at)| {
-                if now >= *at {
-                    d.push((*pane, prompt.clone()));
-                    false
-                } else {
-                    true
-                }
-            });
-            d
-        };
-        for (pane, prompt) in due {
-            let mut bytes = prompt.into_bytes();
-            bytes.push(b'\r');
-            for chunk in bytes.chunks(256) {
-                let _ = self.client.send(input::send_keys_hex(pane, chunk));
-            }
-        }
+        self.send_due_injections(now);
         if !self.tracking_inflight && now.duration_since(self.last_tracking) >= tracking_interval()
         {
             let targets: Vec<(String, u32)> = self
