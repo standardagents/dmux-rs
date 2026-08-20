@@ -117,12 +117,14 @@ impl IssueTable {
             AttrFlags::empty(),
             row,
         );
+        // Issue numbers read as identity, not chrome (#89): primary text
+        // color in every group and selection state; headings keep the accent.
         draw_cell(
             buf,
             row,
             self.number,
             &format!("#{:<6}", issue.number),
-            theme.accent,
+            theme.text,
             bg,
             AttrFlags::BOLD,
         );
@@ -328,6 +330,38 @@ mod tests {
         assert!(row.contains('…'));
         assert!(!row.contains("performance"));
         assert!(!row.contains("2026-08-19"));
+    }
+
+    #[test]
+    fn issue_numbers_use_the_primary_text_color() {
+        let theme = Theme::default();
+        let mut buf = CellBuffer::new(96, 2);
+        let table = IssueTable::new(96);
+        // One focused row, one idle checkbox-selected row: the number color
+        // must not vary with focus or selection (#89).
+        table.draw_row(
+            &mut buf,
+            Rect::new(0, 0, 96, 1),
+            &issue(7, "Focused", "bug"),
+            &theme,
+            theme.bg_selected,
+            true,
+            false,
+        );
+        table.draw_row(
+            &mut buf,
+            Rect::new(0, 1, 96, 1),
+            &issue(1024, "Idle selected", "bug"),
+            &theme,
+            theme.bg_panel,
+            false,
+            true,
+        );
+        for y in [0, 1] {
+            let x = column(&buf, y, "#").expect("issue number rendered");
+            assert_eq!(buf.get(x, y).fg, theme.text, "row {y} number color");
+            assert_ne!(buf.get(x, y).fg, theme.accent, "row {y} still accent");
+        }
     }
 
     #[test]
