@@ -5,6 +5,82 @@ use std::time::{Duration, Instant};
 
 use hdrhistogram::Histogram;
 
+pub(crate) const HUD_REFRESH: Duration = Duration::from_millis(500);
+const FPS_BUCKET: Duration = Duration::from_millis(250);
+const FPS_HISTORY_BUCKETS: usize = 32;
+const FPS_RATE_BUCKETS: usize = 8;
+const FPS_RING_LEN: usize = FPS_HISTORY_BUCKETS + 1;
+const FPS_TARGET_PER_BUCKET: u16 = 15;
+const SPARKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+struct FrameRate {
+    buckets: [u16; FPS_RING_LEN],
+    head: usize,
+    completed: usize,
+    bucket_start: Instant,
+}
+
+impl FrameRate {
+    fn new(now: Instant) -> Self {
+        Self {
+            buckets: [0; FPS_RING_LEN],
+            head: 0,
+            completed: 0,
+            bucket_start: now,
+        }
+    }
+
+    fn record(&mut self, at: Instant) {
+        let Some(elapsed) = at.checked_duration_since(self.bucket_start) else {
+            return;
+        };
+        let steps = (elapsed.as_nanos() / FPS_BUCKET.as_nanos()) as usize;
+        if steps >= FPS_HISTORY_BUCKETS {
+            self.buckets.fill(0);
+            self.head = 0;
+            self.completed = 0;
+            self.bucket_start = at;
+        } else {
+            for _ in 0..steps {
+                self.head = (self.head + 1) % FPS_RING_LEN;
+                self.buckets[self.head] = 0;
+                self.completed = (self.completed + 1).min(FPS_HISTORY_BUCKETS);
+            }
+            self.bucket_start += FPS_BUCKET * steps as u32;
+        }
+        self.buckets[self.head] = self.buckets[self.head].saturating_add(1);
+    }
+
+    fn recent_counts(&self, count: usize) -> impl Iterator<Item = u16> + '_ {
+        let count = count.min(self.completed);
+        (1..=count).map(|back| self.buckets[(self.head + FPS_RING_LEN - back) % FPS_RING_LEN])
+    }
+
+    fn fps(&self) -> f64 {
+        let count = FPS_RATE_BUCKETS.min(self.completed);
+        if count == 0 {
+            return 0.0;
+        }
+        self.recent_counts(count).map(u64::from).sum::<u64>() as f64
+            / (count as f64 * FPS_BUCKET.as_secs_f64())
+    }
+
+    fn sparkline(&self) -> String {
+        let mut out = String::with_capacity(FPS_HISTORY_BUCKETS);
+        for _ in self.completed..FPS_HISTORY_BUCKETS {
+            out.push('·');
+        }
+        for back in (1..=self.completed).rev() {
+            let count = self.buckets[(self.head + FPS_RING_LEN - back) % FPS_RING_LEN];
+            let level = (usize::from(count) * (SPARKS.len() - 1)
+                / usize::from(FPS_TARGET_PER_BUCKET))
+            .min(SPARKS.len() - 1);
+            out.push(SPARKS[level]);
+        }
+        out
+    }
+}
+
 pub struct Metrics {
     pub frame_total_us: Histogram<u64>,
     pub frame_diff_us: Histogram<u64>,
@@ -20,6 +96,7 @@ pub struct Metrics {
     window_start: Instant,
     window_bytes_in: u64,
     pub bytes_in_per_sec: f64,
+    frame_rate: FrameRate,
 }
 
 impl Metrics {
@@ -38,6 +115,7 @@ impl Metrics {
             window_start: Instant::now(),
             window_bytes_in: 0,
             bytes_in_per_sec: 0.0,
+            frame_rate: FrameRate::new(Instant::now()),
         }
     }
 
@@ -68,6 +146,7 @@ impl Metrics {
         let _ = self.frame_total_us.record(total.as_micros().max(1) as u64);
         let _ = self.frame_diff_us.record(diff.as_micros().max(1) as u64);
         let _ = self.frame_write_us.record(write.as_micros().max(1) as u64);
+        self.frame_rate.record(Instant::now());
     }
 
     pub fn uptime(&self) -> Duration {
@@ -81,6 +160,11 @@ impl Metrics {
             format!(
                 "frames {}  full {}  coalesced {}",
                 self.frames, self.full_repaints, self.coalesced
+            ),
+            format!(
+                "fps {:5.1}/60  {}",
+                self.frame_rate.fps(),
+                self.frame_rate.sparkline()
             ),
             format!(
                 "frame ms p50 {:.2} p95 {:.2} p99 {:.2} max {:.2}",
@@ -103,5 +187,65 @@ impl Metrics {
             ),
             format!("uptime {}s", self.uptime().as_secs()),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rolling_fps_tracks_sixty_then_thirty_frames_per_second() {
+        let start = Instant::now();
+        let mut rate = FrameRate::new(start);
+        for frame in 1..=120 {
+            rate.record(start + Duration::from_secs_f64(frame as f64 / 60.0));
+        }
+        assert!((rate.fps() - 60.0).abs() < 1.0, "fps={}", rate.fps());
+        assert!(rate.sparkline().ends_with("████"), "{}", rate.sparkline());
+
+        for frame in 1..=60 {
+            rate.record(
+                start + Duration::from_secs(2) + Duration::from_secs_f64(frame as f64 / 30.0),
+            );
+        }
+        assert!((rate.fps() - 30.0).abs() < 1.0, "fps={}", rate.fps());
+    }
+
+    #[test]
+    fn long_idle_gap_clears_stale_fps_history() {
+        let start = Instant::now();
+        let mut rate = FrameRate::new(start);
+        for _ in 0..30 {
+            rate.record(start + Duration::from_millis(1));
+        }
+        rate.record(start + Duration::from_secs(8));
+
+        assert_eq!(rate.fps(), 0.0);
+        assert_eq!(rate.sparkline(), "·".repeat(FPS_HISTORY_BUCKETS));
+    }
+
+    #[test]
+    fn sparkline_has_fixed_width_and_clamps_above_target() {
+        let start = Instant::now();
+        let mut rate = FrameRate::new(start);
+        for _ in 0..100 {
+            rate.record(start + Duration::from_millis(1));
+        }
+        rate.record(start + FPS_BUCKET);
+
+        let sparkline = rate.sparkline();
+        assert_eq!(sparkline.chars().count(), FPS_HISTORY_BUCKETS);
+        assert!(sparkline.ends_with('█'), "{sparkline}");
+    }
+
+    #[test]
+    fn hud_includes_framerate_and_fixed_width_history() {
+        let metrics = Metrics::new();
+        let line = &metrics.hud_lines()[1];
+
+        assert!(line.starts_with("fps   0.0/60  "), "{line}");
+        assert_eq!(line.chars().rev().take(FPS_HISTORY_BUCKETS).count(), 32);
+        assert!(line.ends_with(&"·".repeat(FPS_HISTORY_BUCKETS)), "{line}");
     }
 }

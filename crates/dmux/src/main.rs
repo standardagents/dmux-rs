@@ -23,6 +23,7 @@ mod pane_actions;
 mod registry;
 mod render;
 mod report;
+mod scheduler;
 mod session;
 mod sidebar;
 mod sounds;
@@ -64,9 +65,7 @@ use view_stack::{OverlayOrigin, OverlayStack};
 use views::{AppCmd, ClickTarget, ConfirmView, InputPurpose, InputView, MenuItem, MenuView};
 use window_launch::NewWindowCtx;
 
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SETTLE_AFTER: Duration = Duration::from_millis(1500);
-const HUD_REFRESH: Duration = Duration::from_millis(500);
 const ANIM_INTERVAL: Duration = Duration::from_millis(120);
 
 /// The rain runs at a showier frame rate — cheap, and it's a perf demo.
@@ -368,7 +367,7 @@ struct App {
     layout: layout::Layout,
     dirty: bool,
     force_full: bool,
-    last_frame: Instant,
+    frame_clock: scheduler::FrameClock,
     reconcile_in_flight: bool,
     reconcile_again: bool,
     status_msg: String,
@@ -590,7 +589,7 @@ async fn run(
         layout: layout::Layout::default(),
         dirty: true,
         force_full: true,
-        last_frame: Instant::now() - FRAME_INTERVAL,
+        frame_clock: scheduler::FrameClock::new(Instant::now()),
         reconcile_in_flight: true,
         reconcile_again: false,
         status_msg: String::new(),
@@ -743,10 +742,9 @@ async fn run(
 
     loop {
         let now = Instant::now();
-        let render_deadline = app.dirty.then(|| {
-            let earliest = app.last_frame + FRAME_INTERVAL;
-            tokio::time::Instant::from_std(if earliest > now { earliest } else { now })
-        });
+        let render_deadline = app
+            .dirty
+            .then(|| tokio::time::Instant::from_std(app.frame_clock.deadline()));
         let settle_deadline = app
             .panes
             .iter()
@@ -756,7 +754,7 @@ async fn run(
             .map(|t| tokio::time::Instant::from_std(t + SETTLE_AFTER));
         let hud_deadline = app
             .hud
-            .then(|| tokio::time::Instant::from_std(now + HUD_REFRESH));
+            .then(|| tokio::time::Instant::from_std(now + metrics::HUD_REFRESH));
         let resume_deadline = app
             .panes
             .iter()
@@ -834,7 +832,9 @@ async fn run(
                     Some(ev) => {
                         if !app.handle_cc(ev) { break; }
                         let mut budget = 256;
-                        while budget > 0 {
+                        while budget > 0
+                            && app.frame_clock.should_drain(app.dirty, Instant::now())
+                        {
                             match events.try_recv() {
                                 Ok(ev) => {
                                     if !app.handle_cc(ev) { return app.shutdown(&mut child).await; }
@@ -3186,13 +3186,13 @@ impl App {
         if self.hud {
             self.dirty = true;
         }
-        if self.dirty && now.duration_since(self.last_frame) >= FRAME_INTERVAL {
+        if self.dirty && self.frame_clock.due(now) {
             self.render_frame();
         }
     }
 
     fn render_if_due(&mut self) {
-        if self.dirty && self.last_frame.elapsed() >= FRAME_INTERVAL {
+        if self.dirty && self.frame_clock.due(Instant::now()) {
             self.render_frame();
         } else if self.dirty {
             self.metrics.coalesced += 1;
@@ -3364,7 +3364,7 @@ impl App {
         );
         self.force_full = false;
         self.dirty = false;
-        self.last_frame = done;
+        self.frame_clock.rendered(start, done);
     }
 }
 

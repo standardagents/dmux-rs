@@ -30,6 +30,13 @@ pub fn diff_frame(
         if !force_full && !back.row_dirty(row) {
             continue;
         }
+
+        // Composition can repaint a row several times before restoring its
+        // previous final contents. Compare the finished row first so those
+        // writes do not trigger per-cell width checks or a front-buffer copy.
+        if !force_full && back.row(row) == front.row(row) {
+            continue;
+        }
         stats.rows_scanned += 1;
 
         let mut col = 0u16;
@@ -61,11 +68,8 @@ pub fn diff_frame(
             stats.rows_changed += 1;
         }
 
-        // Sync front to back for this row.
-        for c in 0..cols {
-            let cell = back.get(c, row).clone();
-            front.set(c, row, cell);
-        }
+        // Sync front to back for this row without changing its dirty flags.
+        front.clone_row_from(row, back);
     }
 
     back.clear_dirty();
@@ -227,5 +231,23 @@ mod tests {
         // Second diff with no edits: nothing to do.
         let stats = diff_frame(&mut front, &mut back, &mut em, false);
         assert_eq!(stats.rows_scanned, 0);
+    }
+
+    #[test]
+    fn repainted_equal_frame_skips_cell_scan_at_target_geometry() {
+        let (mut front, mut back) = buffers(640, 80);
+        let mut em = Emitter::new();
+        diff_frame(&mut front, &mut back, &mut em, true);
+        em.take();
+
+        // A full compositor pass marks every row even when its final cells
+        // match the settled frame.
+        back.fill(back.area(), &Cell::default());
+        let stats = diff_frame(&mut front, &mut back, &mut em, false);
+
+        assert_eq!(stats.rows_scanned, 0);
+        assert_eq!(stats.rows_changed, 0);
+        assert_eq!(stats.cells_emitted, 0);
+        assert!(em.is_empty());
     }
 }

@@ -137,6 +137,14 @@ impl CellBuffer {
         &self.cells[start..start + self.cols as usize]
     }
 
+    pub(crate) fn clone_row_from(&mut self, row: u16, source: &Self) {
+        debug_assert_eq!(self.cols, source.cols);
+        debug_assert_eq!(self.rows, source.rows);
+        let start = self.idx(0, row);
+        let end = start + self.cols as usize;
+        self.cells[start..end].clone_from_slice(&source.cells[start..end]);
+    }
+
     pub fn row_dirty(&self, row: u16) -> bool {
         self.dirty[row as usize]
     }
