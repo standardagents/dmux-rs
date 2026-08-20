@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
 const INTERACTION_PERIOD: Duration = Duration::from_nanos(8_333_333);
+const KEY_RESPONSE_PERIOD: Duration = Duration::from_nanos(4_166_667);
 
 pub(crate) struct FrameClock {
     regular_next: Instant,
@@ -45,6 +46,20 @@ impl FrameClock {
         let earliest = self
             .last_completed
             .map(|completed| completed + INTERACTION_PERIOD)
+            .unwrap_or(now);
+        let requested = now.max(earliest);
+        self.interactive_next = Some(
+            self.interactive_next
+                .map(|pending| pending.min(requested))
+                .unwrap_or(requested),
+        );
+    }
+
+    /// Acknowledged keyboard input uses a tighter, bounded response cadence.
+    pub(crate) fn request_key_response(&mut self, now: Instant) {
+        let earliest = self
+            .last_completed
+            .map(|completed| completed + KEY_RESPONSE_PERIOD)
             .unwrap_or(now);
         let requested = now.max(earliest);
         self.interactive_next = Some(
@@ -182,6 +197,27 @@ mod tests {
         assert_eq!(clock.deadline(), requested);
         assert!(!clock.due(requested - Duration::from_nanos(1)));
         assert!(clock.due(requested));
+    }
+
+    #[test]
+    fn acknowledged_key_response_bypasses_interaction_spacing() {
+        let start = Instant::now();
+        let mut clock = FrameClock::new(start);
+        clock.rendered(start, start + Duration::from_millis(1));
+        let response = start + Duration::from_millis(2);
+
+        clock.request_key_response(response);
+
+        let key_deadline = start + Duration::from_millis(1) + KEY_RESPONSE_PERIOD;
+        assert_eq!(clock.deadline(), key_deadline);
+        assert!(key_deadline < start + Duration::from_millis(1) + INTERACTION_PERIOD);
+        assert!(!clock.due(key_deadline - Duration::from_nanos(1)));
+        assert!(clock.due(key_deadline));
+
+        clock.request_key_response(start + Duration::from_millis(3));
+        assert_eq!(clock.deadline(), key_deadline);
+        clock.rendered(key_deadline, key_deadline + Duration::from_millis(1));
+        assert_eq!(clock.deadline(), start + FRAME_PERIOD);
     }
 
     #[test]

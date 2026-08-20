@@ -35,7 +35,12 @@ trap cleanup EXIT HUP INT TERM
 
 start_shell() {
   local pane=$1
-  local command="exec bash --noprofile --norc -c 'n=1; while [ \"\$n\" -le 600 ]; do printf \"pane-$pane history %04d\\n\" \"\$n\"; n=\$((n + 1)); done; exec bash --noprofile --norc -i'"
+  local command
+  if [ "$pane" -eq 1 ]; then
+    command="exec perl '$PWD/scripts/typing-fixture.pl'"
+  else
+    command="exec bash --noprofile --norc -c 'n=1; while [ \"\$n\" -le 600 ]; do printf \"pane-$pane history %04d\\n\" \"\$n\"; n=\$((n + 1)); done; exec bash --noprofile --norc -i'"
+  fi
   if [ "$pane" -eq 1 ]; then
     tmux -L "$SOCKET" -f /dev/null new-session -d -s "$SESSION" \
       -x "$COLS" -y "$ROWS" -c "$PROJECT" -n "input-$pane" "$command"
@@ -49,8 +54,8 @@ for pane in 1 2 3 4; do
   start_shell "$pane"
 done
 
-echo "ssh-interaction: ${COLS}x${ROWS}, 4 interactive panes, binary $BIN" >&2
-echo "ssh-interaction: type in a pane, hover across sidebar rows, and scroll with the trackpad" >&2
+echo "ssh-interaction: ${COLS}x${ROWS}, agent typing fixture plus 3 shells, binary $BIN" >&2
+echo "ssh-interaction: type in the focused agent pane, hover across sidebar rows, and scroll with the trackpad" >&2
 echo "ssh-interaction: HUD latency begins when input bytes reach dmux on this host" >&2
 
 HOME=$RUN_ROOT/home \

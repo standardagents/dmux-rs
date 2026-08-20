@@ -163,6 +163,7 @@ enum AppMsg {
 /// Reply tags: every command whose reply matters is matched in stream order.
 #[derive(Debug)]
 enum Tag {
+    Input(PaneId, u64),
     ListPanes,
     Seed(PaneId),
     Cursor(PaneId),
@@ -1236,13 +1237,7 @@ impl App {
                     }
                 }
                 if visible_output {
-                    let observations = self.interactions.pane_output(pane, output_at);
-                    if !observations.is_empty() {
-                        for observation in observations {
-                            self.metrics.record_pane_output(observation);
-                        }
-                        self.frame_clock.request_interactive(output_at);
-                    }
+                    self.handle_pane_interaction_output(pane, output_at);
                 }
                 for text in clipboard_out {
                     self.forward_clipboard(&text);
@@ -1329,6 +1324,9 @@ impl App {
 
     fn handle_reply(&mut self, tag: Tag, reply: Reply) {
         match tag {
+            Tag::Input(pane, sequence) => {
+                self.handle_pane_input_ack(pane, sequence, reply.ok, Instant::now())
+            }
             Tag::ListPanes => {
                 self.reconcile_in_flight = false;
                 self.apply_pane_list(&reply);

@@ -1,6 +1,6 @@
 //! Interaction batching and server-side latency correlation.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use dmux_cc::PaneId;
@@ -12,6 +12,7 @@ use crate::{input, session, App};
 
 const MAX_INPUT_BATCH: usize = 64;
 const MAX_PENDING_AGE: Duration = Duration::from_secs(2);
+const KEY_RESPONSE_WINDOW: Duration = Duration::from_millis(50);
 const SCROLL_PERIOD: Duration = Duration::from_nanos(8_333_333);
 const MAX_PENDING_SCROLL: usize = 8;
 const MAX_SCROLL_PER_FRAME: usize = 4;
@@ -202,9 +203,11 @@ fn wheels_cancel(left: &TimedInputEvent, right: &TimedInputEvent) -> bool {
 
 #[derive(Debug, Clone, Copy)]
 struct Sample {
+    sequence: u64,
     kind: Kind,
     received_at: Instant,
     pane: Option<PaneId>,
+    acknowledged_at: Option<Instant>,
     local_change: bool,
 }
 
@@ -214,22 +217,46 @@ pub(crate) struct Observation {
     pub(crate) elapsed: Duration,
 }
 
+pub(crate) struct PaneOutput {
+    observations: Vec<Observation>,
+    key_response: bool,
+}
+
 /// Correlates an input event with local damage or the first later output from
 /// the pane it was forwarded to. The pane correlation is intentionally a
 /// response-burst measurement because arbitrary terminal output has no key ID.
-#[derive(Default)]
 pub(crate) struct Tracker {
+    next_sequence: u64,
     current: Option<Sample>,
     pending_pane: VecDeque<Sample>,
     ready: VecDeque<Sample>,
+    latest_pane_input: HashMap<PaneId, (u64, Kind)>,
+    key_windows: HashMap<PaneId, (u64, Instant)>,
+}
+
+impl Default for Tracker {
+    fn default() -> Self {
+        Self {
+            next_sequence: 1,
+            current: None,
+            pending_pane: VecDeque::new(),
+            ready: VecDeque::new(),
+            latest_pane_input: HashMap::new(),
+            key_windows: HashMap::new(),
+        }
+    }
 }
 
 impl Tracker {
     pub(crate) fn begin(&mut self, event: &TimedInputEvent) -> Option<Observation> {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
         self.current = kind(&event.event).map(|kind| Sample {
+            sequence,
             kind,
             received_at: event.received_at,
             pane: None,
+            acknowledged_at: (kind != Kind::Key).then_some(event.received_at),
             local_change: false,
         });
         self.current.map(|sample| Observation {
@@ -241,7 +268,44 @@ impl Tracker {
     pub(crate) fn forwarded_to(&mut self, pane: PaneId) {
         if let Some(current) = &mut self.current {
             current.pane = Some(pane);
+            self.latest_pane_input
+                .insert(pane, (current.sequence, current.kind));
+            if current.kind != Kind::Key {
+                self.key_windows.remove(&pane);
+            }
         }
+    }
+
+    pub(crate) fn current_key_sequence(&self) -> Option<u64> {
+        self.current
+            .filter(|sample| sample.kind == Kind::Key)
+            .map(|sample| sample.sequence)
+    }
+
+    pub(crate) fn pane_input_ack(
+        &mut self,
+        pane: PaneId,
+        sequence: u64,
+        ok: bool,
+        at: Instant,
+    ) -> bool {
+        if !ok {
+            return false;
+        }
+        let Some(sample) = self
+            .pending_pane
+            .iter_mut()
+            .find(|sample| sample.pane == Some(pane) && sample.sequence == sequence)
+        else {
+            return false;
+        };
+        sample.acknowledged_at = Some(at);
+        if self.latest_pane_input.get(&pane) == Some(&(sequence, Kind::Key)) {
+            self.key_windows
+                .insert(pane, (sequence, at + KEY_RESPONSE_WINDOW));
+            return true;
+        }
+        false
     }
 
     pub(crate) fn local_changed(&mut self) {
@@ -257,17 +321,19 @@ impl Tracker {
         };
         if sample.pane.is_some() {
             self.retain_fresh(Instant::now());
-            if let Some(existing) = self
-                .pending_pane
-                .iter_mut()
-                .find(|pending| pending.pane == sample.pane && pending.kind == sample.kind)
-            {
-                if sample.received_at < existing.received_at {
-                    existing.received_at = sample.received_at;
+            if sample.kind != Kind::Key {
+                if let Some(existing) = self
+                    .pending_pane
+                    .iter_mut()
+                    .find(|pending| pending.pane == sample.pane && pending.kind == sample.kind)
+                {
+                    if sample.received_at < existing.received_at {
+                        existing.received_at = sample.received_at;
+                    }
+                    return false;
                 }
-            } else {
-                self.pending_pane.push_back(sample);
             }
+            self.pending_pane.push_back(sample);
             return false;
         }
         if sample.local_change {
@@ -278,12 +344,14 @@ impl Tracker {
     }
 
     /// Mark the first pane-output burst after forwarded input as interactive.
-    pub(crate) fn pane_output(&mut self, pane: PaneId, at: Instant) -> Vec<Observation> {
+    pub(crate) fn pane_output(&mut self, pane: PaneId, at: Instant) -> PaneOutput {
         self.retain_fresh(at);
+        self.key_windows.retain(|_, (_, until)| at <= *until);
+        let key_response = self.key_windows.contains_key(&pane);
         let mut observed = Vec::new();
         let mut retained = VecDeque::with_capacity(self.pending_pane.len());
         while let Some(sample) = self.pending_pane.pop_front() {
-            if sample.pane == Some(pane) {
+            if sample.pane == Some(pane) && sample.acknowledged_at.is_some() {
                 observed.push(Observation {
                     kind: sample.kind,
                     elapsed: at.saturating_duration_since(sample.received_at),
@@ -294,7 +362,10 @@ impl Tracker {
             }
         }
         self.pending_pane = retained;
-        observed
+        PaneOutput {
+            observations: observed,
+            key_response,
+        }
     }
 
     pub(crate) fn frame_written(&mut self, at: Instant) -> Vec<Observation> {
@@ -329,6 +400,31 @@ impl Tracker {
 }
 
 impl App {
+    pub(super) fn handle_pane_interaction_output(&mut self, pane: PaneId, at: Instant) {
+        let output = self.interactions.pane_output(pane, at);
+        let interaction_response = !output.observations.is_empty();
+        for observation in output.observations {
+            self.metrics.record_pane_output(observation);
+        }
+        if output.key_response {
+            self.frame_clock.request_key_response(at);
+        } else if interaction_response {
+            self.frame_clock.request_interactive(at);
+        }
+    }
+
+    pub(super) fn handle_pane_input_ack(
+        &mut self,
+        pane: PaneId,
+        sequence: u64,
+        ok: bool,
+        at: Instant,
+    ) {
+        if self.interactions.pane_input_ack(pane, sequence, ok, at) && self.dirty {
+            self.frame_clock.request_key_response(at);
+        }
+    }
+
     pub(super) fn handle_or_queue_timed_input(&mut self, timed: TimedInputEvent) -> bool {
         if kind(&timed.event) == Some(Kind::Scroll) {
             let Some(timed) = self.scroll_pacer.submit(timed, Instant::now()) else {
@@ -448,8 +544,19 @@ impl App {
             self.dirty = true;
         }
         self.interactions.forwarded_to(p.tmux_pane);
-        for chunk in bytes.chunks(256) {
-            let _ = self.client.send(input::send_keys_hex(p.tmux_pane, chunk));
+        let key_sequence = self.interactions.current_key_sequence();
+        let mut chunks = bytes.chunks(256).peekable();
+        while let Some(chunk) = chunks.next() {
+            let command = input::send_keys_hex(p.tmux_pane, chunk);
+            let result = match (key_sequence, chunks.peek().is_none()) {
+                (Some(sequence), true) => self
+                    .client
+                    .send_tagged(command, crate::Tag::Input(p.tmux_pane, sequence)),
+                _ => self.client.send(command),
+            };
+            if result.is_err() {
+                break;
+            }
         }
     }
 }
@@ -592,16 +699,64 @@ mod tests {
         let event = key(at);
         tracker.begin(&event);
         tracker.forwarded_to(PaneId(7));
+        let sequence = tracker.current_key_sequence().unwrap();
         assert!(!tracker.finish());
 
+        let before_ack = tracker.pane_output(PaneId(7), at + Duration::from_millis(2));
+        assert!(before_ack.observations.is_empty());
+        assert!(!before_ack.key_response);
+        assert!(tracker.pane_input_ack(PaneId(7), sequence, true, at + Duration::from_millis(2)));
         let output = tracker.pane_output(PaneId(7), at + Duration::from_millis(3));
-        assert_eq!(output.len(), 1);
-        assert_eq!(output[0].kind, Kind::Key);
-        assert_eq!(output[0].elapsed, Duration::from_millis(3));
+        assert!(output.key_response);
+        assert_eq!(output.observations.len(), 1);
+        assert_eq!(output.observations[0].kind, Kind::Key);
+        assert_eq!(output.observations[0].elapsed, Duration::from_millis(3));
+
+        let followup = tracker.pane_output(PaneId(7), at + Duration::from_millis(10));
+        assert!(followup.key_response);
+        assert!(followup.observations.is_empty());
+        let expired = tracker.pane_output(PaneId(7), at + Duration::from_millis(60));
+        assert!(!expired.key_response);
 
         let frame = tracker.frame_written(at + Duration::from_millis(5));
         assert_eq!(frame.len(), 1);
         assert_eq!(frame[0].elapsed, Duration::from_millis(5));
+    }
+
+    #[test]
+    fn failed_or_stale_input_ack_does_not_arm_a_key_response() {
+        let at = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.begin(&key(at));
+        tracker.forwarded_to(PaneId(7));
+        let sequence = tracker.current_key_sequence().unwrap();
+        tracker.finish();
+
+        assert!(!tracker.pane_input_ack(PaneId(7), sequence, false, at));
+        assert!(!tracker.pane_input_ack(PaneId(7), sequence + 1, true, at));
+
+        assert!(tracker
+            .pane_output(PaneId(7), at + Duration::from_millis(3))
+            .observations
+            .is_empty());
+    }
+
+    #[test]
+    fn later_pointer_input_cancels_the_key_response_window() {
+        let at = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.begin(&key(at));
+        tracker.forwarded_to(PaneId(7));
+        let sequence = tracker.current_key_sequence().unwrap();
+        tracker.finish();
+        assert!(tracker.pane_input_ack(PaneId(7), sequence, true, at));
+
+        tracker.begin(&mouse(4, MouseButtons::NONE, at));
+        tracker.forwarded_to(PaneId(7));
+        tracker.finish();
+
+        let output = tracker.pane_output(PaneId(7), at + Duration::from_millis(2));
+        assert!(!output.key_response);
     }
 
     #[test]
