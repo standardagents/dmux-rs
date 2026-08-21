@@ -44,6 +44,20 @@ the script suites) and then the rendering-fidelity harness. CI and
 `scripts/release.sh` route through this same orchestration; use bare
 `check.sh` only for fast mid-task iteration.
 
+## Development worktrees and release authority
+
+Worktrees are development environments. Coding agents must never publish a
+release from a worktree. `scripts/release.sh` may run only from the repository's
+primary `main` checkout, with the release commit present on `main`.
+
+The user controls integration and publication. Coding agents prepare and
+validate changes in a task worktree, commit them on the task branch, and report
+the branch, commit SHA, validation result, and recommended release type. An
+explicit user instruction in the current conversation is required before a
+coding agent may merge or push changes into `main`, create a tag, publish a
+release, or run `scripts/release.sh`. Requests to implement, fix, finish,
+deliver, or work the issue queue authorize development and handoff only.
+
 ## The self-improving loop
 
 1. **Detect** — every build runs the shadow verifier: settled panes are
@@ -69,7 +83,8 @@ now.** Use the `/loop` skill if available (pass the quoted prompt below);
 otherwise iterate yourself: the queue is the repo's open issues — use the
 team `issue` CLI when installed (`issue list`; it is org-Project-aware and
 queues writes locally), falling back to `gh issue list --state open`.
-Work exactly one issue per iteration by the rules below, release, repeat.
+Work exactly one issue per iteration by the rules below. Prepare a validated
+task-branch handoff, then pause for the user's integration and release decision.
 Empty queue = wait (~5 min between checks), don't invent work.
 
 **Team issue tracking**: this org uses the `issue` CLI / skill
@@ -83,13 +98,14 @@ milestones unchanged unless an issue asks; assignment is the exception —
 the loop self-assigns each issue it claims (see loop rules).
 
 **Standing approval (this repo only)**: the `issue` skill normally asks a
-human before creating an issue and wants explicit direction before
-closing one. For dmux-rs, this document IS that approval — the automated
-reporter files issues without confirmation, and the loop completes an
-issue without further sign-off once its runbook is satisfied (fix
-validated, released, referenced by sha and version — or correctly triaged as
-`cannot-reproduce`/`needs-info`). Do not ask for per-issue confirmation;
-do not extend this standing approval to any other repository.
+human before creating an issue and wants explicit direction before closing
+one. For dmux-rs, this document grants approval for automated issue filing and
+for the loop's claim, progress, finish, and close actions. Once a
+user-authorized release exists, the loop may complete the issue without another
+close confirmation. The same approval covers correct `cannot-reproduce` and
+`needs-info` triage. Integration into `main` and publication still require the
+explicit user instruction defined above. Do not extend this standing approval
+to any other repository.
 
 This repo is designed to be worked by an agent in a loop. The queue is
 **every open issue on the repo** — auto-filed `render-incident` reports and
@@ -97,11 +113,12 @@ anything a test-ring human files by hand (bugs, UX complaints, feature
 requests). From a clone, start Claude Code and use `/loop` with
 instructions along these lines:
 
-> Work through ALL open issues in standardagents/dmux-rs, oldest first.
-> Issues labeled `render-incident` follow the fixer-agent runbook in
-> AGENTS.md; any other issue is normal engineering work held to the same
-> validation bar. One issue per iteration. If the queue is empty, do
-> nothing and wait.
+> Work through open issues in standardagents/dmux-rs, oldest first. Issues
+> labeled `render-incident` follow the fixer-agent runbook in AGENTS.md; any
+> other issue is normal engineering work held to the same validation bar.
+> Prepare one issue in a validated task-branch commit, then pause for the
+> user's integration and release decision. If the queue is empty, do nothing
+> and wait.
 
 Triage per issue:
 
@@ -144,9 +161,9 @@ Triage per issue:
 
 Loop rules:
 
-- **One issue per iteration.** Reproduce → fix → corpus-lock → validate →
-  push to `main` → release → deliver (completion lifecycle below). Never
-  batch half-finished fixes.
+- **One issue per iteration.** Reproduce, fix, corpus-lock, validate, commit to
+  the task branch, and prepare the handoff described below. Pause before any
+  merge into `main` or release. Never batch half-finished fixes.
 - **Stay current with the issue tooling.** When the loop boots, run
   `issue upgrade` (and `issue skill install` if the skill changed) so the
   claim/close flow matches the current `@standardagents/issues` contract,
@@ -166,23 +183,27 @@ Loop rules:
   working in the repository, run `scripts/work-issue.sh <n>` after the claim
   and work from the path it prints. Each active issue must use its own
   worktree. Keep the shared root checkout free of issue edits.
-- **Completion lifecycle (#73).** An issue is delivered after these steps run
-  in order:
-  1. Commit with `Fixes #<n>` in the message.
-  2. Push to `main`. GitHub processes the `Fixes` reference **at this
-     moment**. The resulting issue closure is an intermediate state before
-     the release and delivery record.
-  3. Release (`scripts/release.sh patch|minor`). It refuses dirty or
-     unsynchronized state and re-validates before publishing.
-  4. Post the delivery record: `issue finish <n> --session <session-id>
+- **Completion lifecycle (#73).** Development and handoff use these steps:
+  1. Commit on the task branch with `Fixes #<n>` in the message.
+  2. Run `scripts/validate.sh` in the task worktree.
+  3. Report the branch, commit SHA, validation result, and recommended release
+     type to the user. Pause for an integration and release decision.
+  4. After explicit user direction, merge and push to `main`. GitHub processes
+     the `Fixes` reference at this moment. The resulting issue closure is an
+     intermediate state before the release and delivery record.
+  5. After explicit user direction, run `scripts/release.sh patch|minor` from
+     the primary `main` checkout. The script refuses dirty or unsynchronized
+     state and re-validates before publishing. It must never run from a
+     worktree.
+  6. Post the delivery record: `issue finish <n> --session <session-id>
      --idempotency-key <completion-key> "<explanation>"`. After GitHub's
      merge-time closure, this command posts the explanation testers read,
      attaches the commit sha and released version, releases the claim, and
      moves the Team card to Done. An `already completed` result can accompany
      a successful delivery record.
-  5. **If the release fails after the auto-close**: the fix is on `main`
+  7. **If the release fails after the auto-close**: the fix is on `main`
      but undelivered. Reopen the issue with a comment saying exactly
-     that, repair the release, then run step 4. Never leave an issue
+     that, repair the release, then run step 6. Never leave an issue
      closed with its fix unreleased.
 - **The delivery record is for the reporter.** Say what the problem
   actually was (root cause, not just symptom) and how you fixed it, plus
@@ -195,27 +216,27 @@ Loop rules:
 - **Every fixed incident goes into the corpus**
   (`crates/dmux/tests/corpus/<issue-number>.incident`) so it can never
   regress silently.
-- **Release type.** Use `scripts/release.sh patch` for bug fixes and incidents.
-  Use `scripts/release.sh minor` for features. The script derives the next
-  semver version (`vX.Y.Z`) from the latest git tag and enforces clean,
-  synchronized, fully validated source. The completion lifecycle above
-  governs release and delivery ordering. Test-ring heads self-update within
-  about one minute, and the sidebar shows the new version.
+- **Release type.** Recommend `scripts/release.sh patch` for bug fixes and
+  incidents. Recommend `scripts/release.sh minor` for features. The script
+  derives the next semver version (`vX.Y.Z`) from the latest git tag and
+  enforces clean, synchronized, fully validated source. Run it only from the
+  primary `main` checkout after the user authorizes the release. The completion
+  lifecycle above governs release and delivery ordering. Test-ring heads
+  self-update within about one minute, and the sidebar shows the new version.
 - **Non-reproducing issues** (`replay-deterministic: no`, or the replay is
   clean): comment findings, label `cannot-reproduce`, close. If the replay
   is clean but the live grid diverged, the bug is likely in the emit/host
   layer — say so in the comment and check the emitter's cursor-trust rules.
-- A single contributor may use a branch in the root checkout when no other
-  work is active. Concurrent work requires one worktree per issue. `main`
-  must always be releasable.
+- Coding agents use one task worktree per issue. The primary checkout stays on
+  `main` and remains available for user-controlled integration and releases.
 
 Ordinary feature work loops the same way minus the issue queue: pick from
-ROADMAP.md, validate identically, and keep `main` releasable. Before ANY
-ordinary feature or publication edits (issue work has `work-issue.sh`),
-run `scripts/start-task.sh <task-slug>` first: it refreshes
+ROADMAP.md, validate identically, and keep `main` releasable. Before any
+ordinary feature work (issue work has `work-issue.sh`), run
+`scripts/start-task.sh <task-slug>` first: it refreshes
 `origin/main`, reports whether the current checkout is ahead / behind /
 diverged / dirty, and prints a clean task worktree created from the
-refreshed tip — work there, not in a stale root checkout. It never
+refreshed tip. Perform development in that worktree. It never
 changes or discards existing checkout state.
 
 ## Fixer-agent runbook (`render-incident` issues)
@@ -234,8 +255,11 @@ For each open issue with label `render-incident`:
 4. Lock: copy the bundle to `crates/dmux/tests/corpus/<issue>.incident` —
    `corpus_incidents_replay_clean` replays every corpus file forever.
 5. Validate: `scripts/validate.sh` fully green (tests + fidelity).
-6. Deliver: follow the completion lifecycle in the loop rules with a patch
-   release. The delivery record references the commit and new `vX.Y.Z`.
+6. Prepare the user handoff from the task worktree. Report the branch, commit
+   SHA, successful validation, and a patch-release recommendation. Follow the
+   completion lifecycle only after the user chooses to merge and release from
+   the primary `main` checkout. The delivery record references the commit and
+   new `vX.Y.Z`.
 
 Non-reproducing incidents (`replay-deterministic: no`, or replay clean):
 comment findings and close as `cannot-reproduce`; if replay is clean but
