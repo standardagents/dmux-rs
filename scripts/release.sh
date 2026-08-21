@@ -49,22 +49,16 @@ bash scripts/validate.sh --between \
 # and publication.
 refresh_release_refs
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main advanced during validation"; exit 1; }
-LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
-VERSION=$(next_release_version "${LATEST:-v0.1.0}" "$BUMP") || {
-  echo "unknown bump: $BUMP"
-  exit 1
-}
+PUBLISHED=$(latest_published_release_tag "$REPO")
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]'); [ "$OS" = "darwin" ] && OS=macos
 ARCH=$(uname -m); [ "$ARCH" = "arm64" ] && ARCH=aarch64
 ASSET="dmux-rs-$OS-$ARCH"
+VERSION=$(select_release_version "$PUBLISHED" "$BUMP" "$REPO" "$ASSET")
+
 echo "[$VERSION] building release binary ($SHA)…"
 DMUX_BUILD_TAG="$VERSION" cargo build --release --bin dmux-rs
 cp target/release/dmux-rs "/tmp/$ASSET"
 
-git tag "$VERSION"
-git push -q origin "$VERSION"
-gh release create "$VERSION" "/tmp/$ASSET" -R "$REPO" \
-  --title "$VERSION" \
-  --notes "Automated test-ring release ($SHA). Running heads self-update within ~1 minute."
+publish_release "$REPO" "$VERSION" "/tmp/$ASSET" "$(git rev-parse HEAD)"
 echo "released $VERSION"

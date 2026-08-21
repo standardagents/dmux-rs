@@ -35,8 +35,30 @@ DEST="$HOME/.local/bin"
 mkdir -p "$DEST"
 
 echo "installing $TAG ($ASSET) → $DEST/dmux-rs"
-gh release download "$TAG" -R "$REPO" -p "$ASSET" -O "$DEST/dmux-rs" --clobber
-chmod +x "$DEST/dmux-rs"
+STAGED=$(mktemp "$DEST/.dmux-rs.staged.XXXXXX")
+cleanup() {
+  [ -z "${STAGED:-}" ] || rm -f "$STAGED"
+}
+trap cleanup EXIT
+gh release download "$TAG" -R "$REPO" -p "$ASSET" -O "$STAGED" --clobber
+chmod +x "$STAGED"
+REPORTED_VERSION=$("$STAGED" --version) || {
+  echo "error: staged executable could not report its version" >&2
+  exit 1
+}
+case "$REPORTED_VERSION" in
+  "dmux-rs $TAG" | "dmux-rs $TAG ("*) ;;
+  *)
+    echo "error: staged executable reported '$REPORTED_VERSION', expected release $TAG" >&2
+    exit 1
+    ;;
+esac
+"$STAGED" --help >/dev/null 2>&1 || {
+  echo "error: staged executable failed its startup check" >&2
+  exit 1
+}
+mv -f "$STAGED" "$DEST/dmux-rs"
+STAGED=
 
 case ":$PATH:" in
   *":$DEST:"*) ;;
@@ -47,4 +69,4 @@ echo
 echo "done. cd into any project and run: dmux-rs"
 echo "  · auto-updates every minute from $REPO releases (DMUX_NO_UPDATE=1 to opt out)"
 echo "  · rendering divergences auto-file issues with reproduction bytes (DMUX_NO_REPORT=1 to opt out)"
-"$DEST/dmux-rs" --help >/dev/null 2>&1 && echo "installed: $TAG"
+echo "installed: $TAG"

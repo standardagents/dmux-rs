@@ -366,8 +366,8 @@ struct App {
     sidebar_groups: Vec<render::SidebarGroup>,
     project_issues: std::collections::HashMap<String, SharedIssueState>,
     pane_accents: Vec<(dmux_compositor::Color, dmux_compositor::Color)>,
-    /// A staged self-update: swap + re-exec after clean shutdown.
-    reexec_after: Option<PathBuf>,
+    /// A staged executable: re-exec after clean shutdown.
+    reexec_after: Option<updater::ReexecTarget>,
     want_exit: bool,
     /// Staged self-update held back while a bootstrap or prompt injection
     /// is in flight (#53) — re-exec at the wrong moment strands the route
@@ -1037,9 +1037,9 @@ impl App {
         }
         let (tag, staged, _) = self.pending_update.take().unwrap();
         match updater::apply(&staged) {
-            Ok(exe) => {
+            Ok(update) => {
                 self.toast(format!("⬆ updating to {tag}…"));
-                self.reexec_after = Some(exe);
+                self.reexec_after = Some(updater::ReexecTarget::Update(update));
                 self.want_exit = true;
             }
             Err(err) => {

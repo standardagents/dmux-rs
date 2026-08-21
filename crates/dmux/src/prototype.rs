@@ -30,16 +30,11 @@ pub(crate) fn active_worktree() -> Option<PathBuf> {
 }
 
 pub(crate) fn reexec(
-    executable: &Path,
+    target: &updater::ReexecTarget,
     token: &str,
     context: &renderer_control::ReexecContext,
 ) -> String {
-    updater::reexec(
-        &executable.to_path_buf(),
-        token,
-        context,
-        &default_executable(),
-    )
+    updater::reexec_target(target, token, context, &default_executable())
 }
 
 pub(crate) fn run_command(cli: &Cli, worktree: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -203,7 +198,7 @@ impl App {
         }
         let (path, _) = self.pending_prototype.take().expect("prototype pending");
         self.toast("loading local prototype…");
-        self.reexec_after = Some(path);
+        self.reexec_after = Some(updater::ReexecTarget::Prototype(path));
         self.want_exit = true;
     }
 }
