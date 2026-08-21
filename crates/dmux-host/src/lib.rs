@@ -14,9 +14,6 @@ pub use termwiz::input::{
 };
 use tokio::sync::mpsc;
 
-mod kitty;
-pub use kitty::{KittyGraphics, Placement as KittyPlacement};
-
 /// One decoded terminal input event, stamped when its bytes reached dmux.
 /// Consumers can distinguish host/queue delay from later application work.
 #[derive(Debug)]
@@ -40,8 +37,6 @@ pub struct HostCaps {
     pub synchronized_output: bool,
     /// Kitty keyboard protocol — enables collision-free Super/Cmd chords.
     pub kitty_keyboard: bool,
-    /// Kitty graphics protocol — enables direct PNG attachment rendering.
-    pub kitty_graphics: bool,
 }
 
 // ?7l disables autowrap while we own the screen: the compositor addresses
@@ -55,7 +50,6 @@ const LEAVE: &[u8] = b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?7h\x1b[?25h\x1b[?1
 pub struct HostTerminal {
     caps: HostCaps,
     restored: bool,
-    kitty: KittyGraphics,
 }
 
 impl HostTerminal {
@@ -81,23 +75,11 @@ impl HostTerminal {
         Ok(Self {
             caps,
             restored: false,
-            kitty: KittyGraphics::new(),
         })
     }
 
     pub fn caps(&self) -> HostCaps {
         self.caps
-    }
-
-    /// Viewer-local Kitty state for the optional graphics overlay.
-    pub fn kitty_graphics_mut(&mut self) -> Option<&mut KittyGraphics> {
-        self.caps.kitty_graphics.then_some(&mut self.kitty)
-    }
-
-    /// Forget terminal-side graphics state and return cleanup bytes for any
-    /// objects that may remain. The next scene retransmits every image.
-    pub fn reset_graphics(&mut self) -> Vec<u8> {
-        self.kitty.delete_all()
     }
 
     /// Current (cols, rows) of the controlling terminal.
@@ -119,9 +101,6 @@ impl HostTerminal {
         }
         self.restored = true;
         let mut out = std::io::stdout().lock();
-        if self.caps.kitty_graphics {
-            let _ = out.write_all(&self.kitty.delete_all());
-        }
         if self.caps.kitty_keyboard {
             let _ = out.write_all(b"\x1b[<u");
         }
@@ -158,9 +137,8 @@ pub fn term_size() -> (u16, u16) {
 /// the async input pipeline starts, so it owns stdin briefly.
 fn probe_caps() -> HostCaps {
     let mut caps = HostCaps::default();
-    // DECRQM 2026, Kitty keyboard query, Kitty graphics query, then DA1 as
-    // the reply fence.
-    let query = b"\x1b[?2026$p\x1b[?u\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+    // DECRQM 2026, kitty keyboard query, then DA1 as the reply fence.
+    let query = b"\x1b[?2026$p\x1b[?u\x1b[c";
     {
         let mut out = std::io::stdout().lock();
         if out.write_all(query).and_then(|_| out.flush()).is_err() {
@@ -184,9 +162,6 @@ fn probe_caps() -> HostCaps {
                 if find_kitty_reply(&acc) {
                     caps.kitty_keyboard = true;
                 }
-                if find_kitty_graphics_reply(&acc) {
-                    caps.kitty_graphics = true;
-                }
                 // DA1 response terminator: ESC [ ? ... c
                 if acc.windows(2).any(|w| w == b"[?") && acc.last() == Some(&b'c') {
                     break;
@@ -200,11 +175,6 @@ fn probe_caps() -> HostCaps {
     }
     set_stdin_nonblocking(false);
     caps
-}
-
-/// Kitty graphics query replies contain an APC response with `i=31;OK`.
-fn find_kitty_graphics_reply(acc: &[u8]) -> bool {
-    acc.windows(7).any(|w| w == b"i=31;OK")
 }
 
 /// DECRPM reply: ESC [ ? 2026 ; Ps $ y with Ps in {1,2} meaning supported.
@@ -481,13 +451,6 @@ mod tests {
         assert!(find_decrpm_2026(b"\x1b[?2026;2$y"));
         assert!(!find_decrpm_2026(b"\x1b[?2026;0$y"));
         assert!(!find_decrpm_2026(b"\x1b[?1;2c"));
-    }
-
-    #[test]
-    fn kitty_graphics_reply_detection_is_narrow() {
-        assert!(find_kitty_graphics_reply(b"\x1b_Gi=31;OK\x1b\\"));
-        assert!(!find_kitty_graphics_reply(b"i=31;ERROR"));
-        assert!(!find_kitty_graphics_reply(b"\x1b_Gi=3;OK\x1b\\"));
     }
 
     #[test]

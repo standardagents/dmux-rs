@@ -47,8 +47,6 @@ md5 = "0.8"
 libc = "0.2"
 parking_lot = "0.12"
 unicode-width = "0.2"
-base64 = "0.22"
-sha2 = "0.10"
 
 [profile.release]
 lto = "thin"

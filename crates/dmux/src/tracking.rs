@@ -6,111 +6,12 @@
 //! blocking (subprocess-based) — call from spawn_blocking.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-
-use crate::session::PaneStatus;
-use crate::{audit, App, AppMsg};
 
 #[derive(Debug, Clone)]
 pub struct AgentObservation {
     pub agent_id: &'static str,
     pub agent_pid: u32,
     pub session_id: Option<String>,
-    /// The open session file that yielded `session_id`, when available.
-    /// Consumers can tail this source without rediscovering it.
-    pub source_path: Option<String>,
-}
-
-/// Agent process/session tracking sweep cadence (env-overridable for tests).
-pub(super) fn interval() -> Duration {
-    static SECS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    Duration::from_secs(*SECS.get_or_init(|| {
-        std::env::var("DMUX_TRACKING_SECS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(30)
-    }))
-}
-
-impl App {
-    pub(super) fn apply_tracking(&mut self, observations: Vec<(String, AgentObservation)>) {
-        self.tracking_inflight = false;
-        let mut changed = false;
-        for (slug, observation) in observations {
-            if observation.agent_id == "codex" {
-                if let (Some(monitor), Some(session_id), Some(source_path)) = (
-                    self.image_monitor.as_ref(),
-                    observation.session_id.as_ref(),
-                    observation.source_path.as_ref(),
-                ) {
-                    monitor.observe(
-                        slug.clone(),
-                        session_id.clone(),
-                        std::path::PathBuf::from(source_path),
-                    );
-                }
-            }
-            if let Some(record) = self
-                .config
-                .panes
-                .iter_mut()
-                .find(|record| record.slug == slug)
-            {
-                let mut update = |key: &str, value: serde_json::Value| {
-                    if record.extra.get(key) != Some(&value) {
-                        record.extra.insert(key.to_string(), value);
-                        changed = true;
-                    }
-                };
-                update(
-                    "activeAgent",
-                    serde_json::Value::String(observation.agent_id.to_string()),
-                );
-                update(
-                    "agentProcessId",
-                    serde_json::Value::from(observation.agent_pid),
-                );
-                if let Some(session) = &observation.session_id {
-                    update("agentSessionId", serde_json::Value::String(session.clone()));
-                }
-            }
-        }
-        if changed {
-            self.save_config(audit::Reason::AgentTracking);
-            tracing::debug!("agent tracking updated config records");
-        }
-    }
-
-    pub(super) fn schedule_tracking(&mut self, now: Instant) {
-        if self.tracking_inflight || now.duration_since(self.last_tracking) < interval() {
-            return;
-        }
-        let live_slugs: Vec<String> = self.panes.iter().map(|pane| pane.slug.clone()).collect();
-        self.images
-            .retain_panes(live_slugs.iter().map(String::as_str));
-        if let Some(monitor) = &self.image_monitor {
-            monitor.retain_panes(live_slugs);
-        }
-        let targets: Vec<(String, u32)> = self
-            .panes
-            .iter()
-            .filter(|pane| {
-                pane.agent.is_some() && pane.pane_pid > 0 && pane.status != PaneStatus::Dead
-            })
-            .map(|pane| (pane.slug.clone(), pane.pane_pid))
-            .collect();
-        self.last_tracking = now;
-        if targets.is_empty() {
-            return;
-        }
-        tracing::debug!(count = targets.len(), "tracking sweep starting");
-        self.tracking_inflight = true;
-        let sender = self.app_tx.clone();
-        tokio::task::spawn_blocking(move || {
-            let observations = observe(&targets);
-            let _ = sender.send(AppMsg::TrackingDone(observations));
-        });
-    }
 }
 
 /// Process table snapshot: pid → (ppid, command line).
@@ -258,21 +159,14 @@ pub fn observe(panes: &[(String, u32)]) -> Vec<(String, AgentObservation)> {
         match find_agent(&table, *pane_pid) {
             Some((agent_id, agent_pid)) => {
                 let files = open_files(agent_pid);
-                let source_path = files
-                    .iter()
-                    .find(|p| session_from_path(agent_id, p).is_some())
-                    .cloned();
-                let session_id = source_path
-                    .as_deref()
-                    .and_then(|p| session_from_path(agent_id, p));
-                tracing::debug!(%slug, agent_id, agent_pid, files = files.len(), session = ?session_id, has_source = source_path.is_some(), "agent observed");
+                let session_id = files.iter().find_map(|p| session_from_path(agent_id, p));
+                tracing::debug!(%slug, agent_id, agent_pid, files = files.len(), session = ?session_id, "agent observed");
                 out.push((
                     slug.clone(),
                     AgentObservation {
                         agent_id,
                         agent_pid,
                         session_id,
-                        source_path,
                     },
                 ));
             }

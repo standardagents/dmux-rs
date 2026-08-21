@@ -462,7 +462,6 @@ dependencies = [
 name = "dmux"
 version = "0.1.0"
 dependencies = [
- "base64",
  "clap",
  "dmux-cc",
  "dmux-compositor",
@@ -476,7 +475,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
