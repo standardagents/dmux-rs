@@ -26,3 +26,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hdrhistogram = { workspace = true }
 libc = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }

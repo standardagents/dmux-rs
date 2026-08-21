@@ -7,6 +7,7 @@ mod agent_launch;
 mod agents;
 mod audit;
 mod bootstrap;
+mod codex_rollout;
 mod command_dispatch;
 mod control_events;
 mod diagnose;
@@ -14,6 +15,8 @@ mod git;
 mod github;
 mod hooks;
 mod hover;
+mod image_monitor;
+mod images;
 mod input;
 mod interaction;
 mod keys;
@@ -79,17 +82,6 @@ const STATUS_LINGER: Duration = Duration::from_secs(4);
 const FLOOD_WINDOW: Duration = Duration::from_millis(250);
 const FLOOD_BYTES_PER_WINDOW: u64 = 1_000_000;
 const FLOOD_RESEED_EVERY: Duration = Duration::from_millis(500);
-/// Agent process/session tracking sweep cadence (env-overridable for tests).
-fn tracking_interval() -> Duration {
-    static SECS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    Duration::from_secs(*SECS.get_or_init(|| {
-        std::env::var("DMUX_TRACKING_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30)
-    }))
-}
-
 #[derive(ClapParser, Debug)]
 #[command(name = "dmux-rs", about = "dmux control-mode renderer prototype", version = updater::cli_version())]
 struct Cli {
@@ -155,6 +147,11 @@ enum AppMsg {
     UpdateStaged { tag: String, staged: PathBuf },
     /// Agent process tracking sweep finished.
     TrackingDone(Vec<(String, tracking::AgentObservation)>),
+    /// A Codex rollout produced a newer image-bearing user message.
+    ImagesChanged {
+        pane_slug: String,
+        message: images::ImageMessage,
+    },
     /// Conflicted merge state re-established; launch the resolution pane.
     ConflictsReady {
         branch: String,
@@ -305,6 +302,8 @@ struct App {
     client: Client<Tag>,
     router: ReplyRouter<Tag>,
     host: HostTerminal,
+    images: images::State,
+    image_monitor: Option<image_monitor::Monitor>,
     panes: Vec<LogicalPane>,
     config: DmuxConfig,
     config_path: PathBuf,
@@ -465,10 +464,24 @@ async fn run(
     let (app_tx, mut app_rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
 
     let caps = host.caps();
+    let image_requested = std::env::var("DMUX_IMAGES").is_ok_and(|value| value == "1");
+    let images = images::State::new(image_requested && caps.kitty_graphics);
+    let image_monitor = if images.enabled() {
+        Some(image_monitor::Monitor::spawn(app_tx.clone())?)
+    } else {
+        None
+    };
+    let image_status = match (image_requested, caps.kitty_graphics) {
+        (false, _) => "disabled; set DMUX_IMAGES=1 to enable the prototype",
+        (true, false) => "disabled; the host did not confirm Kitty graphics support",
+        (true, true) => "enabled",
+    };
     tracing::info!(
         ?size,
         sync_output = caps.synchronized_output,
         kitty = caps.kitty_keyboard,
+        kitty_graphics = caps.kitty_graphics,
+        images = image_status,
         session = %session_name,
         agents = installed_agents.len(),
         "attached"
@@ -524,6 +537,8 @@ async fn run(
         client,
         router,
         host,
+        images,
+        image_monitor,
         panes: Vec::new(),
         config,
         config_path,
@@ -753,7 +768,7 @@ async fn run(
                 .panes
                 .iter()
                 .any(|p| p.agent.is_some() && p.pane_pid > 0))
-        .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking_interval()));
+        .then(|| tokio::time::Instant::from_std(app.last_tracking + tracking::interval()));
         let deadline = [
             render_deadline,
             scroll_deadline,
@@ -1318,30 +1333,10 @@ impl App {
                 }
             },
             AppMsg::TrackingDone(observations) => {
-                self.tracking_inflight = false;
-                let mut changed = false;
-                for (slug, obs) in observations {
-                    if let Some(rec) = self.config.panes.iter_mut().find(|r| r.slug == slug) {
-                        let mut update = |key: &str, value: serde_json::Value| {
-                            if rec.extra.get(key) != Some(&value) {
-                                rec.extra.insert(key.to_string(), value);
-                                changed = true;
-                            }
-                        };
-                        update(
-                            "activeAgent",
-                            serde_json::Value::String(obs.agent_id.to_string()),
-                        );
-                        update("agentProcessId", serde_json::Value::from(obs.agent_pid));
-                        if let Some(session) = &obs.session_id {
-                            update("agentSessionId", serde_json::Value::String(session.clone()));
-                        }
-                    }
-                }
-                if changed {
-                    self.save_config(audit::Reason::AgentTracking);
-                    tracing::debug!("agent tracking updated config records");
-                }
+                self.apply_tracking(observations);
+            }
+            AppMsg::ImagesChanged { pane_slug, message } => {
+                self.apply_image_message(pane_slug, message);
             }
             AppMsg::AnalysisDone { pane, verdict } => {
                 let focused_pane = self.panes.get(self.focused).map(|p| p.tmux_pane);
@@ -1951,7 +1946,7 @@ impl App {
         self.size = new_size;
         self.front = CellBuffer::new(new_size.0, new_size.1);
         self.back = CellBuffer::new(new_size.0, new_size.1);
-        self.emitter.invalidate();
+        self.invalidate_terminal_render_state();
         self.emitter.clear_screen();
         self.hovered = None;
         let _ = self
@@ -2763,27 +2758,7 @@ impl App {
             self.dirty = true;
         }
         self.send_due_injections(now);
-        if !self.tracking_inflight && now.duration_since(self.last_tracking) >= tracking_interval()
-        {
-            let targets: Vec<(String, u32)> = self
-                .panes
-                .iter()
-                .filter(|p| p.agent.is_some() && p.pane_pid > 0 && p.status != PaneStatus::Dead)
-                .map(|p| (p.slug.clone(), p.pane_pid))
-                .collect();
-            if !targets.is_empty() {
-                tracing::debug!(count = targets.len(), "tracking sweep starting");
-                self.tracking_inflight = true;
-                self.last_tracking = now;
-                let tx = self.app_tx.clone();
-                tokio::task::spawn_blocking(move || {
-                    let observations = tracking::observe(&targets);
-                    let _ = tx.send(AppMsg::TrackingDone(observations));
-                });
-            } else {
-                self.last_tracking = now;
-            }
-        }
+        self.schedule_tracking(now);
         // Shadow verifier: compare one settled pane per tick against tmux's
         // authoritative grid (bounded to one capture in flight per sweep).
         if self.verify_enabled && self.renderer.is_controller() {
@@ -2929,6 +2904,8 @@ impl App {
             self.anim,
         );
 
+        let image_placements = self.compose_images();
+
         if self.welcome_active() {
             let content = render::content_area(&self.back, &self.layout);
             self.welcome_rain.resize(content.w, content.h);
@@ -2984,6 +2961,7 @@ impl App {
             self.emitter.begin_sync();
         }
         self.emitter.hide_cursor();
+        self.emit_images(&image_placements);
         let force = self.force_full;
         diff_frame(&mut self.front, &mut self.back, &mut self.emitter, force);
 
