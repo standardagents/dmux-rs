@@ -194,6 +194,10 @@ fn dirs_home() -> PathBuf {
 }
 
 impl View for PathPickerView {
+    fn blocks_reload(&self) -> bool {
+        true
+    }
+
     fn render(
         &mut self,
         buf: &mut CellBuffer,

@@ -362,7 +362,13 @@ else
 fi
 
 # A second session on the same target socket owns an independent record.
-tmux -L "$TGT" new-session -d -s isolated -x 100 -y 30 "exec sleep 600"
+tmux -L "$TGT" new-session -d -s isolated -x 100 -y 30 \
+  "exec env PS1='watch> ' bash --noprofile --norc"
+ISOLATED_TYPED_PANE=$(tmux -L "$TGT" display-message -p -t isolated '#{pane_id}')
+tmux -L "$TGT" send-keys -t "$ISOLATED_TYPED_PANE" -l 'partially-typed-command'
+tmux -L "$TGT" split-window -d -t isolated "exec sleep 600"
+tmux -L "$TGT" select-pane -t "$ISOLATED_TYPED_PANE"
+ISOLATED_PANE_PID=$(tmux -L "$TGT" display-message -p -t "$ISOLATED_TYPED_PANE" '#{pane_pid}')
 start_renderer "$DRVC" c isolated 110 32 local
 CPID=$(tmux -L "$DRVC" display-message -p -t c '#{pane_pid}')
 if wait_owner_pid isolated "$CPID" \
@@ -385,6 +391,29 @@ if wait_owner_pid isolated "$DPID" \
   pass "replacement renderer preserves token"
 else
   fail "replacement renderer preserves token"
+fi
+tmux -L "$TGT" select-pane -t "$ISOLATED_TYPED_PANE"
+ISOLATED_LAYOUT=$(tmux -L "$TGT" display-message -p -t isolated '#{window_layout}')
+ISOLATED_ACTIVE=$(tmux -L "$TGT" display-message -p -t isolated '#{pane_id}')
+
+# Repeated watched builds use the same renderer handoff. The target pane and
+# ownership token must outlive several outer-terminal replacements.
+tmux -L "$DRVD" kill-server
+start_renderer "$DRVC" c isolated 110 32 local "$C_TOKEN" controller "$C_TOKEN"
+CPID=$(tmux -L "$DRVC" display-message -p -t c '#{pane_pid}')
+wait_owner_pid isolated "$CPID" || fail "second replacement renderer claim"
+tmux -L "$DRVC" kill-server
+start_renderer "$DRVD" d isolated 110 32 local "$C_TOKEN" controller "$C_TOKEN"
+DPID=$(tmux -L "$DRVD" display-message -p -t d '#{pane_pid}')
+if wait_owner_pid isolated "$DPID" \
+  && [ "$(owner_token isolated)" = "$C_TOKEN" ] \
+  && [ "$(tmux -L "$TGT" display-message -p -t "$ISOLATED_TYPED_PANE" '#{pane_pid}')" = "$ISOLATED_PANE_PID" ] \
+  && [ "$(tmux -L "$TGT" display-message -p -t isolated '#{window_layout}')" = "$ISOLATED_LAYOUT" ] \
+  && [ "$(tmux -L "$TGT" display-message -p -t isolated '#{pane_id}')" = "$ISOLATED_ACTIVE" ] \
+  && tmux -L "$TGT" capture-pane -p -t "$ISOLATED_TYPED_PANE" | grep -q 'partially-typed-command'; then
+  pass "repeated replacements preserve pane text, layout, focus, and ownership"
+else
+  fail "repeated replacements preserve pane text, layout, focus, and ownership"
 fi
 kill -TERM "$DPID"
 if wait_no_owner isolated; then

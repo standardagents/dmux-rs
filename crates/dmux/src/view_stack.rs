@@ -145,6 +145,10 @@ impl std::ops::DerefMut for OverlayEntry {
 pub(crate) struct OverlayStack(Vec<OverlayEntry>);
 
 impl OverlayStack {
+    pub(crate) fn blocks_reload(&self) -> bool {
+        self.0.iter().any(|entry| entry.view.blocks_reload())
+    }
+
     pub(crate) fn push(&mut self, view: Box<dyn crate::views::View>) {
         self.push_at(view, OverlayOrigin::Global);
     }
@@ -505,6 +509,22 @@ mod tests {
 
     fn empty_menu() -> Box<dyn crate::views::View> {
         Box::new(MenuView::new("pane", vec![]))
+    }
+
+    #[test]
+    fn text_entry_anywhere_in_the_stack_blocks_reload() {
+        let mut stack = OverlayStack::default();
+        stack.push(empty_menu());
+        assert!(!stack.blocks_reload());
+        stack.push(Box::new(crate::views::InputView::new(
+            "Rename",
+            "pane",
+            "",
+            crate::views::InputPurpose::RenamePane(0),
+        )));
+        assert!(stack.blocks_reload());
+        stack.pop();
+        assert!(!stack.blocks_reload());
     }
 
     #[test]

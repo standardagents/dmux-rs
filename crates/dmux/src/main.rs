@@ -23,7 +23,9 @@ mod notify;
 mod pane_actions;
 mod profiler;
 mod prototype;
+mod prototype_watcher;
 mod registry;
+mod reload_gate;
 mod render;
 mod renderer_control;
 mod report;
@@ -38,7 +40,7 @@ mod tracking;
 mod util;
 pub(crate) use util::{
     base64, dirs_home, iso_now, shq, slugify, strip_status_glyphs, timestamp,
-    trace_palette_enabled, trace_palette_line, update_may_apply, AnimClock, Tooltip,
+    trace_palette_enabled, trace_palette_line, AnimClock, Tooltip,
 };
 mod updater;
 mod verify;
@@ -123,6 +125,9 @@ struct Cli {
     /// Build a worktree and hand it to the running dmux-rs controller.
     #[arg(long, value_name = "WORKTREE")]
     prototype_worktree: Option<PathBuf>,
+    /// Rebuild and hand off a prototype after worktree source changes.
+    #[arg(long, requires = "prototype_worktree")]
+    watch: bool,
 }
 
 /// Results from background tasks (git merges, later inference) delivered
@@ -200,7 +205,7 @@ enum Tag {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     if let Some(worktree) = &cli.prototype_worktree {
-        return prototype::run_command(&cli, worktree);
+        return prototype::run_command(&cli, worktree, cli.watch);
     }
     if let Some(path) = &cli.replay_incident {
         let text = std::fs::read_to_string(path)?;
@@ -374,7 +379,8 @@ struct App {
     /// as an idle shell. (tag, staged path, first deferred at).
     pending_update: Option<(String, PathBuf, Instant)>,
     /// Local prototype binary held until launch state reaches a safe boundary.
-    pending_prototype: Option<(PathBuf, Instant)>,
+    pending_prototype: Option<prototype::PendingPrototype>,
+    reload_gate: reload_gate::ReloadGate,
     renderer: renderer_control::RendererControl,
     startup_legacy_checked: bool,
     startup_legacy_alive: bool,
@@ -580,6 +586,7 @@ async fn run(
         want_exit: false,
         pending_update: None,
         pending_prototype: None,
+        reload_gate: reload_gate::ReloadGate::new(Instant::now()),
         renderer,
         startup_legacy_checked: false,
         startup_legacy_alive: false,
@@ -742,6 +749,9 @@ async fn run(
             .tooltip
             .as_ref()
             .map(|t| tokio::time::Instant::from_std(t.until));
+        let prototype_deadline = app
+            .pending_prototype_deadline(now)
+            .map(tokio::time::Instant::from_std);
         let verify_deadline = app
             .panes
             .iter()
@@ -764,6 +774,7 @@ async fn run(
             injection_deadline,
             status_deadline,
             tooltip_deadline,
+            prototype_deadline,
             tracking_deadline,
             verify_deadline,
         ]
@@ -1021,31 +1032,6 @@ impl App {
                 ));
             }
             Err(err) => tracing::warn!(%err, "clipboard buffer write failed"),
-        }
-    }
-
-    /// Apply a deferred self-update once no bootstrap is provisioning and
-    /// no prompt injection is queued (#53) — or once the deferral cap
-    /// expires, so a wedged hook can't block updates forever.
-    fn try_apply_pending_update(&mut self) {
-        let Some((_, _, since)) = &self.pending_update else {
-            return;
-        };
-        let active = self.bootstraps.values().any(|ui| ui.done_at.is_none());
-        if !update_may_apply(active, self.pending_injection_count(), since.elapsed()) {
-            return;
-        }
-        let (tag, staged, _) = self.pending_update.take().unwrap();
-        match updater::apply(&staged) {
-            Ok(update) => {
-                self.toast(format!("⬆ updating to {tag}…"));
-                self.reexec_after = Some(updater::ReexecTarget::Update(update));
-                self.want_exit = true;
-            }
-            Err(err) => {
-                tracing::warn!(%err, "update apply failed");
-                self.toast(format!("update failed: {err}"));
-            }
         }
     }
 

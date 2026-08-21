@@ -158,13 +158,7 @@ pub fn build_prototype(worktree: &Path) -> Result<PathBuf, String> {
     build_prototype_with_output(worktree, |_| {})
 }
 
-/// Build a local prototype while reporting Cargo's latest status line. All
-/// worktrees share dependency artifacts, then receive their own executable so
-/// the running binary still identifies its source worktree.
-pub fn build_prototype_with_output(
-    worktree: &Path,
-    mut report: impl FnMut(String),
-) -> Result<PathBuf, String> {
+pub fn prototype_worktree(worktree: &Path) -> Result<PathBuf, String> {
     let worktree = std::fs::canonicalize(worktree)
         .map_err(|err| format!("prototype worktree is unavailable: {err}"))?;
     if !worktree.is_dir() {
@@ -179,13 +173,25 @@ pub fn build_prototype_with_output(
             worktree.display()
         ));
     }
+    Ok(worktree)
+}
+
+/// Build a local prototype while reporting Cargo's latest status line. All
+/// worktrees share dependency artifacts, then receive their own executable so
+/// the running binary still identifies its source worktree.
+pub fn build_prototype_with_output(
+    worktree: &Path,
+    mut report: impl FnMut(String),
+) -> Result<PathBuf, String> {
+    let worktree = prototype_worktree(worktree)?;
     let target_dir = crate::dirs_home()
         .join(".dmux")
         .join("cache")
         .join("prototype-target");
     std::fs::create_dir_all(&target_dir)
         .map_err(|err| format!("could not create prototype build cache: {err}"))?;
-    let mut child = std::process::Command::new("cargo")
+    let mut command = std::process::Command::new("cargo");
+    command
         .args(["build", "--release", "--bin", "dmux-rs", "--color", "never"])
         .current_dir(&worktree)
         .env("CARGO_TARGET_DIR", &target_dir)
@@ -193,7 +199,20 @@ pub fn build_prototype_with_output(
         .env_remove("DMUX_BUILD_TAG")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // setpriority is async-signal-safe on the supported Unix targets. A
+        // denied priority change leaves the build usable at normal priority.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                Ok(())
+            });
+        }
+    }
+    let mut child = command
         .spawn()
         .map_err(|err| format!("could not run cargo: {err}"))?;
     let mut last_line = String::new();
@@ -252,6 +271,31 @@ pub struct AppliedUpdate {
 pub enum ReexecTarget {
     Update(AppliedUpdate),
     Prototype(PathBuf),
+}
+
+impl crate::App {
+    /// Apply a deferred self-update once launch work reaches a safe boundary.
+    pub(crate) fn try_apply_pending_update(&mut self) {
+        let Some((_, _, since)) = &self.pending_update else {
+            return;
+        };
+        let active = self.bootstraps.values().any(|ui| ui.done_at.is_none());
+        if !crate::util::update_may_apply(active, self.pending_injection_count(), since.elapsed()) {
+            return;
+        }
+        let (tag, staged, _) = self.pending_update.take().expect("update pending");
+        match apply(&staged) {
+            Ok(update) => {
+                self.toast(format!("⬆ updating to {tag}…"));
+                self.reexec_after = Some(ReexecTarget::Update(update));
+                self.want_exit = true;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "update apply failed");
+                self.toast(format!("update failed: {error}"));
+            }
+        }
+    }
 }
 
 impl ReexecTarget {

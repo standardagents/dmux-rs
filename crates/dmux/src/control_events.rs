@@ -146,6 +146,7 @@ impl App {
             return;
         }
         self.renderer.become_controller(record);
+        self.interactions.abandon_pane_input();
         tracing::info!(token = %self.renderer.token, "renderer control claimed");
         let live = self
             .panes
@@ -156,6 +157,7 @@ impl App {
         self.request_reconcile();
         self.apply_window_sizes();
         self.ensure_keepalive();
+        self.request_prototype_path();
         self.dirty = true;
 
         let pending = std::mem::take(&mut self.pending_owner_input);

@@ -8,6 +8,12 @@ use dmux_cc::Reply;
 
 use crate::{renderer_control, updater, App, AppMsg, Cli, Tag};
 
+pub(crate) struct PendingPrototype {
+    path: PathBuf,
+    since: std::time::Instant,
+    blocker: Option<crate::reload_gate::Blocker>,
+}
+
 pub(crate) fn default_executable() -> PathBuf {
     std::env::var_os("DMUX_PROTOTYPE_DEFAULT_EXE")
         .map(PathBuf::from)
@@ -37,12 +43,45 @@ pub(crate) fn reexec(
     updater::reexec_target(target, token, context, &default_executable())
 }
 
-pub(crate) fn run_command(cli: &Cli, worktree: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_command(
+    cli: &Cli,
+    worktree: &Path,
+    watch: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if watch {
+        return crate::prototype_watcher::run(cli, worktree);
+    }
     let (_, _, session_name) = crate::startup::resolve_session(cli)?;
+    let (command, owner) = controller(cli, &session_name)?;
+    let executable = updater::build_prototype(worktree).map_err(io::Error::other)?;
+    request_handoff(&command, &owner, &executable)?;
+    println!(
+        "prototype requested for '{session_name}': {}",
+        executable.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn handoff(cli: &Cli, session_name: &str, executable: &Path) -> io::Result<()> {
+    let (command, owner) = controller(cli, session_name)?;
+    request_handoff(&command, &owner, executable)
+}
+
+pub(crate) fn ensure_controller(cli: &Cli, session_name: &str) -> io::Result<()> {
+    controller(cli, session_name).map(|_| ())
+}
+
+fn controller(
+    cli: &Cli,
+    session_name: &str,
+) -> io::Result<(
+    renderer_control::CommandContext,
+    renderer_control::OwnerRecord,
+)> {
     let command = renderer_control::CommandContext {
         tmux: cli.tmux.clone(),
         socket: cli.socket.clone(),
-        session_name: session_name.clone(),
+        session_name: session_name.to_string(),
     };
     let owner = command.read_owner()?.ok_or_else(|| {
         io::Error::other(format!(
@@ -52,25 +91,88 @@ pub(crate) fn run_command(cli: &Cli, worktree: &Path) -> Result<(), Box<dyn std:
     if owner.pid > i32::MAX as u32 || !renderer_control::pid_alive(owner.pid as i32) {
         return Err(io::Error::other(format!(
             "dmux-rs controller for '{session_name}' is no longer running"
-        ))
-        .into());
+        )));
     }
-    let executable = updater::build_prototype(worktree).map_err(io::Error::other)?;
-    if !command.request_prototype(&owner, &executable)? {
+    Ok((command, owner))
+}
+
+fn request_handoff(
+    command: &renderer_control::CommandContext,
+    owner: &renderer_control::OwnerRecord,
+    executable: &Path,
+) -> io::Result<()> {
+    if !command.request_prototype(owner, executable)? {
         return Err(io::Error::other(
             "the dmux-rs controller changed before the prototype request was sent",
-        )
-        .into());
+        ));
+    }
+    let current = command.read_owner()?;
+    let published = published_prototype(command)?;
+    if current.as_ref().map(|record| &record.token) != Some(&owner.token)
+        || published.as_deref() != Some(executable)
+    {
+        clear_prototype_request(command, owner);
+        return Err(io::Error::other(
+            "the prototype request was not accepted by the current controller",
+        ));
     }
     let signal_result = unsafe { libc::kill(owner.pid as i32, libc::SIGUSR1) };
     if signal_result != 0 {
-        return Err(io::Error::last_os_error().into());
+        clear_prototype_request(command, owner);
+        return Err(io::Error::last_os_error());
     }
-    println!(
-        "prototype requested for '{session_name}': {}",
-        executable.display()
-    );
     Ok(())
+}
+
+fn clear_prototype_request(
+    command: &renderer_control::CommandContext,
+    owner: &renderer_control::OwnerRecord,
+) {
+    let mut process = std::process::Command::new(&command.tmux);
+    if let Some(socket) = &command.socket {
+        process.args(["-L", socket]);
+    }
+    let condition = format!(
+        "#{{==:#{{{}}},{}}}",
+        renderer_control::TOKEN_OPTION,
+        owner.token
+    );
+    let clear = format!(
+        "unset-option -t {} {}",
+        dmux_cc::quote_arg(&command.session_name),
+        renderer_control::PROTOTYPE_OPTION
+    );
+    let _ = process
+        .args([
+            "if-shell",
+            "-t",
+            &command.session_name,
+            "-F",
+            &condition,
+            &clear,
+        ])
+        .status();
+}
+
+fn published_prototype(command: &renderer_control::CommandContext) -> io::Result<Option<PathBuf>> {
+    let mut process = std::process::Command::new(&command.tmux);
+    if let Some(socket) = &command.socket {
+        process.args(["-L", socket]);
+    }
+    let output = process
+        .args([
+            "show-options",
+            "-t",
+            &command.session_name,
+            "-qv",
+            renderer_control::PROTOTYPE_OPTION,
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other("could not confirm prototype handoff"));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!raw.is_empty()).then(|| PathBuf::from(raw)))
 }
 
 pub(crate) fn spawn_signal_listener(
@@ -116,11 +218,8 @@ impl App {
     pub(crate) fn handle_prototype_build_done(&mut self, result: Result<PathBuf, String>) {
         match result {
             Ok(path) => {
-                self.pending_prototype = Some((path, std::time::Instant::now()));
+                self.queue_prototype(path);
                 self.try_apply_pending_prototype();
-                if self.pending_prototype.is_some() {
-                    self.toast("prototype built when the current launch settles…");
-                }
             }
             Err(err) => self.toast(format!("prototype build failed: {err}")),
         }
@@ -135,11 +234,8 @@ impl App {
             ));
             return;
         }
-        self.pending_prototype = Some((executable, std::time::Instant::now()));
+        self.queue_prototype(executable);
         self.try_apply_pending_prototype();
-        if self.pending_prototype.is_some() {
-            self.toast("default dmux-rs will load when the current launch settles…");
-        }
     }
 
     pub(crate) fn request_prototype_path(&mut self) {
@@ -147,7 +243,7 @@ impl App {
             tracing::debug!("ignored prototype request while renderer is not controller");
             return;
         }
-        let _ = self.client.send_tagged(
+        let _ = self.client.send_deferred_tagged(
             renderer_control::prototype_path_command(&self.session_name),
             Tag::PrototypePath,
         );
@@ -166,9 +262,11 @@ impl App {
         }
         let lines = reply.text_lines();
         let Some(raw_path) = lines.first().map(String::as_str) else {
-            self.toast("prototype request did not include a binary");
             return;
         };
+        if raw_path.trim().is_empty() {
+            return;
+        }
         let path = PathBuf::from(raw_path);
         let Ok(path) = std::fs::canonicalize(&path) else {
             self.toast("prototype binary is unavailable");
@@ -178,25 +276,68 @@ impl App {
             self.toast("prototype path is not an executable file");
             return;
         }
-        self.pending_prototype = Some((path, std::time::Instant::now()));
+        self.queue_prototype(path);
         self.try_apply_pending_prototype();
-        if self.pending_prototype.is_some() {
-            self.toast("prototype loaded when the current launch settles…");
-        }
+    }
+
+    fn queue_prototype(&mut self, path: PathBuf) {
+        self.pending_prototype = Some(PendingPrototype {
+            path,
+            since: std::time::Instant::now(),
+            blocker: None,
+        });
+    }
+
+    pub(crate) fn pending_prototype_deadline(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<std::time::Instant> {
+        let pending = self.pending_prototype.as_ref()?;
+        [
+            self.reload_gate.quiet_deadline(),
+            pending.since + crate::util::UPDATE_DEFER_CAP,
+        ]
+        .into_iter()
+        .filter(|deadline| *deadline > now)
+        .min()
     }
 
     pub(crate) fn try_apply_pending_prototype(&mut self) {
-        let Some((_, since)) = &self.pending_prototype else {
+        let Some(pending) = &self.pending_prototype else {
             return;
         };
-        if !crate::update_may_apply(
-            self.bootstraps.values().any(|ui| ui.done_at.is_none()),
-            self.pending_injection_count(),
-            since.elapsed(),
-        ) {
+        let now = std::time::Instant::now();
+        let facts = crate::reload_gate::ReloadFacts {
+            controller_ready: self.renderer.is_controller(),
+            interaction_active: self.mouse_buttons.any_down()
+                || self.sidebar_drag.is_some()
+                || self.profiler_drag.is_some()
+                || self.drag_select.is_some()
+                || self.mouse_forward.is_some(),
+            pane_input_pending: !self.pending_owner_input.is_empty()
+                || self.scroll_pacer.is_pending()
+                || self.interactions.pane_input_pending(),
+            text_entry_open: self.views.blocks_reload(),
+            bootstrap_active: self.bootstraps.values().any(|ui| ui.done_at.is_none()),
+            prompt_injections: self.pending_injection_count(),
+            candidate_wait: now.saturating_duration_since(pending.since),
+        };
+        if let Some(blocker) = self.reload_gate.blocker(now, facts) {
+            if pending.blocker != Some(blocker) {
+                if let Some(pending) = &mut self.pending_prototype {
+                    pending.blocker = Some(blocker);
+                }
+                self.status_msg = blocker.message().to_string();
+                self.status_clear_at = None;
+                self.dirty = true;
+            }
             return;
         }
-        let (path, _) = self.pending_prototype.take().expect("prototype pending");
+        let path = self
+            .pending_prototype
+            .take()
+            .expect("prototype pending")
+            .path;
         self.toast("loading local prototype…");
         self.reexec_after = Some(updater::ReexecTarget::Prototype(path));
         self.want_exit = true;

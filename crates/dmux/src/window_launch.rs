@@ -335,12 +335,14 @@ impl App {
             }
         }
         self.try_apply_pending_update();
+        self.try_apply_pending_prototype();
     }
 
     pub(super) fn send_due_injections(&mut self, now: Instant) {
         for (pane, prompt) in take_due_injections(&mut self.pending_injections, now) {
             self.send_pane_line(pane, &prompt);
         }
+        self.try_apply_pending_prototype();
     }
 
     fn send_pane_line(&mut self, pane: PaneId, line: &str) {

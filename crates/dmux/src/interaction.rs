@@ -158,6 +158,10 @@ impl ScrollPacer {
         }
     }
 
+    pub(crate) fn is_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     fn take_due(&mut self, now: Instant) -> Vec<TimedInputEvent> {
         let Some(next) = self.deadline() else {
             return Vec::new();
@@ -229,6 +233,7 @@ pub(crate) struct Tracker {
     next_sequence: u64,
     current: Option<Sample>,
     pending_pane: VecDeque<Sample>,
+    pending_acks: std::collections::HashSet<(PaneId, u64)>,
     ready: VecDeque<Sample>,
     latest_pane_input: HashMap<PaneId, (u64, Kind)>,
     key_windows: HashMap<PaneId, (u64, Instant)>,
@@ -240,6 +245,7 @@ impl Default for Tracker {
             next_sequence: 1,
             current: None,
             pending_pane: VecDeque::new(),
+            pending_acks: std::collections::HashSet::new(),
             ready: VecDeque::new(),
             latest_pane_input: HashMap::new(),
             key_windows: HashMap::new(),
@@ -248,6 +254,14 @@ impl Default for Tracker {
 }
 
 impl Tracker {
+    pub(crate) fn pane_input_pending(&self) -> bool {
+        !self.pending_acks.is_empty()
+    }
+
+    pub(crate) fn abandon_pane_input(&mut self) {
+        self.pending_acks.clear();
+    }
+
     pub(crate) fn begin(&mut self, event: &TimedInputEvent) -> Option<Observation> {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
@@ -276,6 +290,12 @@ impl Tracker {
         }
     }
 
+    pub(crate) fn forwarding_failed(&mut self) {
+        if let Some(current) = &mut self.current {
+            current.pane = None;
+        }
+    }
+
     pub(crate) fn current_key_sequence(&self) -> Option<u64> {
         self.current
             .filter(|sample| sample.kind == Kind::Key)
@@ -289,6 +309,7 @@ impl Tracker {
         ok: bool,
         at: Instant,
     ) -> bool {
+        self.pending_acks.remove(&(pane, sequence));
         if !ok {
             return false;
         }
@@ -319,7 +340,7 @@ impl Tracker {
         let Some(sample) = self.current.take() else {
             return false;
         };
-        if sample.pane.is_some() {
+        if let Some(pane) = sample.pane {
             self.retain_fresh(Instant::now());
             if sample.kind != Kind::Key {
                 if let Some(existing) = self
@@ -332,6 +353,9 @@ impl Tracker {
                     }
                     return false;
                 }
+            }
+            if sample.kind == Kind::Key {
+                self.pending_acks.insert((pane, sample.sequence));
             }
             self.pending_pane.push_back(sample);
             return false;
@@ -400,6 +424,12 @@ impl Tracker {
 }
 
 impl App {
+    pub(crate) fn record_control_activity(&mut self, received_at: Instant) {
+        if self.renderer.is_controller() {
+            self.reload_gate.record_control_activity(received_at);
+        }
+    }
+
     pub(super) fn handle_pane_interaction_output(&mut self, pane: PaneId, at: Instant) {
         let output = self.interactions.pane_output(pane, at);
         let interaction_response = !output.observations.is_empty();
@@ -423,14 +453,19 @@ impl App {
         if self.interactions.pane_input_ack(pane, sequence, ok, at) && self.dirty {
             self.frame_clock.request_key_response(at);
         }
+        self.try_apply_pending_prototype();
     }
 
     pub(super) fn handle_or_queue_timed_input(&mut self, timed: TimedInputEvent) -> bool {
         if kind(&timed.event) == Some(Kind::Scroll) {
-            let Some(timed) = self.scroll_pacer.submit(timed, Instant::now()) else {
-                return true;
+            let received_at = timed.received_at;
+            return match self.scroll_pacer.submit(timed, Instant::now()) {
+                Some(timed) => self.handle_timed_input_now(timed),
+                None => {
+                    self.record_control_activity(received_at);
+                    true
+                }
             };
-            return self.handle_timed_input_now(timed);
         }
 
         if interrupts_scroll(&timed.event, self.mouse_buttons) {
@@ -449,6 +484,7 @@ impl App {
     }
 
     pub(super) fn handle_interaction_resize(&mut self, size: (u16, u16)) {
+        self.record_control_activity(Instant::now());
         self.scroll_pacer.cancel();
         self.handle_resize(size);
     }
@@ -456,6 +492,7 @@ impl App {
     /// Handle one timestamped host event and schedule direct manipulation at
     /// the lower-latency interaction cadence.
     pub(super) fn handle_timed_input_now(&mut self, timed: TimedInputEvent) -> bool {
+        self.record_control_activity(timed.received_at);
         if matches!(
             self.renderer.state,
             renderer_control::State::Startup | renderer_control::State::Claiming
@@ -570,6 +607,7 @@ impl App {
                 _ => self.send_shared(command),
             };
             if result.is_err() {
+                self.interactions.forwarding_failed();
                 break;
             }
         }
@@ -716,11 +754,13 @@ mod tests {
         tracker.forwarded_to(PaneId(7));
         let sequence = tracker.current_key_sequence().unwrap();
         assert!(!tracker.finish());
+        assert!(tracker.pane_input_pending());
 
         let before_ack = tracker.pane_output(PaneId(7), at + Duration::from_millis(2));
         assert!(before_ack.observations.is_empty());
         assert!(!before_ack.key_response);
         assert!(tracker.pane_input_ack(PaneId(7), sequence, true, at + Duration::from_millis(2)));
+        assert!(!tracker.pane_input_pending());
         let output = tracker.pane_output(PaneId(7), at + Duration::from_millis(3));
         assert!(output.key_response);
         assert_eq!(output.observations.len(), 1);
@@ -746,14 +786,30 @@ mod tests {
         tracker.forwarded_to(PaneId(7));
         let sequence = tracker.current_key_sequence().unwrap();
         tracker.finish();
+        assert!(tracker.pane_input_pending());
 
         assert!(!tracker.pane_input_ack(PaneId(7), sequence, false, at));
+        assert!(!tracker.pane_input_pending());
         assert!(!tracker.pane_input_ack(PaneId(7), sequence + 1, true, at));
 
         assert!(tracker
             .pane_output(PaneId(7), at + Duration::from_millis(3))
             .observations
             .is_empty());
+    }
+
+    #[test]
+    fn pane_ack_blocker_survives_metric_retention_and_can_be_abandoned() {
+        let at = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.begin(&key(at));
+        tracker.forwarded_to(PaneId(7));
+        tracker.finish();
+
+        tracker.retain_fresh(at + MAX_PENDING_AGE + Duration::from_secs(1));
+        assert!(tracker.pane_input_pending());
+        tracker.abandon_pane_input();
+        assert!(!tracker.pane_input_pending());
     }
 
     #[test]

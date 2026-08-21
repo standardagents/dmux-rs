@@ -26,3 +26,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hdrhistogram = { workspace = true }
 libc = { workspace = true }
+notify = { workspace = true }
+signal-hook = { workspace = true }

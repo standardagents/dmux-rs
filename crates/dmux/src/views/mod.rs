@@ -322,6 +322,11 @@ pub trait View {
     fn animating(&self) -> bool {
         false
     }
+
+    /// A controller re-exec would discard text owned by this view.
+    fn blocks_reload(&self) -> bool {
+        false
+    }
 }
 
 /// Shared key classification helpers for views.

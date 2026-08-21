@@ -164,6 +164,10 @@ impl AgentSelectView {
 }
 
 impl View for AgentSelectView {
+    fn blocks_reload(&self) -> bool {
+        true
+    }
+
     fn render(
         &mut self,
         buf: &mut CellBuffer,

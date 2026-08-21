@@ -36,9 +36,20 @@ dmux-rs --prototype-worktree /path/to/dmux-worktree --project /path/to/your-proj
 ```
 
 The command builds an untagged release binary from the worktree. The running
-controller re-execs that binary after active pane launches settle. The
-worktree build remains outside the published release updater until you start
-dmux-rs again from an installed release. An in-app progress panel contains
+controller re-execs that binary after active input and pane launches settle.
+`--watch` keeps the command running. It rebuilds after worktree source changes
+and hands each successful current build to the controller:
+
+```bash
+dmux-rs --prototype-worktree /path/to/dmux-worktree \
+  --project /path/to/your-project \
+  --watch
+```
+
+The active build keeps running when a watched build fails. A later source
+change starts another build. A worktree build remains outside the published
+release updater until you start dmux-rs again from an installed release. An
+in-app progress panel contains
 Cargo's build output. Prototype builds share dependency artifacts in
 `~/.dmux/cache/prototype-target`, so later worktrees usually compile only the
 dmux crates changed by their branch.

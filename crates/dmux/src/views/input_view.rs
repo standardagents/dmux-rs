@@ -80,6 +80,10 @@ impl InputView {
 }
 
 impl View for InputView {
+    fn blocks_reload(&self) -> bool {
+        true
+    }
+
     fn render(
         &mut self,
         buf: &mut CellBuffer,
