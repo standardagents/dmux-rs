@@ -1,6 +1,6 @@
 #!/bin/bash
-# Automated semver release for the dmux-rs test ring. Safe for unattended
-# use by the fixer loop: refuses dirty/unpushed state and re-validates
+# User-authorized semver release for the dmux-rs test ring. It runs only from
+# the primary main checkout, refuses dirty or unpushed state, and re-validates
 # everything before publishing. Running heads self-update within ~1 minute.
 #
 #   scripts/release.sh [patch|minor|major]   (default: patch)
@@ -24,14 +24,12 @@ if [ "${DMUX_RELEASE_LOCK_HELD:-0}" != "1" ]; then
   with_release_lock "$lock_file" "$SCRIPT_DIR/release.sh" "$@"
 fi
 
-# A release requires a clean checkout at the exact origin/main commit. Issue
-# branches and detached worktrees qualify when their commit is synchronized.
+# A release requires the primary main checkout at the exact origin/main commit.
 assert_release_checkout
 
 SHA=$(git rev-parse --short HEAD)
 
-# Re-validate: never publish anything the suite or the fidelity harness
-# hasn't blessed (unattended releases have no human eyeball).
+# Re-validate before publishing through the suite and fidelity harness.
 echo "[release] validating…"
 # One shared orchestration with CI (#87). --between re-checks the remote tip
 # between the expensive phases so a concurrent push stops the release before
@@ -44,7 +42,7 @@ bash scripts/validate.sh --between \
 # prevents another local publisher from changing them between this refresh
 # and publication.
 refresh_release_refs
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main advanced during validation"; exit 1; }
+assert_release_checkout
 PUBLISHED=$(latest_published_release_tag "$REPO")
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]'); [ "$OS" = "darwin" ] && OS=macos

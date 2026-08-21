@@ -12,6 +12,18 @@ with_release_lock() {
 }
 
 assert_release_checkout() {
+  local git_dir common_dir branch
+  git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
+  common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  [ "$git_dir" = "$common_dir" ] || {
+    echo "release must run from the primary checkout"
+    return 1
+  }
+  branch=$(git symbolic-ref --quiet --short HEAD || true)
+  [ "$branch" = "main" ] || {
+    echo "release must run from the main branch"
+    return 1
+  }
   [ -z "$(git status --porcelain)" ] || {
     echo "working tree dirty"
     return 1

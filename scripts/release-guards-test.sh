@@ -18,34 +18,43 @@ git clone -q "$T/origin" "$T/wt"
 fail=0
 # 1. Clean clone on main, synced → pass.
 guards "$T/wt" >/dev/null 2>&1 || { echo "FAIL: synced main should release"; fail=1; }
-# 2. Issue branch at the same commit → pass (the #60 change).
+# 2. A linked worktree at the same commit → blocked.
+git -C "$T/wt" worktree add -q --detach "$T/linked" origin/main
+out=$(guards "$T/linked" 2>&1) && { echo "FAIL: linked worktree must block"; fail=1; }
+echo "$out" | /usr/bin/grep -q "primary checkout" \
+  || { echo "FAIL: linked worktree should report the primary-checkout requirement"; fail=1; }
+# 3. Issue branch at the same commit → blocked.
 (cd "$T/wt" && git checkout -q -b issue-123)
-guards "$T/wt" >/dev/null 2>&1 || { echo "FAIL: synced issue branch should release"; fail=1; }
-# 3. Detached HEAD at the same commit → pass.
+out=$(guards "$T/wt" 2>&1) && { echo "FAIL: issue branch must block"; fail=1; }
+echo "$out" | /usr/bin/grep -q "main branch" \
+  || { echo "FAIL: issue branch should report the main-branch requirement"; fail=1; }
+# 4. Detached HEAD at the same commit → blocked.
 (cd "$T/wt" && git checkout -q --detach)
-guards "$T/wt" >/dev/null 2>&1 || { echo "FAIL: synced detached HEAD should release"; fail=1; }
-# 4. Dirty tree → blocked.
-(cd "$T/wt" && echo x > dirty.txt)
+out=$(guards "$T/wt" 2>&1) && { echo "FAIL: detached HEAD must block"; fail=1; }
+echo "$out" | /usr/bin/grep -q "main branch" \
+  || { echo "FAIL: detached HEAD should report the main-branch requirement"; fail=1; }
+# 5. Dirty tree → blocked.
+(cd "$T/wt" && git checkout -q main && echo x > dirty.txt)
 guards "$T/wt" >/dev/null 2>&1 && { echo "FAIL: dirty tree must block"; fail=1; }
 (cd "$T/wt" && rm dirty.txt)
-# 5. Ahead of origin → blocked.
-(cd "$T/wt" && git checkout -q main && git commit -q --allow-empty -m ahead)
+# 6. Ahead of origin → blocked.
+(cd "$T/wt" && git commit -q --allow-empty -m ahead)
 guards "$T/wt" >/dev/null 2>&1 && { echo "FAIL: ahead of origin must block"; fail=1; }
-# 6. Behind origin → blocked.
+# 7. Behind origin → blocked.
 (cd "$T/wt" && git reset -q --hard HEAD~1 && cd "$T/origin" && git commit -q --allow-empty -m newer)
 guards "$T/wt" >/dev/null 2>&1 && { echo "FAIL: behind origin must block"; fail=1; }
 
-# 7. Between-phase advancement guard (#84): synced → continues.
+# 8. Between-phase advancement guard (#84): synced → continues.
 (cd "$T/wt" && git fetch -q origin && git reset -q --hard origin/main)
 (cd "$T/wt" && source "$SRC/scripts/release-lib.sh" && assert_main_unmoved test) \
   || { echo "FAIL: synced repo must pass assert_main_unmoved"; fail=1; }
-# 8. Remote advanced after a phase → stops with the phase in the message.
+# 9. Remote advanced after a phase → stops with the phase in the message.
 (cd "$T/origin" && git commit -q --allow-empty -m advance)
 rc=0
 out=$(cd "$T/wt" && source "$SRC/scripts/release-lib.sh" && assert_main_unmoved "workspace checks" 2>&1) || rc=$?
 { [ "$rc" != 0 ] && echo "$out" | /usr/bin/grep -q "advanced during workspace checks"; } \
   || { echo "FAIL: advanced remote must stop the release after the phase"; fail=1; }
-# 9. Release-tag refresh ignores the issue tool's moving claim tags.
+# 10. Release-tag refresh ignores the issue tool's moving claim tags.
 old_claim=$(git -C "$T/origin" rev-parse HEAD~1)
 git -C "$T/origin" tag sa-issues-claim/94 "$old_claim"
 git -C "$T/wt" fetch -q origin \
