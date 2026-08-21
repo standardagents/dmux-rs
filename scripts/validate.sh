@@ -1,10 +1,10 @@
 #!/bin/bash
 # The complete local validation gate (#87): everything required before
 # dmux-rs work is pushed. Runs scripts/check.sh (formatting, Clippy, the
-# full workspace test suite, and the script suites) and then the
-# rendering-fidelity harness. CI and scripts/release.sh route through this
-# same orchestration; release.sh passes --between to re-check origin/main
-# between the two expensive phases (#84).
+# full workspace test suite, and the script suites), the UI interaction
+# suite, and the rendering-fidelity harness. CI and scripts/release.sh route
+# through this same orchestration; release.sh passes --between to re-check
+# origin/main after workspace and UI validation (#84).
 #
 #   scripts/validate.sh [--between <command>]
 set -euo pipefail
@@ -18,6 +18,7 @@ fi
 [ "$#" -eq 0 ] || { echo "usage: scripts/validate.sh [--between <command>]" >&2; exit 2; }
 
 bash scripts/check.sh
+bash scripts/ui-smoke.sh
 if [ -n "$between" ]; then
   bash -c "$between"
 fi

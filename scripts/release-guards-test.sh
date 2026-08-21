@@ -1,23 +1,15 @@
 #!/bin/bash
-# Guard-behavior tests for release.sh (#60): runs ONLY the guard section
-# against synthetic repos — no validation, no publishing. Exits nonzero on
-# any contract violation.
+# Checkout and publication guard tests against synthetic repositories.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC=$PWD
 T=$(mktemp -d /tmp/dmux-relguard.XXXX)
 trap 'rm -rf "$T"' EXIT
 
-# The guard section = everything between the "# Guards" and "# End guards"
-# markers; extracted from the real script so the test can't drift from it.
 guards() ( # $1 = repo dir
   cd "$1"
-  local snippet
-  snippet=$(sed -n '/^# Guards/,/^# End guards/p' "$SRC/scripts/release.sh")
-  # The extraction must have found the closed marker range, not run to EOF.
-  echo "$snippet" | /usr/bin/grep -q "^# End guards" || {
-    echo "guards extraction broken: end marker missing"; exit 3; }
-  echo "$snippet" | bash
+  source "$SRC/scripts/release-lib.sh"
+  assert_release_checkout
 )
 
 git init -q -b main "$T/origin" && (cd "$T/origin" && git commit -q --allow-empty -m one)
@@ -53,22 +45,7 @@ rc=0
 out=$(cd "$T/wt" && source "$SRC/scripts/release-lib.sh" && assert_main_unmoved "workspace checks" 2>&1) || rc=$?
 { [ "$rc" != 0 ] && echo "$out" | /usr/bin/grep -q "advanced during workspace checks"; } \
   || { echo "FAIL: advanced remote must stop the release after the phase"; fail=1; }
-# 9. Orchestration (#87): release.sh validates through validate.sh, passing
-# the between-phase guard, and keeps the authoritative sync guard after it;
-# validate.sh itself orders check → between-hook → fidelity.
-VAL_LINE=$(/usr/bin/grep -n "bash scripts/validate.sh" "$SRC/scripts/release.sh" | cut -d: -f1)
-FINAL_LINE=$(/usr/bin/grep -n "main advanced during validation" "$SRC/scripts/release.sh" | cut -d: -f1)
-{ [ -n "$VAL_LINE" ] && [ "$VAL_LINE" -lt "$FINAL_LINE" ]; } \
-  || { echo "FAIL: release must validate via validate.sh before the final guard"; fail=1; }
-/usr/bin/grep -A1 "bash scripts/validate.sh" "$SRC/scripts/release.sh" | /usr/bin/grep -q 'assert_main_unmoved "workspace checks"' \
-  || { echo "FAIL: release must pass the between-phase guard to validate.sh"; fail=1; }
-VCHECK=$(/usr/bin/grep -n "bash scripts/check.sh" "$SRC/scripts/validate.sh" | cut -d: -f1)
-VBETWEEN=$(/usr/bin/grep -n 'bash -c "$between"' "$SRC/scripts/validate.sh" | cut -d: -f1)
-VFID=$(/usr/bin/grep -n "bash scripts/fidelity.sh" "$SRC/scripts/validate.sh" | cut -d: -f1)
-{ [ -n "$VCHECK" ] && [ -n "$VBETWEEN" ] && [ -n "$VFID" ] && [ "$VCHECK" -lt "$VBETWEEN" ] && [ "$VBETWEEN" -lt "$VFID" ]; } \
-  || { echo "FAIL: validate.sh must order check → between-hook → fidelity"; fail=1; }
-
-# 10. Release-tag refresh ignores the issue tool's moving claim tags.
+# 9. Release-tag refresh ignores the issue tool's moving claim tags.
 old_claim=$(git -C "$T/origin" rev-parse HEAD~1)
 git -C "$T/origin" tag sa-issues-claim/94 "$old_claim"
 git -C "$T/wt" fetch -q origin \

@@ -63,8 +63,8 @@ dmux crates changed by their branch.
 
 ## Testing
 
-`scripts/validate.sh` is the complete pre-push gate (quality checks plus
-the rendering-fidelity harness); `scripts/check.sh` is the fast inner
+`scripts/validate.sh` is the complete pre-push gate (quality checks, UI
+interactions, and rendering fidelity); `scripts/check.sh` is the fast inner
 gate for mid-task iteration.
 
 For focused unit tests, note the naming split: the Cargo **package** is

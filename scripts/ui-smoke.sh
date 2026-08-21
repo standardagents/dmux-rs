@@ -175,11 +175,14 @@ open_sidebar_menu() { # $1 = pane title, $2 = pointer column, $3 = failure label
 # ---- boot ------------------------------------------------------------------
 tmux -L "$DRV" -f /dev/null new-session -d -s drv -x $DW -y $DH "exec bash"
 drv_keys "cd $WORK && EDITOR=$WORK/editor-probe.sh UI_SMOKE_RESULT=$WORK/editor-cwd.txt \
-env -u TMUX HOME=$WORK/home DMUX_NO_UPDATE=1 $BIN --socket $TGT" Enter
+env -u TMUX HOME=$WORK/home TERM=xterm-256color DMUX_NO_UPDATE=1 DMUX_NO_REPORT=1 $BIN --socket $TGT" Enter
 sleep 4
 # Accept the session-recovery dialog (fixture panes are recreated from it).
 drv_keys Enter; sleep 4
-wait_for "other-term" boot || { echo "ui-smoke: $FAILS FAILURES"; exit 1; }
+wait_for "other-term" boot || {
+  echo "ui-smoke: $FAILS FAILURES (diagnostics in $DIAG; fixture in $WORK)"
+  exit 1
+}
 
 # ---- case 1: Open in editor uses the pane-owned directory ------------------
 # Focus the other-project pane via its sidebar row (click-to-focus), then

@@ -24,13 +24,9 @@ if [ "${DMUX_RELEASE_LOCK_HELD:-0}" != "1" ]; then
   with_release_lock "$lock_file" "$SCRIPT_DIR/release.sh" "$@"
 fi
 
-# Guards (#60): clean tree and HEAD identical to origin/main. Commit
-# identity — not the local branch name — is what makes a release safe, so
-# per-issue worktrees and detached HEADs qualify when fully synchronized.
-[ -z "$(git status --porcelain)" ] || { echo "working tree dirty"; exit 1; }
-git fetch -q origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD not in sync with origin/main"; exit 1; }
-# End guards.
+# A release requires a clean checkout at the exact origin/main commit. Issue
+# branches and detached worktrees qualify when their commit is synchronized.
+assert_release_checkout
 
 SHA=$(git rev-parse --short HEAD)
 

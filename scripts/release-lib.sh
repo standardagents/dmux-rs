@@ -11,6 +11,18 @@ with_release_lock() {
   exec lockf -k "$lock_file" "$@"
 }
 
+assert_release_checkout() {
+  [ -z "$(git status --porcelain)" ] || {
+    echo "working tree dirty"
+    return 1
+  }
+  git fetch -q origin main
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || {
+    echo "HEAD not in sync with origin/main"
+    return 1
+  }
+}
+
 next_release_version() {
   local latest=${1:-v0.1.0}
   local bump=$2
