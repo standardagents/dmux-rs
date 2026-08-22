@@ -257,7 +257,9 @@ impl App {
                 self.metrics.pauses += 1;
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane) {
                     p.paused = true;
-                    p.begin_reseed();
+                    // tmux discarded stream bytes at a boundary it chose —
+                    // the resumed stream may open mid-escape (#128).
+                    p.begin_boundary_reseed();
                     let _ = self
                         .client
                         .send(format!("refresh-client -A '{pane}:continue'"));
@@ -392,7 +394,11 @@ impl App {
                     return;
                 }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.tmux_pane == pane_id) {
-                    if p.reseed_buffer.is_none() && !p.paused && !p.throttled {
+                    if p.reseed_buffer.is_none()
+                        && !p.paused
+                        && !p.throttled
+                        && !p.pending_boundary_resync
+                    {
                         p.pending_verify = Some(crate::verify::PendingCapture {
                             reply,
                             at: Instant::now(),

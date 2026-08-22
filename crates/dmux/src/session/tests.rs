@@ -95,6 +95,55 @@ fn reseed_buffers_live_output() {
 }
 
 #[test]
+fn boundary_reseed_flags_settling_resync() {
+    // #128: a stream that (re)starts at a tmux-chosen byte boundary can
+    // open with an escape-sequence tail no capture seed can represent. The
+    // boundary reseed marks the pane; the resync is due only once the
+    // stream has been quiet for the verifier's quiescence window, and a
+    // plain reseed (e.g. resize) never sets the mark.
+    let reply = reply_of(&["%5\u{1}@0\u{1}p__dmux__p\u{1}20\u{1}4\u{1}0\u{1}zsh\u{1}w"]);
+    let mut pane = adopt_panes(None, &parse_pane_list(&reply)).remove(0);
+    let now = std::time::Instant::now();
+
+    assert!(!pane.pending_boundary_resync);
+    pane.begin_reseed();
+    assert!(
+        !pane.pending_boundary_resync,
+        "plain reseed is not a stream boundary"
+    );
+    pane.finish_reseed(&reply_of(&["x"]), None);
+
+    let count_before = pane.reseed_count;
+    pane.begin_boundary_reseed();
+    assert!(pane.pending_boundary_resync);
+    assert_eq!(
+        pane.reseed_count,
+        count_before + 1,
+        "boundary reseed still invalidates stashed verifies"
+    );
+    // Mid-reseed: never due.
+    assert!(!boundary_resync_due(&pane, now));
+    pane.finish_reseed(&reply_of(&["x"]), None);
+
+    // Fresh output: not yet settled.
+    pane.last_output = Some(now);
+    assert!(!boundary_resync_due(&pane, now));
+    // Settled past the quiescence window: due.
+    let later = now + crate::verify::QUIESCE;
+    assert!(boundary_resync_due(&pane, later));
+    // Paused, throttled, or hidden panes wait.
+    pane.paused = true;
+    assert!(!boundary_resync_due(&pane, later));
+    pane.paused = false;
+    pane.hidden = true;
+    assert!(!boundary_resync_due(&pane, later));
+    pane.hidden = false;
+    // Cleared flag: never due again.
+    pane.pending_boundary_resync = false;
+    assert!(!boundary_resync_due(&pane, later));
+}
+
+#[test]
 fn alt_screen_pane_seeds_onto_alt_grid() {
     // #12: a pane tmux reports as alternate_on must seed onto the alt
     // grid. On the primary grid, every full-screen repaint scrolled a

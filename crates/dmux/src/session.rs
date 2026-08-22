@@ -135,6 +135,13 @@ pub struct LogicalPane {
     /// Bumped by every begin_reseed; lets a stashed verify capture detect
     /// that the grid it was taken against has been replaced (#118).
     pub reseed_count: u64,
+    /// The pane's %output stream (re)started at a byte position tmux chose —
+    /// attach, pause/continue, or refresh-client off/on. The first chunk after
+    /// such a boundary can be the tail of an escape sequence tmux had already
+    /// consumed into its parser state, which no capture-pane seed can carry
+    /// (#128). Cleared by the settling resync in `resync_flow_control`;
+    /// verification is suppressed while set.
+    pub pending_boundary_resync: bool,
     /// An issue was auto-filed for this pane; no more reports until the
     /// process reloads (which is also when a fixed build arrives).
     pub issue_filed: bool,
@@ -181,6 +188,15 @@ impl LogicalPane {
         self.recent_output.clear();
         self.ring_truncated = false;
         self.dirty = true;
+    }
+
+    /// Begin a reseed whose trigger is a stream boundary tmux chose (attach,
+    /// pause/continue, refresh-client off/on): mark the pane for a settling
+    /// resync, because the resumed stream may open with an escape-sequence
+    /// tail the seed capture cannot represent (#128).
+    pub fn begin_boundary_reseed(&mut self) {
+        self.pending_boundary_resync = true;
+        self.begin_reseed();
     }
 
     /// Apply the capture-pane reply that seeds this pane, then drain any
@@ -443,6 +459,65 @@ pub fn plan_session_restore(
         }
     }
     (plans, skipped)
+}
+
+/// Whether a boundary-flagged pane is due for its settling resync: stream
+/// quiet for the verifier's quiescence window, visible to tmux, alive, and
+/// no other reseed activity in flight.
+pub fn boundary_resync_due(pane: &LogicalPane, now: std::time::Instant) -> bool {
+    pane.pending_boundary_resync
+        && !pane.paused
+        && !pane.throttled
+        && !pane.hidden
+        && !pane.closing
+        && pane.status != PaneStatus::Dead
+        && pane.reseed_buffer.is_none()
+        && pane
+            .last_output
+            .map(|t| now.duration_since(t) >= crate::verify::QUIESCE)
+            .unwrap_or(true)
+}
+
+impl crate::App {
+    /// Flow-control tick: resume flood-throttled panes and run the settling
+    /// resync for stream-boundary panes. A pane flagged by
+    /// `begin_boundary_reseed` gets one more reseed once its stream has been
+    /// quiet for the verifier's quiescence window: with no bytes in flight,
+    /// the capture alone defines the grid, so the emulator and the
+    /// seed-anchored recording become trustworthy again (#128).
+    pub(crate) fn resync_flow_control(&mut self, now: std::time::Instant) {
+        let mut reseeds: Vec<(PaneId, bool)> = Vec::new();
+        for p in &mut self.panes {
+            if p.resume_at.is_some_and(|at| now >= at) {
+                p.resume_at = None;
+                p.throttled = false;
+                p.window_start = now;
+                p.window_bytes = 0;
+                p.begin_boundary_reseed();
+                reseeds.push((p.tmux_pane, true));
+            } else if boundary_resync_due(p, now) {
+                p.pending_boundary_resync = false;
+                p.begin_reseed();
+                reseeds.push((p.tmux_pane, false));
+            }
+        }
+        for &(pane_id, resumed) in &reseeds {
+            if resumed {
+                let _ = self
+                    .client
+                    .send(format!("refresh-client -A '{pane_id}:on'"));
+            }
+            let (seed, cursor) = {
+                let p = self.panes.iter().find(|p| p.tmux_pane == pane_id).unwrap();
+                (p.seed_command(), p.cursor_command())
+            };
+            let _ = self.client.send_tagged(seed, crate::Tag::Seed(pane_id));
+            let _ = self.client.send_tagged(cursor, crate::Tag::Cursor(pane_id));
+        }
+        if !reseeds.is_empty() {
+            self.dirty = true;
+        }
+    }
 }
 
 /// Pane status for an LLM verdict. Option dialogs ALWAYS land on Waiting —

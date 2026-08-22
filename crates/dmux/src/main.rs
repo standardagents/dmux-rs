@@ -1742,7 +1742,9 @@ impl App {
                     }
                 }
                 None => {
-                    new_pane.begin_reseed();
+                    // The stream starts at the attach offset tmux chose —
+                    // a boundary that can fall mid-escape (#128).
+                    new_pane.begin_boundary_reseed();
                     let _ = self
                         .client
                         .send_tagged(new_pane.seed_command(), Tag::Seed(new_pane.tmux_pane));
@@ -2469,7 +2471,9 @@ impl App {
             let _ = self
                 .client
                 .send(format!("refresh-client -A '{pane_id}:on'"));
-            p.begin_reseed();
+            // Output while ':off' was discarded; the resumed stream can
+            // open mid-escape (#128).
+            p.begin_boundary_reseed();
             let _ = self
                 .client
                 .send_tagged(p.seed_command(), Tag::Seed(pane_id));
@@ -2722,32 +2726,7 @@ impl App {
             self.attention_toast(msg);
         }
         self.finish_pending_verifies(now);
-        // Flood-throttled panes due for a refresh.
-        let mut resumed = Vec::new();
-        for p in &mut self.panes {
-            if let Some(at) = p.resume_at {
-                if now >= at {
-                    p.resume_at = None;
-                    p.throttled = false;
-                    p.window_start = now;
-                    p.window_bytes = 0;
-                    p.begin_reseed();
-                    resumed.push(p.tmux_pane);
-                }
-            }
-        }
-        for pane_id in resumed {
-            let _ = self
-                .client
-                .send(format!("refresh-client -A '{pane_id}:on'"));
-            let (seed, cursor) = {
-                let p = self.panes.iter().find(|p| p.tmux_pane == pane_id).unwrap();
-                (p.seed_command(), p.cursor_command())
-            };
-            let _ = self.client.send_tagged(seed, Tag::Seed(pane_id));
-            let _ = self.client.send_tagged(cursor, Tag::Cursor(pane_id));
-            self.dirty = true;
-        }
+        self.resync_flow_control(now);
         self.send_due_injections(now);
         if !self.tracking_inflight && now.duration_since(self.last_tracking) >= tracking_interval()
         {

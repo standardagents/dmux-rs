@@ -318,6 +318,7 @@ pub fn eligible(pane: &LogicalPane, now: Instant) -> bool {
         && pane.rect.is_some()
         && !pane.paused
         && !pane.throttled
+        && !pane.pending_boundary_resync
         && pane.reseed_buffer.is_none()
         && pane.term.display_offset() == 0
         && pane
@@ -365,7 +366,11 @@ impl crate::App {
                 CaptureVerdict::Ready => {
                     let stash = p.pending_verify.take().expect("stash present");
                     let reply = stash.reply;
-                    if p.paused || p.throttled || p.reseed_buffer.is_some() {
+                    if p.paused
+                        || p.throttled
+                        || p.reseed_buffer.is_some()
+                        || p.pending_boundary_resync
+                    {
                         continue;
                     }
                     let diffs = compare(p, &reply);
@@ -453,6 +458,20 @@ mod tests {
             ),
             CaptureVerdict::Raced
         );
+    }
+
+    #[test]
+    fn boundary_flagged_panes_are_not_verifiable() {
+        // #128: until the settling resync lands, the grid may carry a
+        // literal escape-tail the stream can never explain — comparing it
+        // against tmux would file a false incident.
+        let mut pane = pane_with(b"content");
+        pane.rect = Some(dmux_compositor::Rect::new(0, 0, 30, 4));
+        pane.last_output = Some(Instant::now() - QUIESCE);
+        let now = Instant::now();
+        assert!(eligible(&pane, now));
+        pane.pending_boundary_resync = true;
+        assert!(!eligible(&pane, now));
     }
 
     fn pane_with(content: &[u8]) -> LogicalPane {
