@@ -105,6 +105,10 @@ pub enum AppCmd {
     /// Ask for a project path, then open it.
     PromptAddProject,
     OpenProjectAt(String),
+    /// Create the (missing) directory, `git init` it, then register and
+    /// open it as a project (#129). Only the picker's explicitly confirmed
+    /// create action emits this.
+    CreateProjectAt(String),
     /// Build and load a dmux-rs worktree as the current renderer.
     LoadPrototypeWorktree(String),
     /// Return from a prototype binary to the default dmux-rs executable.
@@ -326,6 +330,12 @@ pub trait View {
     /// A controller re-exec would discard text owned by this view.
     fn blocks_reload(&self) -> bool {
         false
+    }
+
+    /// The Add Project picker identifies itself so async project creation
+    /// (#129) can deliver its outcome back into the open picker.
+    fn as_path_picker(&mut self) -> Option<&mut path_picker::PathPickerView> {
+        None
     }
 }
 

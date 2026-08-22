@@ -20,6 +20,14 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// `git init` with the user's own defaults (default-branch config included);
+/// structured argument invocation — paths never pass through a shell (#129).
+pub fn init(dir: &Path) -> Result<(), String> {
+    git(dir, &["init"])
+        .map(|_| ())
+        .map_err(|e| format!("git init: {e}"))
+}
+
 /// Uncommitted changes (staged, unstaged, or untracked)?
 pub fn worktree_dirty(path: &Path) -> bool {
     git(path, &["status", "--porcelain"])

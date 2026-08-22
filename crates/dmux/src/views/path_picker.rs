@@ -97,6 +97,14 @@ pub struct PathPickerView {
     list: ListState,
     /// Inline error from the last action (invalid path, file accepted…).
     notice: Option<String>,
+    /// A typed destination that doesn't exist but can be created (#129):
+    /// the list shows an explicit "create project at <path>" action.
+    /// Typing, filtering, or navigating clears the offer; only activating
+    /// the row confirms it. Never mutates the filesystem itself.
+    offer: Option<PathBuf>,
+    /// A confirmed creation is running on a background task; its outcome
+    /// arrives via `creation_failed` or the picker being closed on success.
+    creating: bool,
     home: PathBuf,
 }
 
@@ -109,6 +117,8 @@ impl PathPickerView {
             listing,
             list: ListState::default(),
             notice: None,
+            offer: None,
+            creating: false,
             home: dirs_home(),
         }
     }
@@ -116,8 +126,16 @@ impl PathPickerView {
     fn reload(&mut self) {
         self.listing = read_dir_listing(&self.dir);
         self.list = ListState::default();
+        self.offer = None;
         self.input =
             TextInput::with_value("").placeholder("type to filter · / or ~ jumps · ⏎ opens");
+    }
+
+    /// Async creation failed: surface the exact failure inline and allow a
+    /// corrected retry. The offer stays visible for the same path.
+    pub fn creation_failed(&mut self, msg: &str) {
+        self.creating = false;
+        self.notice = Some(msg.to_string());
     }
 
     fn filtered(&self) -> Vec<FsEntry> {
@@ -155,8 +173,22 @@ impl PathPickerView {
                 self.dir = path;
                 self.notice = None;
                 self.reload();
+            } else if self.offer.as_deref() == Some(&path) {
+                // Second ⏎ on the same missing path: fall through so
+                // `activate` confirms the already-visible create row.
+                return false;
             } else {
-                self.notice = Some(format!("not a directory: {}", path.display()));
+                match crate::project_create::offerable(&path) {
+                    Ok(()) => {
+                        self.notice = Some("does not exist yet — ⏎ again creates it".into());
+                        self.offer = Some(path);
+                        self.list.selected = 0;
+                    }
+                    Err(msg) => {
+                        self.offer = None;
+                        self.notice = Some(msg);
+                    }
+                }
             }
             return true;
         }
@@ -164,10 +196,23 @@ impl PathPickerView {
     }
 
     fn activate(&mut self) -> ViewResult {
+        if self.creating {
+            return ViewResult::Stay;
+        }
         if self.jump_if_typed_path() {
             return ViewResult::Stay;
         }
         if self.list.selected == 0 {
+            if let Some(path) = self.offer.clone() {
+                // Explicit confirmation of the create action: the mutation
+                // itself runs on a background task; its outcome returns to
+                // this picker (failure) or closes it (success).
+                self.creating = true;
+                self.notice = Some(format!("creating project at {}…", path.display()));
+                return ViewResult::Cmd(AppCmd::CreateProjectAt(
+                    path.to_string_lossy().into_owned(),
+                ));
+            }
             // Synthetic "use this directory" row accepts the current dir.
             return ViewResult::CloseAnd(AppCmd::OpenProjectAt(
                 self.dir.to_string_lossy().into_owned(),
@@ -274,18 +319,21 @@ impl View for PathPickerView {
         self.list.clamp(self.row_count());
         self.list.ensure_visible(visible);
         let mut y = list_top;
-        for (row_i, label, is_dir, dim) in
-            std::iter::once((0usize, "▸ use this directory".to_string(), true, false))
-                .chain(rows.iter().enumerate().map(|(i, e)| {
-                    let label = if e.is_dir {
-                        format!("{}/", e.name)
-                    } else {
-                        e.name.clone()
-                    };
-                    (i + 1, label, e.is_dir, !e.is_dir)
-                }))
-                .skip(self.list.scroll)
-                .take(visible)
+        let accept_label = match &self.offer {
+            Some(p) => format!("▸ create project at {}", p.display()),
+            None => "▸ use this directory".to_string(),
+        };
+        for (row_i, label, is_dir, dim) in std::iter::once((0usize, accept_label, true, false))
+            .chain(rows.iter().enumerate().map(|(i, e)| {
+                let label = if e.is_dir {
+                    format!("{}/", e.name)
+                } else {
+                    e.name.clone()
+                };
+                (i + 1, label, e.is_dir, !e.is_dir)
+            }))
+            .skip(self.list.scroll)
+            .take(visible)
         {
             let selected = ctx.active_overlay(row_i as u64, row_i == self.list.selected);
             let line = Rect::new(content.x, y, content.w, 1);
@@ -394,6 +442,9 @@ impl View for PathPickerView {
             self.input.handle(ik);
             self.list.selected = 0;
             self.notice = None;
+            // Editing withdraws any pending create offer; it re-forms only
+            // from a fresh ⏎ on the newly typed path.
+            self.offer = None;
             return ViewResult::Stay;
         }
         ViewResult::Stay
@@ -418,6 +469,10 @@ impl View for PathPickerView {
     fn on_wheel(&mut self, delta: i32) -> ViewResult {
         self.list.step(delta, self.row_count());
         ViewResult::Stay
+    }
+
+    fn as_path_picker(&mut self) -> Option<&mut PathPickerView> {
+        Some(self)
     }
 }
 
@@ -531,6 +586,65 @@ mod tests {
         let gone = root.join("gone");
         let v2 = PathPickerView::new(gone);
         assert!(v2.listing.is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_path_offers_explicit_creation_without_mutating() {
+        use dmux_host::{KeyCode, KeyEvent, Modifiers};
+        let key = |code| KeyEvent {
+            key: code,
+            modifiers: Modifiers::NONE,
+        };
+        let root = std::env::temp_dir().join(format!("dmux-offer-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = root.join("brand-new");
+
+        let mut v = PathPickerView::new(root.clone());
+        for c in missing.to_string_lossy().chars() {
+            v.on_key(&key(KeyCode::Char(c)));
+        }
+        // First ⏎ only reveals the offer; the filesystem is untouched.
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Stay));
+        assert_eq!(v.offer.as_deref(), Some(missing.as_path()));
+        assert!(!missing.exists(), "offering never creates");
+        // Typing withdraws the offer; retyping and ⏎ re-forms it.
+        v.on_key(&key(KeyCode::Char('x')));
+        assert!(v.offer.is_none(), "editing withdraws the offer");
+        v.on_key(&key(KeyCode::Backspace));
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Stay));
+        assert_eq!(v.offer.as_deref(), Some(missing.as_path()));
+        // Second ⏎ confirms: the command is emitted, the picker stays open
+        // (async outcome returns to it), and the picker itself still never
+        // touched the disk.
+        match v.on_key(&key(KeyCode::Enter)) {
+            ViewResult::Cmd(AppCmd::CreateProjectAt(p)) => {
+                assert_eq!(p, missing.to_string_lossy());
+            }
+            other => panic!(
+                "expected create cmd, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert!(!missing.exists(), "confirmation only emits the command");
+        // While creation runs, activation is inert; a failure lands inline
+        // and re-arms the picker for a corrected retry.
+        assert!(matches!(v.on_key(&key(KeyCode::Enter)), ViewResult::Stay));
+        v.creation_failed("git init: boom");
+        assert!(v.notice.as_deref().unwrap().contains("boom"));
+        assert!(!v.creating);
+
+        // A path occupied by a file gets the actionable error, never an offer.
+        std::fs::write(root.join("f.txt"), "x").unwrap();
+        let mut v2 = PathPickerView::new(root.clone());
+        for c in root.join("f.txt").to_string_lossy().chars() {
+            v2.on_key(&key(KeyCode::Char(c)));
+        }
+        assert!(matches!(v2.on_key(&key(KeyCode::Enter)), ViewResult::Stay));
+        assert!(v2.offer.is_none());
+        assert!(v2.notice.as_deref().unwrap().contains("not a directory"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -153,6 +153,26 @@ impl OverlayStack {
         self.push_at(view, OverlayOrigin::Global);
     }
 
+    /// The open Add Project picker, wherever it sits in the stack (#129):
+    /// async project creation delivers failures back into it.
+    pub(crate) fn path_picker_mut(&mut self) -> Option<&mut crate::views::PathPickerView> {
+        self.0
+            .iter_mut()
+            .find_map(|entry| entry.view.as_path_picker())
+    }
+
+    /// Close the Add Project picker after its confirmed creation succeeded.
+    pub(crate) fn remove_path_picker(&mut self) {
+        let mut i = 0;
+        while i < self.0.len() {
+            if self.0[i].view.as_path_picker().is_some() {
+                self.0.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     pub(crate) fn push_at(&mut self, view: Box<dyn crate::views::View>, origin: OverlayOrigin) {
         self.0.push(OverlayEntry {
             view,

@@ -543,6 +543,7 @@ impl App {
                     return self.execute_cmd(AppCmd::NewTerminalAt { path: root, name });
                 }
             }
+            AppCmd::CreateProjectAt(path) => self.start_project_create(path),
             AppCmd::ResumeWorktree { path, slug, agent } => {
                 let mode = {
                     let s = self.settings.lock().unwrap();
